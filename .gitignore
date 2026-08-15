@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+graphify-out/
+.env
+.env.*
+!.env.example
+*.log

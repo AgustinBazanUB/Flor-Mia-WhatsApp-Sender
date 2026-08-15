@@ -1,0 +1,4 @@
+{
+  "production": ["https://app-integral-fm.netlify.app/*"],
+  "development": ["http://localhost:5173/*"]
+}

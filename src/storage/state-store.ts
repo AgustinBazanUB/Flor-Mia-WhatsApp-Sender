@@ -1,0 +1,89 @@
+import { WEB_APP_ORIGINS } from "../config/origins";
+import { assertTransition } from "../shared/state-machine";
+import type { ExtensionState, ExtensionStatus, OperationRecord } from "../shared/state";
+
+const STATE_KEY = "extensionState";
+const MAX_ERRORS = 20;
+const MAX_OPERATIONS = 20;
+
+export interface KeyValueStorage {
+  get(key: string): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+}
+
+export class ChromeLocalStorageAdapter implements KeyValueStorage {
+  async get(key: string): Promise<Record<string, unknown>> {
+    return chrome.storage.local.get(key);
+  }
+
+  async set(items: Record<string, unknown>): Promise<void> {
+    await chrome.storage.local.set(items);
+  }
+}
+
+export function createDefaultState(now = new Date().toISOString()): ExtensionState {
+  return {
+    schemaVersion: 1,
+    status: "idle",
+    currentCampaign: null,
+    progress: { total: 0, sent: 0, failed: 0 },
+    currentContact: null,
+    currentStep: null,
+    config: {
+      webAppOrigins: [...WEB_APP_ORIGINS],
+      diagnosticTimeoutMs: 8_000,
+      operationTimeoutMs: 30_000
+    },
+    errors: [],
+    lastCheckpoint: null,
+    operational: false,
+    statusMessage: "Todavía no se ejecutó el diagnóstico.",
+    whatsapp: null,
+    lastTestResult: null,
+    operations: [],
+    updatedAt: now
+  };
+}
+
+export class StateStore {
+  constructor(private readonly storage: KeyValueStorage = new ChromeLocalStorageAdapter()) {}
+
+  async load(): Promise<ExtensionState> {
+    const result = await this.storage.get(STATE_KEY);
+    const stored = result[STATE_KEY];
+    if (!stored || typeof stored !== "object") return createDefaultState();
+    const defaults = createDefaultState();
+    return {
+      ...defaults,
+      ...stored as Partial<ExtensionState>,
+      config: { ...defaults.config, ...(stored as Partial<ExtensionState>).config },
+      progress: { ...defaults.progress, ...(stored as Partial<ExtensionState>).progress }
+    };
+  }
+
+  async save(state: ExtensionState): Promise<ExtensionState> {
+    const next = { ...state, updatedAt: new Date().toISOString() };
+    await this.storage.set({ [STATE_KEY]: next });
+    return next;
+  }
+
+  async patch(patch: Partial<ExtensionState>): Promise<ExtensionState> {
+    return this.save({ ...await this.load(), ...patch });
+  }
+
+  async transition(to: ExtensionStatus, patch: Partial<ExtensionState> = {}): Promise<ExtensionState> {
+    const current = await this.load();
+    assertTransition(current.status, to);
+    return this.save({ ...current, ...patch, status: to });
+  }
+
+  async appendError(error: ExtensionState["errors"][number]): Promise<ExtensionState> {
+    const current = await this.load();
+    return this.save({ ...current, errors: [...current.errors, error].slice(-MAX_ERRORS) });
+  }
+
+  async appendOperation(operation: OperationRecord): Promise<ExtensionState> {
+    const current = await this.load();
+    return this.save({ ...current, operations: [...current.operations, operation].slice(-MAX_OPERATIONS) });
+  }
+}

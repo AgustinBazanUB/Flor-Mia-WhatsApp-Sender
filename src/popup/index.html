@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flor Mía WhatsApp Sender</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="brand">
+        <div class="brand__mark" aria-hidden="true">FM</div>
+        <div>
+          <h1>Flor Mía</h1>
+          <p>WhatsApp Sender</p>
+        </div>
+      </header>
+
+      <section class="card status-card" aria-live="polite">
+        <div class="status-card__heading">
+          <div>
+            <span class="eyebrow">Estado</span>
+            <strong id="extension-status"><span class="status-dot is-error"></span>Error / requiere revisión</strong>
+          </div>
+          <button id="diagnostic-button" class="button button--secondary" type="button">Ejecutar diagnóstico</button>
+        </div>
+        <p id="status-message">Consultando el estado de la extensión…</p>
+        <dl class="diagnostic-grid">
+          <div><dt>WhatsApp Web</dt><dd id="whatsapp-page">—</dd></div>
+          <div><dt>Sesión</dt><dd id="whatsapp-session">—</dd></div>
+          <div><dt>Interfaz</dt><dd id="whatsapp-interface">—</dd></div>
+          <div><dt>Multimedia</dt><dd>Prompt 2</dd></div>
+        </dl>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <span class="eyebrow">Modo manual</span>
+          <h2>Prueba de texto</h2>
+          <p>Exactamente un contacto y un mensaje. Nunca comienza automáticamente.</p>
+        </div>
+        <form id="test-form" novalidate>
+          <label for="phone">Teléfono internacional</label>
+          <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="+5491112345678" required />
+          <small>Incluí <b>+</b> y el código de país. La extensión no asume ningún país.</small>
+
+          <label for="message">Mensaje de prueba</label>
+          <textarea id="message" name="message" rows="4" maxlength="4096" placeholder="Escribí el texto que querés verificar" required></textarea>
+          <div class="form-footer">
+            <span id="character-count">0 / 4096</span>
+            <button id="send-button" class="button button--primary" type="submit">Enviar mensaje de prueba</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card result-card" aria-live="polite">
+        <span class="eyebrow">Última prueba</span>
+        <div id="last-result" class="empty-result">Todavía no se ejecutó ninguna prueba.</div>
+      </section>
+
+      <p id="ui-error" class="ui-error" role="alert" hidden></p>
+    </main>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>
