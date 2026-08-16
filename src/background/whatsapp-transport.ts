@@ -70,6 +70,21 @@ export class WhatsAppTransport {
     return response.data;
   }
 
+  async sendWhenContentReady<T extends InternalMessageType>(
+    type: T,
+    payload: InternalRequestMap[T],
+    tabId: number,
+    timeoutMs: number
+  ): Promise<InternalResponseMap[T]> {
+    try {
+      return await this.send(type, payload, tabId);
+    } catch (error) {
+      if (!(error instanceof ExtensionError) || error.code !== ERROR_CODES.interfaceLoading) throw error;
+      await this.waitForContent(tabId, timeoutMs);
+      return this.send(type, payload, tabId);
+    }
+  }
+
   async waitForContent(tabId: number, timeoutMs: number): Promise<WhatsAppPreflightResult> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown;

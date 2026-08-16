@@ -217,7 +217,12 @@ async function runPreflight(
     return evaluated.preflight;
   }
   try {
-    const raw = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, request, tab.id);
+    const raw = await whatsappTransport.sendWhenContentReady(
+      INTERNAL_MESSAGE_TYPES.whatsappPreflight,
+      request,
+      tab.id,
+      request.timeoutMs ?? 8_000
+    );
     const { preflight: result, state: compatibility } = await compatibilityManager.evaluate(raw);
     if (campaignControl) {
       await stateStore.patch({ whatsapp: result, compatibility, operational: result.operational, statusMessage: result.message });
