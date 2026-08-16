@@ -1,6 +1,7 @@
 {
   "production": [
     "https://app-integral-fm.netlify.app/*",
+    "https://deploy-preview-7--app-integral-fm.netlify.app/*",
     "https://deploy-preview-7--appintegralflormia.netlify.app/*"
   ],
   "development": ["http://localhost:5173/*"]
