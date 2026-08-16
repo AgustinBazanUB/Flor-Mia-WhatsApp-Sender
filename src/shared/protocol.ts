@@ -6,6 +6,11 @@ import type { DevelopmentFault } from "../engine/fault-injection";
 import type { ImageSendInput, ImageSendResult } from "../whatsapp/send-image";
 import type { ReconcileStepInput } from "../whatsapp/reconcile";
 import type { CampaignPublicStatus } from "../campaign/campaign-types";
+import type {
+  CompatibilityDevelopmentFault,
+  CompatibilityState,
+  WhatsAppPreflightRequest
+} from "../compatibility/types";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -14,6 +19,7 @@ export const PROTOCOL_VERSION = 1;
 export const INTERNAL_MESSAGE_TYPES = {
   getState: "GET_EXTENSION_STATE",
   runPreflight: "RUN_WHATSAPP_PREFLIGHT",
+  setCompatibilityDevelopmentFault: "SET_COMPATIBILITY_DEVELOPMENT_FAULT",
   sendTestText: "SEND_TEST_TEXT",
   processTestContact: "PROCESS_TEST_CONTACT",
   resumeContactProcess: "RESUME_CONTACT_PROCESS",
@@ -40,7 +46,8 @@ export type InternalSource = "popup" | "service-worker" | "whatsapp-content" | "
 
 export interface InternalRequestMap {
   GET_EXTENSION_STATE: Record<string, never>;
-  RUN_WHATSAPP_PREFLIGHT: Record<string, never>;
+  RUN_WHATSAPP_PREFLIGHT: { developmentFault?: CompatibilityDevelopmentFault };
+  SET_COMPATIBILITY_DEVELOPMENT_FAULT: { fault: CompatibilityDevelopmentFault };
   SEND_TEST_TEXT: { phone: string; message: string };
   PROCESS_TEST_CONTACT: { phone: string; message: string; images: SerializedCampaignImage[]; faultInjection?: DevelopmentFault };
   RESUME_CONTACT_PROCESS: Record<string, never>;
@@ -51,7 +58,7 @@ export interface InternalRequestMap {
   CAMPAIGN_STOP: { campaignId: string };
   CAMPAIGN_STATUS: { campaignId?: string };
   CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
-  WA_PREFLIGHT: { timeoutMs?: number };
+  WA_PREFLIGHT: WhatsAppPreflightRequest;
   WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string };
   WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string; timeoutMs?: number; checkpointRequired?: boolean };
   WA_SEND_IMAGE: ImageSendInput;
@@ -65,6 +72,7 @@ export interface InternalRequestMap {
 export interface InternalResponseMap {
   GET_EXTENSION_STATE: ExtensionState;
   RUN_WHATSAPP_PREFLIGHT: WhatsAppPreflightResult;
+  SET_COMPATIBILITY_DEVELOPMENT_FAULT: CompatibilityState;
   SEND_TEST_TEXT: TextTestResult;
   PROCESS_TEST_CONTACT: ContactProcessCheckpoint;
   RESUME_CONTACT_PROCESS: ContactProcessCheckpoint;

@@ -2,34 +2,36 @@ import type { SerializedExtensionError } from "./errors";
 import type { ContactProcessCheckpoint } from "../engine/types";
 import type { RetryPolicyConfig } from "../engine/retry-policy";
 import type { CampaignPolicyConfig, CampaignState, CampaignStatus, DailyLimitState } from "../campaign/campaign-types";
+import type {
+  CampaignRequirements,
+  CapabilityDiscovery,
+  CompatibilityFailure,
+  CompatibilityOverallStatus,
+  CompatibilityState,
+  PreflightLevel,
+  WhatsAppCapability
+} from "../compatibility/types";
 
 export const EXTENSION_STATES = ["idle", "preflight", "ready", "running", "pausing", "paused", "error", "completed"] as const;
 export type ExtensionStatus = (typeof EXTENSION_STATES)[number];
 
-export type CapabilityState = "available" | "unavailable" | "requiresContext" | "notImplemented";
-
-export interface CapabilityResult {
-  state: CapabilityState;
-  message: string;
-  selector?: string;
-}
-
 export interface WhatsAppPreflightResult {
   checkedAt: string;
   pageDetected: boolean;
+  contentScriptConnected: boolean;
   documentReady: boolean;
   sessionReady: boolean;
   mainInterfaceReady: boolean;
   qrDetected: boolean;
   operational: boolean;
-  status: "ready" | "login_required" | "loading" | "unavailable";
+  overallStatus: CompatibilityOverallStatus;
+  level: PreflightLevel;
+  requirements: CampaignRequirements;
+  status: "ready" | "login_required" | "loading" | "unavailable" | "incompatible";
   message: string;
-  capabilities: {
-    openConversation: CapabilityResult;
-    composer: CapabilityResult;
-    sendText: CapabilityResult;
-    multimedia: CapabilityResult;
-  };
+  capabilities: Record<WhatsAppCapability, CapabilityDiscovery>;
+  strategiesUsed: string[];
+  failures: CompatibilityFailure[];
 }
 
 export interface TextVerification {
@@ -96,7 +98,7 @@ export interface ExtensionConfig {
 }
 
 export interface ExtensionState {
-  schemaVersion: 3;
+  schemaVersion: 4;
   status: ExtensionStatus;
   currentCampaign: CampaignSnapshot | null;
   progress: { total: number; sent: number; failed: number };
@@ -112,6 +114,7 @@ export interface ExtensionState {
   activeContactProcess: ContactProcessCheckpoint | null;
   activeCampaign: CampaignState | null;
   dailyLimit: DailyLimitState;
+  compatibility: CompatibilityState;
   operations: OperationRecord[];
   updatedAt: string;
 }

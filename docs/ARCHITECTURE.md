@@ -9,8 +9,9 @@
 - `src/background/contact-adapter.ts`: adapta el `ContactEngine` a WhatsApp e IndexedDB.
 - `src/content/whatsapp.ts`: frontera interna de diagnóstico, navegación, envío y reconciliación.
 - `src/content/web-app-bridge.ts`: puente seguro `window.postMessage` ↔ runtime para orígenes permitidos.
+- `src/compatibility/`: requirements contextuales, fingerprints funcionales, Last Known Good, clasificación drift/break y errores técnicos saneados.
 - `src/whatsapp/`: interacción semántica con el DOM, sin coordenadas, mouse ni teclado físico.
-- `src/storage/`: estado/checkpoint en `chrome.storage.local` y blobs temporales en IndexedDB.
+- `src/storage/`: estado/checkpoint/compatibilidad en `chrome.storage.local` y blobs temporales en IndexedDB.
 - `src/popup/`: cliente de estado y control; no coordina la ejecución.
 
 ## Separación CampaignEngine / ContactEngine
@@ -56,6 +57,7 @@ Claves principales de `chrome.storage.local`:
 - `activeContactCheckpoint`: unidad atómica activa;
 - `campaignDailyLimit`: contador diario idempotente;
 - `campaignPublicEvent`: último evento saneado para la Web-App.
+- `whatsappCompatibilityState`: semáforo, último preflight, Last Known Good, drift y último fallo técnico saneado.
 
 ## Scheduler, tandas y Manifest V3
 
@@ -75,6 +77,31 @@ Al iniciar el Service Worker se cargan campaña, contador y checkpoint. Se reuti
 
 Las causas recuperables se distinguen como `whatsapp_reloading`, `whatsapp_tab_closed`, `whatsapp_session_closed`, `contact_ambiguous` e `images_required`. Todas bloquean el siguiente contacto. Reanudar requiere preflight y conserva el índice real.
 
+Una ausencia durante `document.readyState=loading`, la falta temporal del Content Script o una sesión cerrada no se clasifica como cambio de interfaz. Una rotura se declara cuando la página terminó de cargar y todas las estrategias de una capability crítica quedaron agotadas.
+
+## Compatibilidad funcional
+
+El preflight recibe `campaignRequirements` y un nivel:
+
+- `full`: antes de iniciar o reanudar; valida todas las capabilities críticas para esa campaña;
+- `lightweight`: entre destinatarios; comprueba salud sin preparar previews ni repetir pruebas pesadas;
+- `targeted`: modelo reservado para profundizar una capability concreta después de un fallo.
+
+Para un inicio real, `CampaignRuntime` ejecuta primero el chequeo base, abre mediante `/send` la conversación del destinatario explícito sin enviar y luego realiza el preflight completo en contexto. Si hay imágenes, reutiliza el primer blob compartido para preparar un preview técnico, detectar su acción de envío y cerrarlo sin hacer clic en enviar.
+
+`src/whatsapp/selectors.ts` expone un registro por capability. Cada estrategia tiene ID estable, método, prioridad, cantidad de coincidencias, candidato elegido y resultado. El orden favorece accesibilidad y semántica antes de atributos/fallbacks técnicos. Los wrappers históricos (`findComposer`, `findAttachButton`, etc.) delegan al mismo resolver para preservar al `ContactEngine`.
+
+El semáforo es solamente `GREEN` o `RED`:
+
+- `GREEN`: cada capability crítica para la campaña quedó disponible; un fallback válido sigue siendo operativo;
+- `RED`: al menos una capability requerida está ausente, no verificada o agotó sus estrategias.
+
+Después de cada comprobación funcional, `CompatibilityManager` persiste por capability un Last Known Good con versión de extensión, estrategia elegida y fingerprints técnico/semántico. Una estrategia distinta que funciona produce `drift` y actualiza el Last Known Good; un fallo produce `break` y nunca reemplaza el último valor funcional.
+
+Si una operación del `ContactEngine` devuelve `CAPABILITY_UNAVAILABLE`, `WHATSAPP_UI_CHANGED`, `SELECTOR_STRATEGY_EXHAUSTED` o `PREFLIGHT_FAILED`, el checkpoint se guarda antes de que el `CampaignEngine` pause con `whatsapp_ui_changed`. No se borra campaña, contacto ni blobs y no se elige otro destinatario. El semáforo global pasa a `RED` con capability, step, intentos y teléfono ya enmascarado.
+
+Ver [`DIAGNOSTICS.md`](DIAGNOSTICS.md) para el modelo de evidencia y sus límites de privacidad.
+
 ## Contrato Web-App
 
 Canal `flor_mia_whatsapp_extension`, protocolo versión `1`, con `requestId`/`replyTo`, `campaignId` y `sequence` cuando aplica.
@@ -91,3 +118,4 @@ Eventos/respuestas: accepted, started, progress, paused, completed, error y canc
 - sin automatización del sistema operativo o coordenadas;
 - sin técnicas anti-detección o evasión;
 - logs técnicos sin texto completo ni teléfono completo.
+- candidatos DOM limitados a tag, rol y atributos técnicos permitidos; nunca HTML, contenido del chat, nombre detectado ni teléfono completo.

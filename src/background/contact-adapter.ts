@@ -54,7 +54,28 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
     }, tab.id);
     const result = await this.transport.waitForContent(tab.id, timeoutMs);
     if (!result.operational) {
-      throw new ExtensionError(result.qrDetected ? ERROR_CODES.sessionNotReady : ERROR_CODES.interfaceLoading, result.message);
+      if (result.qrDetected) throw new ExtensionError(ERROR_CODES.sessionNotReady, result.message);
+      if (result.status === "incompatible") {
+        const failed = Object.values(result.capabilities).find((capability) => capability.required && capability.state !== "available");
+        throw new ExtensionError(ERROR_CODES.preflightFailed, result.message, {
+          recoverable: false,
+          ...(failed ? {
+            details: {
+              compatibilityDiagnostic: {
+                capability: failed.capability,
+                logicalStep: failed.logicalStep,
+                expectedStrategies: failed.attempts.map((attempt) => attempt.strategyId),
+                currentStrategiesAttempted: failed.attempts,
+                expectedSemanticElement: failed.expectedSemanticElement,
+                candidateCount: failed.candidateCount,
+                candidateSummaries: failed.candidateSummaries,
+                timestamp: result.checkedAt
+              }
+            }
+          } : {})
+        });
+      }
+      throw new ExtensionError(ERROR_CODES.interfaceLoading, result.message);
     }
   }
 

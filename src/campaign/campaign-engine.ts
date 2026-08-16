@@ -8,6 +8,7 @@ import type {
   CampaignState,
   DailyLimitRepository
 } from "./campaign-types";
+import { COMPATIBILITY_ERROR_CODES } from "../compatibility/diagnostic-error";
 
 export interface CampaignContactRunner {
   run(
@@ -21,6 +22,13 @@ export interface CampaignEngineDependencies {
   dailyLimit: DailyLimitRepository;
   contactCheckpoints: ContactCheckpointRepository;
   contactRunner: CampaignContactRunner;
+  healthCheck?: (campaign: CampaignState) => Promise<{
+    healthy: boolean;
+    temporary?: boolean;
+    blockCode?: CampaignBlockReason["code"];
+    error?: CampaignBlockReason["error"];
+    message?: string;
+  }>;
   now?: () => Date;
   onCampaign?: (campaign: CampaignState) => Promise<void> | void;
 }
@@ -59,6 +67,19 @@ function checkpointBlock(checkpoint: ContactProcessCheckpoint, at: string): {
     };
   }
   const code = technicalError?.code;
+  if (code && COMPATIBILITY_ERROR_CODES.has(code)) {
+    return {
+      status: "paused",
+      recipientStatus: "paused",
+      reason: block(
+        "whatsapp_ui_changed",
+        "WhatsApp Web cambió y una capability crítica dejó de estar disponible.",
+        at,
+        true,
+        technicalError
+      )
+    };
+  }
   if (code === ERROR_CODES.whatsappNotOpen) {
     return {
       status: "paused",
@@ -285,6 +306,25 @@ export class CampaignEngine {
           blockReason: block("daily_limit_reached", "Se alcanzó el límite diario; no se inició otro contacto.", this.now().toISOString(), true)
         });
       }
+      if (this.dependencies.healthCheck) {
+        const health = await this.dependencies.healthCheck(campaign);
+        if (!health.healthy) {
+          const blockCode = health.blockCode ?? (health.temporary ? "whatsapp_reloading" : "whatsapp_ui_changed");
+          return this.save(campaign, {
+            status: "paused",
+            pauseRequested: true,
+            blockReason: block(
+              blockCode,
+              health.message ?? (health.temporary
+                ? "WhatsApp Web todavía está cargando; la campaña quedó pausada temporalmente."
+                : "El health check detectó una capability crítica no resoluble."),
+              this.now().toISOString(),
+              true,
+              health.error
+            )
+          });
+        }
+      }
       recipient = campaign.recipients.find((item) => item.status === "pending");
       if (!recipient) {
         return this.save(campaign, {
@@ -410,6 +450,7 @@ export class CampaignEngine {
     const blocked = checkpointBlock(checkpoint, this.now().toISOString());
     return this.save(campaign, {
       status: blocked.status,
+      pauseRequested: blocked.reason.code === "whatsapp_ui_changed",
       recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
         ? { ...item, status: blocked.recipientStatus, error: checkpoint.error }
         : item),

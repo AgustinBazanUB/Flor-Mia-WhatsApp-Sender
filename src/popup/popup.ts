@@ -3,6 +3,7 @@ import type { ContactProcessCheckpoint, ContactStep } from "../engine/types";
 import { INTERNAL_MESSAGE_TYPES, sendRuntimeRequest } from "../shared/protocol";
 import { arrayBufferToBase64, type SerializedCampaignImage } from "../shared/serialization";
 import type { ExtensionState, TextTestResult, WhatsAppPreflightResult } from "../shared/state";
+import type { CompatibilityDevelopmentFault, CompatibilityState } from "../compatibility/types";
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -16,6 +17,11 @@ const whatsappPage = element("whatsapp-page");
 const whatsappSession = element("whatsapp-session");
 const whatsappInterface = element("whatsapp-interface");
 const whatsappMultimedia = element("whatsapp-multimedia");
+const compatibilityFailure = element("compatibility-failure");
+const compatibilityDrift = element("compatibility-drift");
+const capabilityList = element<HTMLUListElement>("capability-list");
+const compatibilityFault = element<HTMLSelectElement>("compatibility-fault");
+const armCompatibilityFault = element<HTMLButtonElement>("arm-compatibility-fault");
 const diagnosticButton = element<HTMLButtonElement>("diagnostic-button");
 const form = element<HTMLFormElement>("test-form");
 const phoneInput = element<HTMLInputElement>("phone");
@@ -54,16 +60,48 @@ function setBusy(button: HTMLButtonElement, busy: boolean, busyText: string, nor
   button.textContent = busy ? busyText : normalText;
 }
 
-function renderPreflight(preflight: WhatsAppPreflightResult | null, operational: boolean, message: string): void {
-  extensionStatus.classList.toggle("is-operational", operational);
-  extensionStatus.innerHTML = `<span class="status-dot ${operational ? "is-operational" : "is-error"}"></span>${operational ? "Operativa" : "Error / requiere revisión"}`;
+function renderPreflight(
+  preflight: WhatsAppPreflightResult | null,
+  compatibility: CompatibilityState,
+  message: string
+): void {
+  const green = preflight?.overallStatus === "GREEN" && compatibility.overallStatus === "GREEN";
+  extensionStatus.classList.toggle("is-operational", green);
+  extensionStatus.innerHTML = `<span class="status-dot ${green ? "is-operational" : "is-error"}"></span>${green ? "🟢 VERDE" : "🔴 ROJO"}`;
   statusMessage.textContent = message;
   whatsappPage.textContent = preflight ? (preflight.pageDetected ? "Abierto" : "No abierto") : "Sin comprobar";
   whatsappSession.textContent = preflight ? (preflight.sessionReady ? "Iniciada" : preflight.qrDetected ? "Requiere QR" : "No preparada") : "Sin comprobar";
   whatsappInterface.textContent = preflight ? (preflight.mainInterfaceReady ? "Disponible" : "Cargando") : "Sin comprobar";
+  const mediaCapabilities = preflight ? [
+    preflight.capabilities.attachment_action,
+    preflight.capabilities.image_file_input,
+    preflight.capabilities.media_preview,
+    preflight.capabilities.media_send_action
+  ] : [];
   whatsappMultimedia.textContent = preflight
-    ? preflight.capabilities.multimedia.state === "available" ? "Disponible" : "Al abrir chat"
+    ? mediaCapabilities.every((capability) => capability.state === "available")
+      ? "Disponible"
+      : mediaCapabilities.some((capability) => capability.state === "requires_context") ? "Requiere contexto" : "No disponible"
     : "Sin comprobar";
+
+  const failure = compatibility.lastFailure ?? preflight?.failures[0] ?? null;
+  compatibilityFailure.hidden = !failure;
+  compatibilityFailure.textContent = failure
+    ? `Capability: ${failure.capability} · Paso: ${failure.stepId ?? failure.logicalStep}${failure.maskedContact ? ` · Contacto: ${failure.maskedContact}` : ""}${typeof failure.attempts === "number" ? ` · Intentos: ${failure.attempts}` : ""}. Generá un diagnóstico y revisá la compatibilidad.`
+    : "";
+  const lastDrift = compatibility.driftHistory.at(-1);
+  compatibilityDrift.hidden = !lastDrift && compatibility.developmentFault === "none";
+  compatibilityDrift.textContent = compatibility.developmentFault === "next_health_check_break"
+    ? "Escenario armado: el próximo health check liviano simulará una rotura y pausará la campaña."
+    : lastDrift
+      ? `Drift funcional: ${lastDrift.capability} pasó de ${lastDrift.fromStrategy} a ${lastDrift.toStrategy}; continúa VERDE.`
+      : "";
+  capabilityList.replaceChildren();
+  for (const capability of Object.values(preflight?.capabilities ?? {})) {
+    const item = document.createElement("li");
+    item.textContent = `${capability.capability}: ${capability.state}${capability.selectedStrategy ? ` · ${capability.selectedStrategy}` : ""}`;
+    capabilityList.append(item);
+  }
 }
 
 function renderResult(result: TextTestResult | null): void {
@@ -227,7 +265,7 @@ function renderCampaign(state: ExtensionState): void {
 
 function renderState(state: ExtensionState): void {
   currentState = state;
-  renderPreflight(state.whatsapp, state.operational, state.statusMessage);
+  renderPreflight(state.whatsapp, state.compatibility, state.statusMessage);
   renderCampaign(state);
   renderResult(state.lastTestResult);
   const managedByCampaign = Boolean(state.activeCampaign
@@ -297,9 +335,22 @@ async function restoreSelectedImages(
 diagnosticButton.addEventListener("click", () => {
   clearError();
   setBusy(diagnosticButton, true, "Diagnosticando…", "Ejecutar diagnóstico");
-  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.runPreflight, {})
+  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.runPreflight, { developmentFault: "none" })
     .then(() => refreshState()).catch(showError)
     .finally(() => setBusy(diagnosticButton, false, "Diagnosticando…", "Ejecutar diagnóstico"));
+});
+
+armCompatibilityFault.addEventListener("click", () => {
+  clearError();
+  const fault = compatibilityFault.value as CompatibilityDevelopmentFault;
+  setBusy(armCompatibilityFault, true, "Aplicando…", "Aplicar escenario");
+  const operation = fault === "next_health_check_break"
+    ? sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.setCompatibilityDevelopmentFault, { fault }).then(() => undefined)
+    : sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.setCompatibilityDevelopmentFault, { fault: "none" })
+      .then(() => sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.runPreflight, { developmentFault: fault }))
+      .then(() => undefined);
+  void operation.then(() => refreshState()).catch(showError)
+    .finally(() => setBusy(armCompatibilityFault, false, "Aplicando…", "Aplicar escenario"));
 });
 
 messageInput.addEventListener("input", () => {

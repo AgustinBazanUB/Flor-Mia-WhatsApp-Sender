@@ -44,7 +44,7 @@ class MemoryDailyLimit implements DailyLimitRepository {
   }
 }
 
-type RunnerOutcome = "completed" | "paused" | "images_required" | "ambiguous" | "reloading" | "tab_closed" | "session_closed" | "failed";
+type RunnerOutcome = "completed" | "paused" | "images_required" | "ambiguous" | "capability_break" | "reloading" | "tab_closed" | "session_closed" | "failed";
 
 function confirmedSteps(steps: ContactStep[]): ContactStep[] {
   return steps.map((step) => ({
@@ -120,6 +120,20 @@ class FakeContactRunner implements CampaignContactRunner {
           pauseReason: "non_recoverable_error",
           currentStepId,
           error: { code: ERROR_CODES.invalidContact, message: "Contacto inválido", recoverable: false }
+        };
+      }
+      if (outcome === "capability_break") {
+        return {
+          ...checkpoint,
+          status: "failed",
+          pauseReason: "non_recoverable_error",
+          currentStepId,
+          error: {
+            code: ERROR_CODES.selectorStrategyExhausted,
+            message: "Capability no resoluble",
+            recoverable: false,
+            details: { failedCapability: "attachment_action" }
+          }
         };
       }
       if (["reloading", "tab_closed", "session_closed"].includes(outcome)) {
@@ -371,6 +385,38 @@ describe("multi-contact CampaignEngine", () => {
     expect(result.status).toBe("paused");
     expect(result.blockReason?.code).toBe("contact_ambiguous");
     expect(runner.calls).toEqual(["contact-1"]);
+  });
+
+  it("pauses on a capability break during a contact and never advances", async () => {
+    const { engine, runner } = setup(2);
+    runner.outcomes.set("contact-1", ["capability_break"]);
+    const result = await startAndAdvance(engine, 1);
+    expect(result.status).toBe("paused");
+    expect(result.pauseRequested).toBe(true);
+    expect(result.blockReason?.code).toBe("whatsapp_ui_changed");
+    expect(result.recipients[1]?.status).toBe("pending");
+    expect(runner.calls).toEqual(["contact-1"]);
+  });
+
+  it("integrates a failed lightweight health check before starting the next recipient", async () => {
+    const state = setup(2);
+    const engine = new CampaignEngine({
+      campaigns: state.campaigns,
+      dailyLimit: state.daily,
+      contactCheckpoints: state.checkpoints,
+      contactRunner: state.runner,
+      healthCheck: async () => ({
+        healthy: false,
+        error: { code: ERROR_CODES.preflightFailed, message: "Selector agotado", recoverable: true },
+        message: "Health check incompatible"
+      }),
+      now: () => new Date(NOW)
+    });
+    await engine.start("campaign-1");
+    const result = await engine.advance("campaign-1");
+    expect(result.status).toBe("paused");
+    expect(result.blockReason?.code).toBe("whatsapp_ui_changed");
+    expect(state.runner.calls).toEqual([]);
   });
 
   it.each([

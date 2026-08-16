@@ -48,7 +48,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   void (async () => {
     try {
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappPreflight) {
-        const data = await runWhatsAppPreflight((message.payload as { timeoutMs?: number }).timeoutMs);
+        const data = await runWhatsAppPreflight(message.payload as InternalRequestMap["WA_PREFLIGHT"]);
         sendResponse(success(message.requestId, data));
         return;
       }

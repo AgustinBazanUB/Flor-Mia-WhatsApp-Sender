@@ -1,11 +1,19 @@
 # Flor Mía WhatsApp Sender
 
-Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.3.0` incorpora un motor persistente de campañas multi-contacto y conserva el `ContactEngine` atómico de la versión 0.2.0.
+Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.4.0` agrega compatibilidad funcional verificable sobre el motor persistente de campañas multi-contacto y conserva el `ContactEngine` atómico.
 
 La extensión no inicia una campaña por recibirla: primero la valida y la deja en estado `received`. El usuario debe ejecutar **Iniciar**, con WhatsApp Web abierto, sesión activa y preflight operativo.
 
-## Alcance de la versión 0.3.0
+## Alcance de la versión 0.4.0
 
+- preflight contextual completo: una campaña de texto no depende de multimedia y una campaña con imágenes sí la exige;
+- semáforo estrictamente binario `GREEN`/`RED`, presentado como **🟢 VERDE** o **🔴 ROJO**;
+- registro explícito de capabilities y estrategias ordenadas por accesibilidad, atributos semánticos, estructura y fallbacks técnicos;
+- `Last Known Good` persistente por capability y detección separada de drift funcional y rotura real;
+- diagnósticos dirigidos con capability, step, estrategias agotadas y candidatos DOM saneados;
+- health check liviano entre destinatarios, sin ejecutar un preflight pesado antes de cada step;
+- pausa segura ante una rotura de interfaz, conservando checkpoint, destinatario, assets y progreso;
+- arnés de desarrollo del popup para simular fallback, semáforo rojo y pausa automática sin modificar WhatsApp real;
 - destinatarios procesados secuencialmente y en el orden recibido;
 - exactamente un `ContactEngine` activo por vez;
 - de cero a tres imágenes separadas y texto al final por destinatario;
@@ -60,7 +68,7 @@ Los únicos permisos de extensión son `storage` y `alarms`; el único host de W
 1. Flor Mía entrega una campaña con destinatarios explícitos, texto y hasta tres imágenes.
 2. La extensión valida el contrato, persiste la campaña y guarda los blobs una sola vez.
 3. El popup muestra la campaña recibida, pero no la ejecuta automáticamente.
-4. **Iniciar** exige preflight operativo y programa el primer destinatario.
+4. **Iniciar** abre de forma segura el primer destinatario pendiente, ejecuta el preflight contextual sin enviar contenido y solo programa el contacto si el resultado es `GREEN`.
 5. Cada destinatario se delega al `ContactEngine`; solo un resultado `completed` incrementa progreso y límite diario.
 6. Una pausa, error, imagen faltante o estado ambiguo bloquea al siguiente destinatario.
 7. **Reanudar** rehidrata el checkpoint; nunca vuelve al contacto 1 ni repite pasos confirmados.
@@ -73,6 +81,8 @@ Cerrar el popup no modifica el motor. La campaña puede continuar mientras Chrom
 - Un paso confirmado no vuelve a ejecutarse.
 - Un clic sin confirmación queda en `verification_pending` y se reconcilia antes de cualquier reintento.
 - Una recarga de WhatsApp, pestaña cerrada o sesión cerrada pausa la campaña con una causa diferenciada.
+- Un selector primario que deja de funcionar pero conserva un fallback válido se registra como drift y permanece `GREEN`.
+- Si se agotan todas las estrategias de una capability crítica, el semáforo pasa a `RED`, la campaña se pausa en una frontera segura y no avanza al siguiente contacto.
 - Al reiniciar el Service Worker se cargan campaña, contador y checkpoint. Una operación incierta no se reanuda automáticamente.
 - Si faltan blobs, la campaña pasa a `images_required` y conserva todo el progreso hasta re-seleccionarlos.
 - El día local se compara al comenzar acciones y consultar estado; el contador se reinicia aunque Chrome no haya estado abierto a medianoche.
@@ -87,12 +97,13 @@ npm run build
 npm run validate:build
 ```
 
-Los tests automatizados usan adaptadores y DOM controlados; no envían mensajes reales. Consultar [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) y [`docs/MANUAL-TEST.md`](docs/MANUAL-TEST.md).
+Los tests automatizados usan adaptadores y DOM controlados; no envían mensajes reales. Consultar [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) y [`docs/MANUAL-TEST.md`](docs/MANUAL-TEST.md).
 
 ## Limitaciones actuales
 
 - La sesión y el QR siempre se manejan manualmente.
 - La confirmación DOM detecta un nuevo saliente; no garantiza entrega ni lectura en el teléfono.
-- WhatsApp Web no publica una API DOM estable. Un cambio de interfaz puede exigir actualizar selectores.
-- La versión 0.3.0 no incluye fingerprint/versionado de selectores, diagnóstico DOM avanzado, exportación final de diagnóstico ni auditoría end-to-end definitiva; corresponden a los Prompts 4–7.
+- WhatsApp Web no publica una API DOM estable. La extensión detecta roturas funcionales y se detiene con seguridad, pero un cambio real puede exigir actualizar el registro de selectores.
+- La versión 0.4.0 prepara evidencia técnica saneada, pero todavía no exporta el reporte JSON/texto de reparación completo previsto para el Prompt 5.
+- La captura DOM avanzada y la auditoría end-to-end definitiva continúan fuera de esta etapa.
 - La validación real de una campaña requiere cargar `dist/` en Chrome y usar destinatarios autorizados.

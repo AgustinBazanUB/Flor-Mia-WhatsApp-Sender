@@ -6,6 +6,7 @@ import { progressForCampaign } from "../campaign/progress";
 import { CampaignScheduler, ChromeCampaignWakeupScheduler } from "../campaign/scheduler";
 import { toCampaignPublicStatus } from "../campaign/public-status";
 import type {
+  CampaignBlockReason,
   CampaignPublicStatus,
   CampaignRepository,
   CampaignState,
@@ -15,15 +16,22 @@ import { processContact } from "../engine/contact-engine";
 import { markInterruptedCheckpointAmbiguous } from "../engine/steps";
 import type { ContactProcessCheckpoint, ImageContactStep } from "../engine/types";
 import type { ValidatedCampaign } from "../shared/campaign";
-import { ERROR_CODES, ExtensionError } from "../shared/errors";
-import { base64ToArrayBuffer, type SerializedCampaignImage } from "../shared/serialization";
+import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
+import { arrayBufferToBase64, base64ToArrayBuffer, type SerializedCampaignImage } from "../shared/serialization";
 import type { WhatsAppPreflightResult } from "../shared/state";
+import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
 import type { CampaignBlobStore } from "../storage/blob-store";
 import type { ContactCheckpointStore } from "../storage/checkpoint-store";
 import type { StateStore } from "../storage/state-store";
 import { ChromeWhatsAppContactAdapter } from "./contact-adapter";
 import type { WhatsAppTransport } from "./whatsapp-transport";
 import type { CampaignWakeupScheduler } from "../campaign/scheduler";
+import type {
+  CampaignRequirements,
+  CompatibilityDevelopmentFault,
+  PreflightProbeImage,
+  WhatsAppPreflightRequest
+} from "../compatibility/types";
 
 const TERMINAL_CAMPAIGNS = new Set<CampaignState["status"]>(["completed", "stopped"]);
 
@@ -32,7 +40,7 @@ export interface CampaignRuntimeDependencies {
   blobStore: CampaignBlobStore;
   checkpointStore: ContactCheckpointStore;
   transport: WhatsAppTransport;
-  runPreflight: (timeoutMs: number) => Promise<WhatsAppPreflightResult>;
+  runPreflight: (request: WhatsAppPreflightRequest) => Promise<WhatsAppPreflightResult>;
   onContactCheckpoint: (checkpoint: ContactProcessCheckpoint) => Promise<void>;
   campaigns?: CampaignRepository;
   dailyLimit?: DailyLimitRepository;
@@ -93,6 +101,7 @@ export class CampaignRuntime {
           });
         }
       },
+      healthCheck: async (campaign) => this.runLightweightHealthCheck(campaign),
       now: this.now,
       onCampaign: async (campaign) => { await this.syncCampaign(campaign); }
     });
@@ -332,18 +341,116 @@ export class CampaignRuntime {
     return this.syncCampaign(nextCampaign);
   }
 
+  async runCampaignPreflight(
+    campaignId: string,
+    developmentFault: CompatibilityDevelopmentFault = "none"
+  ): Promise<WhatsAppPreflightResult> {
+    const campaign = await this.campaignStore.loadActive();
+    if (!campaign || campaign.campaignId !== campaignId) {
+      throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
+    }
+    const basePreflight = await this.dependencies.runPreflight({
+      timeoutMs: campaign.policy.whatsappLoadWaitMs,
+      level: "lightweight",
+      requirements: { needsText: false, needsImages: false },
+      developmentFault
+    });
+    if (!basePreflight.operational) return basePreflight;
+    const recipient = campaign.activeContactId
+      ? campaign.recipients.find((candidate) => candidate.recipientId === campaign.activeContactId)
+      : campaign.recipients.find((candidate) => candidate.status === "pending");
+    if (!recipient) return basePreflight;
+    const tab = await this.dependencies.transport.requireTab();
+    await this.dependencies.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
+      operationId: `preflight:${campaign.campaignId}:${recipient.recipientId}`,
+      phoneDigits: recipient.phoneDigits
+    }, tab.id);
+    await this.dependencies.transport.waitForContent(tab.id, campaign.policy.whatsappLoadWaitMs);
+    const probeImage = await this.probeImageFor(campaign);
+    return this.dependencies.runPreflight({
+      timeoutMs: campaign.policy.whatsappLoadWaitMs,
+      level: "full",
+      requirements: this.requirementsFor(campaign),
+      ...(probeImage ? { probeImage } : {}),
+      developmentFault
+    });
+  }
+
   private async requireOperationalPreflight(campaignId: string): Promise<CampaignState> {
     const campaign = await this.campaignStore.loadActive();
     if (!campaign || campaign.campaignId !== campaignId) {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
     }
-    const preflight = await this.dependencies.runPreflight(campaign.policy.whatsappLoadWaitMs);
+    const preflight = await this.runCampaignPreflight(campaignId);
     if (!preflight.operational) {
-      throw new ExtensionError(
-        preflight.qrDetected ? ERROR_CODES.sessionNotReady : preflight.pageDetected ? ERROR_CODES.interfaceLoading : ERROR_CODES.whatsappNotOpen,
-        preflight.message
-      );
+      throw this.preflightError(preflight);
     }
     return campaign;
+  }
+
+  private requirementsFor(campaign: CampaignState): CampaignRequirements {
+    return {
+      needsText: Boolean(campaign.text.trim()),
+      needsImages: campaign.images.length > 0
+    };
+  }
+
+  private async probeImageFor(campaign: CampaignState): Promise<PreflightProbeImage | null> {
+    const asset = campaign.images[0];
+    if (!asset) return null;
+    const stored = await this.dependencies.blobStore.getImage(campaign.campaignId, asset.imageId);
+    if (!stored) return null;
+    const data = await stored.blob.arrayBuffer();
+    return {
+      name: asset.name,
+      type: asset.type,
+      size: asset.size,
+      dataBase64: arrayBufferToBase64(data)
+    };
+  }
+
+  private preflightError(preflight: WhatsAppPreflightResult): ExtensionError {
+    const failure = preflight.failures[0];
+    const code = preflight.qrDetected
+      ? ERROR_CODES.sessionNotReady
+      : !preflight.pageDetected
+        ? ERROR_CODES.whatsappNotOpen
+        : preflight.status === "loading"
+          ? ERROR_CODES.interfaceLoading
+          : ERROR_CODES.preflightFailed;
+    return new ExtensionError(code, preflight.message, {
+      recoverable: true,
+      ...(failure ? { details: { compatibilityDiagnostic: failure, failedCapability: failure.capability } } : {})
+    });
+  }
+
+  private async runLightweightHealthCheck(campaign: CampaignState): Promise<{
+    healthy: boolean;
+    temporary?: boolean;
+    blockCode?: CampaignBlockReason["code"];
+    error?: ReturnType<typeof serializeError>;
+    message?: string;
+  }> {
+    const preflight = await this.dependencies.runPreflight({
+      timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 5_000),
+      level: "lightweight",
+      requirements: this.requirementsFor(campaign)
+    });
+    if (preflight.operational) return { healthy: true };
+    const error = this.preflightError(preflight);
+    const blockCode = error.code === ERROR_CODES.whatsappNotOpen
+      ? "whatsapp_tab_closed"
+      : error.code === ERROR_CODES.sessionNotReady
+        ? "whatsapp_session_closed"
+        : error.code === ERROR_CODES.interfaceLoading
+          ? "whatsapp_reloading"
+          : "whatsapp_ui_changed";
+    return {
+      healthy: false,
+      temporary: ["loading", "unavailable", "login_required"].includes(preflight.status),
+      blockCode,
+      error: serializeError(error),
+      message: preflight.message
+    };
   }
 }

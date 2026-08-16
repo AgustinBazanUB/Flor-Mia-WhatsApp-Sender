@@ -1,4 +1,5 @@
-import { ERROR_CODES, ExtensionError } from "../shared/errors";
+import { ERROR_CODES, ExtensionError, toExtensionError } from "../shared/errors";
+import { capabilityResolutionError, capabilityUnavailableError } from "../compatibility/diagnostic-error";
 import { maskPhone } from "../shared/phone";
 import type { TextTestResult } from "../shared/state";
 import {
@@ -6,7 +7,8 @@ import {
   findComposer,
   findInvalidContactDialog,
   findSendButton,
-  outgoingMessages
+  outgoingMessages,
+  resolveCapability
 } from "./selectors";
 import { waitForCondition } from "./wait";
 
@@ -38,7 +40,10 @@ function setComposerText(composer: HTMLElement, message: string): void {
     composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: message }));
   }
   if (canonicalMessageText(composer.textContent ?? "") !== canonicalMessageText(message)) {
-    throw new ExtensionError(ERROR_CODES.elementNotFound, "WhatsApp no reflejó el texto dentro del campo de escritura.");
+    throw capabilityUnavailableError(
+      resolveCapability("composer", document, { required: true }).discovery,
+      "WhatsApp localizó el composer, pero no reflejó el texto de forma funcional."
+    );
   }
 }
 
@@ -70,16 +75,33 @@ export async function sendAndVerifyText(input: {
     const invalid = findInvalidContactDialog();
     if (invalid) throw new ExtensionError(ERROR_CODES.contactUnavailable, "El número no está disponible en WhatsApp.");
     return findComposer();
-  }, { timeoutMs, description: "el campo de escritura de la conversación" });
+  }, { timeoutMs, description: "el campo de escritura de la conversación" }).catch((error: unknown) => {
+    const normalized = toExtensionError(error);
+    if (normalized.code === ERROR_CODES.contactUnavailable) throw normalized;
+    throw capabilityResolutionError(
+      resolveCapability("composer", document, { required: true }).discovery,
+      "La capability del composer dejó de estar disponible.",
+      error
+    );
+  });
 
   const beforeIds = new Set(outgoingMessages().map((item) => item.identity));
   setComposerText(composerMatch.element, message);
   const sendButton = await waitForCondition(() => findSendButton(), {
     timeoutMs: Math.min(timeoutMs, 10_000),
     description: "la acción de enviar texto"
+  }).catch((error: unknown) => {
+    throw capabilityResolutionError(
+      resolveCapability("text_send_action", document, { required: true }).discovery,
+      "Se agotaron las estrategias para localizar la acción de envío de texto.",
+      error
+    );
   });
   if (sendButton.element.disabled || sendButton.element.getAttribute("aria-disabled") === "true") {
-    throw new ExtensionError(ERROR_CODES.elementNotFound, "El botón de envío está deshabilitado.");
+    throw capabilityUnavailableError(
+      resolveCapability("text_send_action", document, { required: true }).discovery,
+      "La acción de envío de texto fue localizada, pero no está disponible."
+    );
   }
   await lifecycle.beforeSend?.([...beforeIds]);
   sendButton.element.click();

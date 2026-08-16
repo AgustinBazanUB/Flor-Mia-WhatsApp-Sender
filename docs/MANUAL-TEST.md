@@ -11,6 +11,49 @@ Estas pruebas pueden enviar mensajes reales. Usar únicamente números propios o
 5. Desde Marketing de Flor Mía, preparar una campaña de texto con tres números autorizados, en un orden fácil de reconocer.
 6. Verificar que el popup muestre nombre, `0 / 3`, primer contacto y estado recibido. No debe iniciarse automáticamente.
 
+## Preflight y semáforo 0.4.0
+
+### H. GREEN base y preflight contextual
+
+1. Sin campaña activa, pulsar **Ejecutar diagnóstico** con WhatsApp ya cargado y sesión iniciada.
+2. Confirmar **🟢 VERDE** y revisar la lista plegable de capabilities.
+3. Preparar una campaña autorizada solo de texto y pulsar **Iniciar**.
+4. Confirmar que la extensión abre la conversación del primer destinatario sin enviar, verifica composer/acción/evidencia de texto y recién entonces inicia el motor.
+5. Repetir con una campaña que contenga una imagen. Confirmar que aparece y se cierra el preview técnico sin generar un mensaje; la campaña solo inicia si adjuntos, input, preview, acción de envío y evidencia multimedia quedan disponibles.
+
+### I. Fallback funcional y drift
+
+1. En **Simulación de compatibilidad (desarrollo)** seleccionar **Primario falla, usar fallback**.
+2. Pulsar **Aplicar escenario**.
+3. Confirmar que el diagnóstico sigue en **🟢 VERDE** cuando una estrategia secundaria encuentra la capability.
+4. Abrir **Capabilities técnicas** y comprobar la estrategia elegida.
+5. Si existía un Last Known Good con otra estrategia, confirmar que el popup informa drift técnico sin agregar un tercer color.
+6. Restaurar **Sin simulación** y volver a ejecutar el diagnóstico.
+
+### J. Rotura simulada y RED
+
+1. Seleccionar **Adjuntos sin estrategias → ROJO** y aplicar.
+2. Confirmar **🔴 ROJO** y el mensaje “WhatsApp Web no es compatible actualmente con una o más funciones necesarias”.
+3. Confirmar que el popup identifica `attachment_action`, su paso lógico y la acción sugerida, sin dumps de DOM.
+4. Confirmar que el diagnóstico técnico solo contiene tag/rol/atributos saneados.
+5. Restaurar **Sin simulación**.
+
+### K. Pausa automática por health check
+
+1. Preparar una campaña autorizada de al menos dos destinatarios y dejarla en ejecución o en la espera posterior al primero.
+2. Seleccionar **Pausar en el próximo health check** y pulsar **Aplicar escenario**. La inyección queda armada para una sola comprobación.
+3. En la próxima frontera entre destinatarios, confirmar que la campaña pasa a `paused` con causa `whatsapp_ui_changed`.
+4. Confirmar que no comienza el siguiente destinatario, el checkpoint/progreso no retrocede y los assets siguen disponibles.
+5. Confirmar **🔴 ROJO**, capability y step en el popup. Un health check ejecutado entre contactos no inventa un teléfono actual; un fallo dentro de un step real sí debe mostrar el teléfono enmascarado y sus intentos.
+6. Restaurar **Sin simulación**, ejecutar preflight y reanudar. Confirmar que continúa en el destinatario correcto.
+
+### L. Recarga no es UI_CHANGED
+
+1. Recargar WhatsApp durante una espera o antes del siguiente destinatario.
+2. Confirmar que se clasifica como carga temporal (`whatsapp_reloading`) y no como rotura funcional.
+3. Al terminar la carga, ejecutar diagnóstico/reanudar y confirmar que un preflight funcional vuelve a **🟢 VERDE**.
+4. Cerrar sesión y comprobar que se informa sesión requerida, diferenciada de `WHATSAPP_UI_CHANGED`.
+
 ## A. Campaña de tres contactos autorizados
 
 1. Pulsar **Iniciar**.
@@ -104,7 +147,7 @@ La sección de desarrollo del popup mantiene estos casos de un solo contacto:
 - imagen temporal faltante y re-selección;
 - reinicio del Service Worker con checkpoint activo.
 
-La inyección de fallos solo se aplica al contacto técnico iniciado desde el popup; no se activa en campañas reales recibidas por el bridge.
+La inyección de fallos del `ContactEngine` solo se aplica al contacto técnico iniciado desde el popup. El arnés de compatibilidad es independiente: se configura desde una acción interna validada del popup y la Web-App no puede activarlo.
 
 ## Diagnóstico
 
@@ -112,3 +155,4 @@ La inyección de fallos solo se aplica al contacto técnico iniciado desde el po
 - consola de DevTools de WhatsApp Web;
 - popup: estado, progreso, contacto, step y errores;
 - los logs muestran IDs, steps, intentos, resultados y códigos, pero no el texto completo ni el teléfono completo.
+- el detalle completo del modelo está en [`DIAGNOSTICS.md`](DIAGNOSTICS.md).

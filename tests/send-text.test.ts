@@ -41,4 +41,13 @@ describe("verified text send", () => {
     await expect(sendAndVerifyText({ operationId: "operation-3", phoneDigits: "5491112345678", message: "Nuevo", timeoutMs: 10 }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
+
+  it("returns a targeted sanitized diagnostic when composer strategies are exhausted", async () => {
+    document.querySelector("[contenteditable='true']")?.remove();
+    await expect(sendAndVerifyText({ operationId: "operation-4", phoneDigits: "5491112345678", message: "Nuevo", timeoutMs: 5 }))
+      .rejects.toMatchObject({
+        code: "SELECTOR_STRATEGY_EXHAUSTED",
+        details: { compatibilityDiagnostic: { capability: "composer", logicalStep: "conversation.composer" } }
+      });
+  });
 });

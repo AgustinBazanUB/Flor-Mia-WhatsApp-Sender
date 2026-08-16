@@ -85,4 +85,13 @@ describe("verified image send", () => {
     await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 5 }))
       .rejects.toMatchObject({ code: "AMBIGUOUS_RESULT", details: { sendAttempted: true } });
   });
+
+  it("reports attachment capability exhaustion before attempting a send", async () => {
+    document.querySelector("[data-testid='clip']")?.remove();
+    document.querySelector("input[type='file']")?.remove();
+    await expect(sendAndVerifyImage(imageInput())).rejects.toMatchObject({
+      code: "SELECTOR_STRATEGY_EXHAUSTED",
+      details: { compatibilityDiagnostic: { capability: "attachment_action", logicalStep: "image.attachment_action" } }
+    });
+  });
 });

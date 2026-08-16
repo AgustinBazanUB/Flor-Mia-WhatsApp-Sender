@@ -20,17 +20,34 @@
         <div class="status-card__heading">
           <div>
             <span class="eyebrow">Estado</span>
-            <strong id="extension-status"><span class="status-dot is-error"></span>Error / requiere revisión</strong>
+            <strong id="extension-status"><span class="status-dot is-error"></span>🔴 ROJO</strong>
           </div>
           <button id="diagnostic-button" class="button button--secondary" type="button">Ejecutar diagnóstico</button>
         </div>
         <p id="status-message">Consultando el estado de la extensión…</p>
+        <p id="compatibility-failure" class="process-alert" hidden></p>
+        <p id="compatibility-drift" class="compatibility-drift" hidden></p>
         <dl class="diagnostic-grid">
           <div><dt>WhatsApp Web</dt><dd id="whatsapp-page">—</dd></div>
           <div><dt>Sesión</dt><dd id="whatsapp-session">—</dd></div>
           <div><dt>Interfaz</dt><dd id="whatsapp-interface">—</dd></div>
           <div><dt>Multimedia</dt><dd id="whatsapp-multimedia">—</dd></div>
         </dl>
+        <details class="technical-details">
+          <summary>Capabilities técnicas</summary>
+          <ul id="capability-list" class="capability-list"></ul>
+        </details>
+        <div class="compatibility-harness">
+          <label for="compatibility-fault">Simulación de compatibilidad (desarrollo)</label>
+          <select id="compatibility-fault">
+            <option value="none">Sin simulación</option>
+            <option value="primary_strategy_unavailable">Primario falla, usar fallback</option>
+            <option value="attachment_capability_break">Adjuntos sin estrategias → ROJO</option>
+            <option value="next_health_check_break">Pausar en el próximo health check</option>
+          </select>
+          <button id="arm-compatibility-fault" class="button button--secondary" type="button">Aplicar escenario</button>
+          <small>Solo afecta controles iniciados desde este popup; la Web-App no puede activarlo.</small>
+        </div>
       </section>
 
       <section id="campaign-card" class="card campaign-card" aria-live="polite">

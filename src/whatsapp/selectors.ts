@@ -1,136 +1,348 @@
+import type {
+  CandidateSummary,
+  CapabilityDiscovery,
+  StrategyAttempt,
+  WhatsAppCapability
+} from "../compatibility/types";
+
 export interface SelectorMatch<T extends Element = HTMLElement> {
   element: T;
   strategy: string;
   selector: string;
 }
 
-interface SelectorGroup {
-  strategy: string;
-  selectors: readonly string[];
+interface SelectorStrategy {
+  id: string;
+  method: "accessibility" | "semantic-attribute" | "structural" | "data-testid" | "data-icon" | "css-fallback";
+  priority: number;
+  selector: string;
 }
 
-const groups = {
-  appRoot: {
-    strategy: "application-root",
-    selectors: ["#app", "[data-testid='app']"]
-  },
-  qr: {
-    strategy: "authentication-qr",
-    selectors: [
-      "[data-testid='qrcode']",
-      "canvas[aria-label*='QR' i]",
-      "div[data-ref] canvas",
-      "[data-ref] canvas"
-    ]
-  },
-  mainInterface: {
-    strategy: "main-interface",
-    selectors: [
-      "#pane-side",
-      "[data-testid='chat-list']",
-      "[aria-label='Chat list']",
-      "[aria-label='Lista de chats']",
-      "header [data-testid='chat-list-header']"
+interface SelectorCapabilityDefinition {
+  logicalStep: string;
+  expectedSemanticElement: string;
+  strategies: readonly SelectorStrategy[];
+}
+
+export interface CapabilityResolverOptions {
+  required?: boolean;
+  disablePrimary?: boolean;
+  forceUnavailable?: boolean;
+}
+
+export interface CapabilityResolution<T extends HTMLElement = HTMLElement> {
+  match: SelectorMatch<T> | null;
+  discovery: CapabilityDiscovery;
+}
+
+export const UI_LABELS = {
+  send: ["Send", "Enviar"],
+  attach: ["Attach", "Adjuntar"],
+  close: ["Close", "Cerrar"],
+  chatList: ["Chat list", "Lista de chats"]
+} as const;
+
+function labelSelectors(tag: string, labels: readonly string[]): string[] {
+  return labels.map((label) => `${tag}[aria-label='${label}']`);
+}
+
+const selectorRegistry = {
+  main_interface: {
+    logicalStep: "preflight.main_interface",
+    expectedSemanticElement: "lista o área principal de WhatsApp",
+    strategies: [
+      ...labelSelectors("", UI_LABELS.chatList).map((selector, index) => ({
+        id: `main.accessibility.${index + 1}`, method: "accessibility" as const, priority: 10 + index, selector
+      })),
+      { id: "main.testid.chat-list", method: "data-testid", priority: 30, selector: "[data-testid='chat-list']" },
+      { id: "main.structural.pane-side", method: "structural", priority: 40, selector: "#pane-side" },
+      { id: "main.testid.header", method: "data-testid", priority: 50, selector: "header [data-testid='chat-list-header']" }
     ]
   },
   composer: {
-    strategy: "conversation-composer",
-    selectors: [
-      "#main footer [data-testid='conversation-compose-box-input'][contenteditable='true']",
-      "#main footer div[contenteditable='true'][role='textbox']",
-      "#main [data-lexical-editor='true'][contenteditable='true']",
-      "#main footer div[contenteditable='true'][data-tab]"
+    logicalStep: "conversation.composer",
+    expectedSemanticElement: "editor de texto editable de la conversación",
+    strategies: [
+      { id: "composer.accessibility.textbox", method: "accessibility", priority: 10, selector: "#main footer [role='textbox'][contenteditable='true']" },
+      { id: "composer.testid.compose-input", method: "data-testid", priority: 20, selector: "#main footer [data-testid='conversation-compose-box-input'][contenteditable='true']" },
+      { id: "composer.semantic.lexical", method: "semantic-attribute", priority: 30, selector: "#main [data-lexical-editor='true'][contenteditable='true']" },
+      { id: "composer.structural.footer-editable", method: "structural", priority: 40, selector: "#main footer div[contenteditable='true'][data-tab]" }
     ]
   },
-  sendButton: {
-    strategy: "send-action",
-    selectors: [
-      "#main footer button[data-testid='compose-btn-send']",
-      "#main footer button[aria-label='Send']",
-      "#main footer button[aria-label='Enviar']",
-      "#main footer [data-icon='send']"
+  text_send_action: {
+    logicalStep: "text.send_action",
+    expectedSemanticElement: "botón semántico de envío de texto",
+    strategies: [
+      ...labelSelectors("#main footer button", UI_LABELS.send).map((selector, index) => ({
+        id: `text-send.accessibility.${index + 1}`, method: "accessibility" as const, priority: 10 + index, selector
+      })),
+      { id: "text-send.testid.compose", method: "data-testid", priority: 30, selector: "#main footer button[data-testid='compose-btn-send']" },
+      { id: "text-send.icon.send", method: "data-icon", priority: 40, selector: "#main footer [data-icon='send']" }
     ]
   },
-  attachButton: {
-    strategy: "attachment-action",
-    selectors: [
-      "#main footer button[data-testid='clip']",
-      "#main footer button[aria-label='Attach']",
-      "#main footer button[aria-label='Adjuntar']",
-      "#main footer [data-icon='plus-rounded']",
-      "#main footer [data-icon='clip']"
+  attachment_action: {
+    logicalStep: "image.attachment_action",
+    expectedSemanticElement: "botón semántico para abrir adjuntos",
+    strategies: [
+      ...labelSelectors("#main footer button", UI_LABELS.attach).map((selector, index) => ({
+        id: `attach.accessibility.${index + 1}`, method: "accessibility" as const, priority: 10 + index, selector
+      })),
+      { id: "attach.testid.clip", method: "data-testid", priority: 30, selector: "#main footer button[data-testid='clip']" },
+      { id: "attach.icon.plus-rounded", method: "data-icon", priority: 40, selector: "#main footer [data-icon='plus-rounded']" },
+      { id: "attach.icon.clip", method: "data-icon", priority: 50, selector: "#main footer [data-icon='clip']" }
     ]
   },
-  imageFileInput: {
-    strategy: "image-file-input",
-    selectors: [
-      "#main input[type='file'][accept*='image']",
-      "[role='dialog'] input[type='file'][accept*='image']",
-      "input[type='file'][accept^='image/']",
-      "input[type='file'][accept*='image/*']"
+  image_file_input: {
+    logicalStep: "image.file_input",
+    expectedSemanticElement: "input de archivo que acepte imágenes",
+    strategies: [
+      { id: "image-input.semantic.accept", method: "semantic-attribute", priority: 10, selector: "input[type='file'][accept^='image/'], input[type='file'][accept*='image/*']" },
+      { id: "image-input.structural.main", method: "structural", priority: 20, selector: "#main input[type='file'][accept*='image']" },
+      { id: "image-input.structural.dialog", method: "structural", priority: 30, selector: "[role='dialog'] input[type='file'][accept*='image']" }
     ]
   },
-  mediaPreview: {
-    strategy: "media-preview",
-    selectors: [
-      "[data-testid='media-editor']",
-      "[data-testid='media-preview']",
-      "[role='dialog'][aria-label*='preview' i]",
-      "[role='dialog'] [data-testid*='media' i]",
-      "[data-animate-media-viewer='true']"
+  media_preview: {
+    logicalStep: "image.media_preview",
+    expectedSemanticElement: "preview multimedia preparado antes del envío",
+    strategies: [
+      { id: "media-preview.accessibility.dialog", method: "accessibility", priority: 10, selector: "[role='dialog'][aria-label*='preview' i]" },
+      { id: "media-preview.testid.editor", method: "data-testid", priority: 20, selector: "[data-testid='media-editor']" },
+      { id: "media-preview.testid.preview", method: "data-testid", priority: 30, selector: "[data-testid='media-preview']" },
+      { id: "media-preview.structural.dialog-media", method: "structural", priority: 40, selector: "[role='dialog'] [data-testid*='media' i]" },
+      { id: "media-preview.semantic.animate", method: "semantic-attribute", priority: 50, selector: "[data-animate-media-viewer='true']" }
     ]
   },
-  mediaSendButton: {
-    strategy: "media-send-action",
-    selectors: [
-      "button[data-testid='compose-btn-send']",
-      "button[data-testid='media-editor-send']",
-      "button[aria-label='Send']",
-      "button[aria-label='Enviar']",
-      "[data-icon='send']"
+  media_send_action: {
+    logicalStep: "image.media_send_action",
+    expectedSemanticElement: "botón semántico de envío del preview multimedia",
+    strategies: [
+      ...labelSelectors("button", UI_LABELS.send).map((selector, index) => ({
+        id: `media-send.accessibility.${index + 1}`, method: "accessibility" as const, priority: 10 + index, selector
+      })),
+      { id: "media-send.testid.editor", method: "data-testid", priority: 30, selector: "button[data-testid='media-editor-send']" },
+      { id: "media-send.testid.compose", method: "data-testid", priority: 40, selector: "button[data-testid='compose-btn-send']" },
+      { id: "media-send.icon.send", method: "data-icon", priority: 50, selector: "[data-icon='send']" }
     ]
   },
-  invalidContact: {
-    strategy: "invalid-contact-dialog",
-    selectors: [
-      "[data-testid='popup-contents'] [data-testid='alert-phone-number-invalid']",
-      "[role='dialog'] [data-icon='alert-error']",
-      "[role='dialog'] [data-testid='invalid-number']"
+  outgoing_text_evidence: {
+    logicalStep: "text.outgoing_evidence",
+    expectedSemanticElement: "contenedor de conversación observable para evidencia saliente de texto",
+    strategies: [
+      { id: "outgoing-text.semantic.data-id", method: "semantic-attribute", priority: 10, selector: "#main [data-id^='true_']" },
+      { id: "outgoing-text.testid.message", method: "data-testid", priority: 20, selector: "#main [data-testid='msg-container']" },
+      { id: "outgoing-text.structural.root", method: "structural", priority: 30, selector: "#main" }
     ]
   },
-  conversationHeader: {
-    strategy: "conversation-header",
-    selectors: [
-      "#main header [data-testid='conversation-info-header']",
-      "#main header [role='button'][title]",
-      "#main header"
+  outgoing_media_evidence: {
+    logicalStep: "image.outgoing_evidence",
+    expectedSemanticElement: "contenedor de conversación observable para evidencia multimedia saliente",
+    strategies: [
+      { id: "outgoing-media.testid.thumbnail", method: "data-testid", priority: 10, selector: "#main [data-testid='image-thumb'], #main [data-testid='video-thumb']" },
+      { id: "outgoing-media.semantic.data-id", method: "semantic-attribute", priority: 20, selector: "#main [data-id^='true_']" },
+      { id: "outgoing-media.structural.root", method: "structural", priority: 30, selector: "#main" }
     ]
   }
-} satisfies Record<string, SelectorGroup>;
+} satisfies Partial<Record<WhatsAppCapability, SelectorCapabilityDefinition>>;
 
-function findFromGroup<T extends HTMLElement>(group: SelectorGroup, root: ParentNode = document): SelectorMatch<T> | null {
-  for (const selector of group.selectors) {
+export const SELECTOR_REGISTRY = selectorRegistry;
+
+const internalGroups = {
+  appRoot: ["#app", "[data-testid='app']"],
+  qr: ["[data-testid='qrcode']", "canvas[aria-label*='QR' i]", "div[data-ref] canvas", "[data-ref] canvas"],
+  invalidContact: [
+    "[data-testid='popup-contents'] [data-testid='alert-phone-number-invalid']",
+    "[role='dialog'] [data-icon='alert-error']",
+    "[role='dialog'] [data-testid='invalid-number']"
+  ],
+  conversationHeader: ["#main header [data-testid='conversation-info-header']", "#main header [role='button'][title]", "#main header"],
+  mediaPreviewClose: [
+    ...labelSelectors("button", UI_LABELS.close),
+    "button[data-testid='media-editor-close']",
+    "[data-icon='x']",
+    "[data-icon='x-alt']"
+  ]
+} as const;
+
+function redactSensitiveValue(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!normalized) return "";
+  if (/\+?\d[\d\s().-]{5,}/.test(normalized)) return "[redacted]";
+  return normalized;
+}
+
+const SAFE_ARIA_TERMS = /send|enviar|attach|adjuntar|close|cerrar|chat|message|mensaje|image|imagen|photo|foto|video|search|buscar|type|escribe/i;
+
+function safeAriaLabel(element: Element): string | undefined {
+  const value = redactSensitiveValue(element.getAttribute("aria-label") ?? "");
+  if (!value) return undefined;
+  return SAFE_ARIA_TERMS.test(value) ? value : "[redacted]";
+}
+
+function safeAttribute(element: Element, name: string): string | undefined {
+  const value = redactSensitiveValue(element.getAttribute(name) ?? "");
+  return value || undefined;
+}
+
+function hierarchyHint(element: Element): string {
+  const parts: string[] = [];
+  let current: Element | null = element;
+  for (let depth = 0; current && depth < 3; depth += 1, current = current.parentElement) {
+    const role = safeAttribute(current, "role");
+    const testId = safeAttribute(current, "data-testid");
+    const icon = safeAttribute(current, "data-icon");
+    parts.unshift(`${current.tagName.toLowerCase()}${role ? `[role=${role}]` : ""}${testId ? `[testid=${testId}]` : ""}${icon ? `[icon=${icon}]` : ""}`);
+  }
+  return parts.join(" > ").slice(0, 160);
+}
+
+export function describeCandidate(element: Element): CandidateSummary {
+  return {
+    tagName: element.tagName.toLowerCase(),
+    ...(safeAttribute(element, "role") ? { role: safeAttribute(element, "role") } : {}),
+    ...(safeAriaLabel(element) ? { ariaLabel: safeAriaLabel(element) } : {}),
+    ...(safeAttribute(element, "data-testid") ? { dataTestId: safeAttribute(element, "data-testid") } : {}),
+    ...(safeAttribute(element, "data-icon") ? { dataIcon: safeAttribute(element, "data-icon") } : {}),
+    ...(safeAttribute(element, "type") ? { type: safeAttribute(element, "type") } : {}),
+    ...(safeAttribute(element, "contenteditable") ? { contentEditable: safeAttribute(element, "contenteditable") } : {}),
+    hierarchyHint: hierarchyHint(element)
+  };
+}
+
+function asActionElement(element: Element): Element {
+  return element.matches("[data-icon]") ? element.closest("button, [role='button']") ?? element : element;
+}
+
+function uniqueElements(elements: Element[]): HTMLElement[] {
+  const seen = new Set<HTMLElement>();
+  const result: HTMLElement[] = [];
+  for (const raw of elements) {
+    const element = asActionElement(raw);
+    if (!(element instanceof HTMLElement) || seen.has(element)) continue;
+    seen.add(element);
+    result.push(element);
+  }
+  return result;
+}
+
+function semanticFingerprint(element: Element, strategy: SelectorStrategy): string {
+  const summary = describeCandidate(element);
+  return [
+    summary.tagName,
+    `role=${summary.role ?? ""}`,
+    `testid=${summary.dataTestId ?? ""}`,
+    `icon=${summary.dataIcon ?? ""}`,
+    `type=${summary.type ?? ""}`,
+    `editable=${summary.contentEditable ?? ""}`,
+    `method=${strategy.method}`
+  ].join("|");
+}
+
+export function resolveCapability<T extends HTMLElement = HTMLElement>(
+  capability: keyof typeof selectorRegistry,
+  root: ParentNode = document,
+  options: CapabilityResolverOptions = {}
+): CapabilityResolution<T> {
+  const definition = selectorRegistry[capability];
+  const attempts: StrategyAttempt[] = [];
+  let match: SelectorMatch<T> | null = null;
+  let selectedElement: HTMLElement | null = null;
+  let selectedStrategy: SelectorStrategy | null = null;
+  const allCandidates: CandidateSummary[] = [];
+  const uniqueCandidateElements = new Set<HTMLElement>();
+
+  for (const [index, strategy] of definition.strategies.entries()) {
+    const disabled = options.forceUnavailable || (options.disablePrimary && index === 0);
+    if (disabled) {
+      attempts.push({
+        strategyId: strategy.id,
+        method: strategy.method,
+        priority: strategy.priority,
+        result: "disabled",
+        matchedCount: 0,
+        candidates: []
+      });
+      continue;
+    }
+    const candidates = uniqueElements([...root.querySelectorAll(strategy.selector)]);
+    for (const candidate of candidates) uniqueCandidateElements.add(candidate);
+    const summaries = candidates.slice(0, 5).map(describeCandidate);
+    allCandidates.push(...summaries);
+    const selected = candidates.find(elementVisible) ?? candidates[0] ?? null;
+    attempts.push({
+      strategyId: strategy.id,
+      method: strategy.method,
+      priority: strategy.priority,
+      result: selected ? "matched" : "not_found",
+      matchedCount: candidates.length,
+      ...(selected ? { selectedCandidate: describeCandidate(selected) } : {}),
+      candidates: summaries
+    });
+    if (!selected) continue;
+    selectedElement = selected;
+    selectedStrategy = strategy;
+    match = { element: selected as T, strategy: strategy.id, selector: strategy.selector };
+    break;
+  }
+
+  const dedupedCandidates = allCandidates.filter((candidate, index, values) => values.findIndex((value) => JSON.stringify(value) === JSON.stringify(candidate)) === index).slice(0, 8);
+  return {
+    match,
+    discovery: {
+      capability,
+      logicalStep: definition.logicalStep,
+      state: match ? "available" : "unavailable",
+      required: options.required ?? false,
+      message: match
+        ? `Capability resuelta mediante ${selectedStrategy!.id}.`
+        : "Ninguna estrategia registrada encontró un elemento funcional.",
+      expectedSemanticElement: definition.expectedSemanticElement,
+      ...(selectedStrategy ? { selectedStrategy: selectedStrategy.id } : {}),
+      attempts,
+      candidateCount: uniqueCandidateElements.size,
+      candidateSummaries: dedupedCandidates,
+      ...(selectedElement && selectedStrategy ? {
+        fingerprint: {
+          strategyId: selectedStrategy.id,
+          method: selectedStrategy.method,
+          tagName: selectedElement.tagName.toLowerCase(),
+          ...(safeAttribute(selectedElement, "role") ? { role: safeAttribute(selectedElement, "role") } : {}),
+          attributes: Object.fromEntries([
+            ["aria-label", safeAriaLabel(selectedElement)],
+            ["data-testid", safeAttribute(selectedElement, "data-testid")],
+            ["data-icon", safeAttribute(selectedElement, "data-icon")],
+            ["type", safeAttribute(selectedElement, "type")],
+            ["contenteditable", safeAttribute(selectedElement, "contenteditable")]
+          ].filter((entry): entry is [string, string] => Boolean(entry[1]))),
+          semanticFingerprint: semanticFingerprint(selectedElement, selectedStrategy)
+        }
+      } : {}),
+      change: "unknown"
+    }
+  };
+}
+
+function findInternal<T extends HTMLElement>(group: keyof typeof internalGroups, root: ParentNode = document): SelectorMatch<T> | null {
+  for (const selector of internalGroups[group]) {
     const raw = root.querySelector(selector);
     if (!raw) continue;
-    const element = raw instanceof HTMLElement && raw.matches("[data-icon]")
-      ? raw.closest("button, [role='button']") ?? raw
-      : raw;
-    if (element instanceof HTMLElement) return { element: element as T, strategy: group.strategy, selector };
+    const element = asActionElement(raw);
+    if (element instanceof HTMLElement) return { element: element as T, strategy: `${group}.${selector}`, selector };
   }
   return null;
 }
 
-export const findAppRoot = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.appRoot, root);
-export const findQrCode = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.qr, root);
-export const findMainInterface = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.mainInterface, root);
-export const findComposer = (root?: ParentNode): SelectorMatch<HTMLElement> | null => findFromGroup(groups.composer, root);
-export const findSendButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => findFromGroup(groups.sendButton, root);
-export const findAttachButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => findFromGroup(groups.attachButton, root);
-export const findImageFileInput = (root?: ParentNode): SelectorMatch<HTMLInputElement> | null => findFromGroup(groups.imageFileInput, root);
-export const findMediaPreview = (root?: ParentNode): SelectorMatch<HTMLElement> | null => findFromGroup(groups.mediaPreview, root);
-export const findMediaSendButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => findFromGroup(groups.mediaSendButton, root);
-export const findInvalidContactDialog = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.invalidContact, root);
-export const findConversationHeader = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.conversationHeader, root);
+export const findAppRoot = (root?: ParentNode): SelectorMatch | null => findInternal("appRoot", root);
+export const findQrCode = (root?: ParentNode): SelectorMatch | null => findInternal("qr", root);
+export const findMainInterface = (root?: ParentNode): SelectorMatch | null => resolveCapability("main_interface", root).match;
+export const findComposer = (root?: ParentNode): SelectorMatch<HTMLElement> | null => resolveCapability("composer", root).match;
+export const findSendButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => resolveCapability<HTMLButtonElement>("text_send_action", root).match;
+export const findAttachButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => resolveCapability<HTMLButtonElement>("attachment_action", root).match;
+export const findImageFileInput = (root?: ParentNode): SelectorMatch<HTMLInputElement> | null => resolveCapability<HTMLInputElement>("image_file_input", root).match;
+export const findMediaPreview = (root?: ParentNode): SelectorMatch<HTMLElement> | null => resolveCapability("media_preview", root).match;
+export const findMediaSendButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => resolveCapability<HTMLButtonElement>("media_send_action", root).match;
+export const findMediaPreviewCloseButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => findInternal("mediaPreviewClose", root);
+export const findInvalidContactDialog = (root?: ParentNode): SelectorMatch | null => findInternal("invalidContact", root);
+export const findConversationHeader = (root?: ParentNode): SelectorMatch | null => findInternal("conversationHeader", root);
 
 export interface OutgoingMessageSnapshot {
   identity: string;

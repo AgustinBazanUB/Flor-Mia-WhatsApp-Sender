@@ -54,4 +54,15 @@ describe("typed protocol", () => {
     }
     expect(isWebAppInboundEnvelope({ ...base, type: WEB_APP_MESSAGE_TYPES.progress })).toBe(false);
   });
+
+  it("keeps compatibility fault injection outside the Web-App protocol", () => {
+    const internal = createInternalRequest(
+      "popup",
+      INTERNAL_MESSAGE_TYPES.setCompatibilityDevelopmentFault,
+      { fault: "next_health_check_break" },
+      "compatibility-dev-1"
+    );
+    expect(isInternalEnvelope(internal)).toBe(true);
+    expect(Object.values(WEB_APP_MESSAGE_TYPES)).not.toContain(INTERNAL_MESSAGE_TYPES.setCompatibilityDevelopmentFault);
+  });
 });

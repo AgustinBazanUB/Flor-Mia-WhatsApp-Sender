@@ -3,6 +3,7 @@ import { assertTransition } from "../shared/state-machine";
 import type { ExtensionState, ExtensionStatus, OperationRecord } from "../shared/state";
 import { DEFAULT_RETRY_POLICY } from "../engine/retry-policy";
 import { DEFAULT_CAMPAIGN_POLICY, normalizeCampaignPolicy } from "../campaign/campaign-policy";
+import { createDefaultCompatibilityState } from "../compatibility/fingerprint";
 
 const STATE_KEY = "extensionState";
 const MAX_ERRORS = 20;
@@ -27,7 +28,7 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
   const date = new Date(now);
   const localDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     status: "idle",
     currentCampaign: null,
     progress: { total: 0, sent: 0, failed: 0 },
@@ -56,6 +57,7 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
       countedContactKeys: [],
       updatedAt: now
     },
+    compatibility: createDefaultCompatibilityState(now),
     operations: [],
     updatedAt: now
   };
@@ -91,7 +93,15 @@ export class StateStore {
         campaignPolicy: normalizeCampaignPolicy((stored as Partial<ExtensionState>).config?.campaignPolicy)
       },
       progress: { ...defaults.progress, ...(stored as Partial<ExtensionState>).progress },
-      dailyLimit: { ...defaults.dailyLimit, ...(stored as Partial<ExtensionState>).dailyLimit }
+      dailyLimit: { ...defaults.dailyLimit, ...(stored as Partial<ExtensionState>).dailyLimit },
+      compatibility: {
+        ...defaults.compatibility,
+        ...(stored as Partial<ExtensionState>).compatibility,
+        lastKnownGood: {
+          ...defaults.compatibility.lastKnownGood,
+          ...(stored as Partial<ExtensionState>).compatibility?.lastKnownGood
+        }
+      }
     };
   }
 

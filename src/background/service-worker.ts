@@ -24,22 +24,32 @@ import { ChromeWhatsAppContactAdapter } from "./contact-adapter";
 import { WhatsAppTransport } from "./whatsapp-transport";
 import { CampaignRuntime } from "./campaign-runtime";
 import { campaignIdFromAlarm } from "../campaign/scheduler";
+import { CompatibilityStore } from "../storage/compatibility-store";
+import { CompatibilityManager, applyRuntimeFailureToPreflight } from "../compatibility/manager";
+import { createUnavailablePreflight } from "../compatibility/preflight-result";
+import {
+  isCompatibilityDevelopmentFault,
+  type WhatsAppPreflightRequest
+} from "../compatibility/types";
 
 const stateStore = new StateStore();
 const blobStore = new CampaignBlobStore();
 const checkpointStore = new ContactCheckpointStore();
 const whatsappTransport = new WhatsAppTransport();
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+const compatibilityStore = new CompatibilityStore();
+const compatibilityManager = new CompatibilityManager(compatibilityStore, EXTENSION_VERSION);
 const campaignRuntime = new CampaignRuntime({
   stateStore,
   blobStore,
   checkpointStore,
   transport: whatsappTransport,
-  runPreflight: (timeoutMs) => runPreflight(timeoutMs, true),
+  runPreflight: (request) => runPreflight(request, true),
   onContactCheckpoint: syncCheckpointState
 });
 
 async function initialize(): Promise<void> {
+  await stateStore.patch({ compatibility: await compatibilityStore.load() });
   const campaign = await campaignRuntime.initialize();
   if (campaign) {
     logger.info("service_worker.initialized", {
@@ -84,26 +94,6 @@ async function initialize(): Promise<void> {
 chrome.runtime.onInstalled.addListener(() => void initialize());
 chrome.runtime.onStartup.addListener(() => void initialize());
 
-function unavailablePreflight(message: string): WhatsAppPreflightResult {
-  return {
-    checkedAt: new Date().toISOString(),
-    pageDetected: false,
-    documentReady: false,
-    sessionReady: false,
-    mainInterfaceReady: false,
-    qrDetected: false,
-    operational: false,
-    status: "unavailable",
-    message,
-    capabilities: {
-      openConversation: { state: "unavailable", message },
-      composer: { state: "unavailable", message },
-      sendText: { state: "unavailable", message },
-      multimedia: { state: "unavailable", message }
-    }
-  };
-}
-
 async function preparePreflightState(campaignControl = false): Promise<void> {
   const current = await stateStore.load();
   if (!campaignControl && (current.status === "running" || current.status === "pausing" || current.status === "paused")) {
@@ -114,23 +104,32 @@ async function preparePreflightState(campaignControl = false): Promise<void> {
   await stateStore.transition("preflight", { currentStep: "preflight", operational: false, statusMessage: "Comprobando WhatsApp Web…" });
 }
 
-async function runPreflight(timeoutMs = 8_000, campaignControl = false): Promise<WhatsAppPreflightResult> {
+async function runPreflight(
+  input: number | WhatsAppPreflightRequest = {},
+  campaignControl = false
+): Promise<WhatsAppPreflightResult> {
+  let request: WhatsAppPreflightRequest = typeof input === "number" ? { timeoutMs: input } : input;
+  if (request.level === "lightweight" && (!request.developmentFault || request.developmentFault === "none")) {
+    const developmentFault = await compatibilityStore.consumeHealthCheckFault();
+    if (developmentFault !== "none") request = { ...request, developmentFault };
+  }
   await preparePreflightState(campaignControl);
   const tab = await whatsappTransport.findTab();
   if (!tab?.id) {
-    const result = unavailablePreflight("WhatsApp Web no está abierto en ninguna pestaña.");
-    if (campaignControl) await stateStore.patch({ whatsapp: result, operational: false, statusMessage: result.message });
-    else await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
-    return result;
+    const evaluated = await compatibilityManager.evaluate(createUnavailablePreflight("WhatsApp Web no está abierto en ninguna pestaña.", request));
+    if (campaignControl) await stateStore.patch({ whatsapp: evaluated.preflight, compatibility: evaluated.state, operational: false, statusMessage: evaluated.preflight.message });
+    else await stateStore.transition("error", { whatsapp: evaluated.preflight, compatibility: evaluated.state, operational: false, statusMessage: evaluated.preflight.message, currentStep: null });
+    return evaluated.preflight;
   }
   try {
-    const result = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, { timeoutMs }, tab.id);
+    const raw = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, request, tab.id);
+    const { preflight: result, state: compatibility } = await compatibilityManager.evaluate(raw);
     if (campaignControl) {
-      await stateStore.patch({ whatsapp: result, operational: result.operational, statusMessage: result.message });
+      await stateStore.patch({ whatsapp: result, compatibility, operational: result.operational, statusMessage: result.message });
     } else if (result.operational) {
-      await stateStore.transition("ready", { whatsapp: result, operational: true, statusMessage: result.message, currentStep: null });
+      await stateStore.transition("ready", { whatsapp: result, compatibility, operational: true, statusMessage: result.message, currentStep: null });
     } else {
-      await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
+      await stateStore.transition("error", { whatsapp: result, compatibility, operational: false, statusMessage: result.message, currentStep: null });
     }
     await stateStore.appendOperation({
       operationId: createId("diagnostic"), kind: "diagnostic", success: result.operational,
@@ -139,9 +138,14 @@ async function runPreflight(timeoutMs = 8_000, campaignControl = false): Promise
     return result;
   } catch (error) {
     const normalized = toExtensionError(error, ERROR_CODES.interfaceLoading);
-    const result = unavailablePreflight(normalized.message);
-    if (campaignControl) await stateStore.patch({ whatsapp: result, operational: false, statusMessage: result.message });
-    else await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
+    const raw = createUnavailablePreflight(normalized.message, request, {
+      pageDetected: true,
+      contentScriptConnected: false,
+      status: "loading"
+    });
+    const { preflight: result, state: compatibility } = await compatibilityManager.evaluate(raw);
+    if (campaignControl) await stateStore.patch({ whatsapp: result, compatibility, operational: false, statusMessage: result.message });
+    else await stateStore.transition("error", { whatsapp: result, compatibility, operational: false, statusMessage: result.message, currentStep: null });
     await stateStore.appendError({ ...serializeError(normalized), at: new Date().toISOString() });
     return result;
   }
@@ -262,6 +266,30 @@ async function syncCheckpointState(checkpoint: ContactProcessCheckpoint): Promis
       createdAt: checkpoint.updatedAt
     },
     statusMessage: statusMessageForCheckpoint(checkpoint)
+  });
+  const currentStepError = checkpoint.steps.find((step) => step.id === checkpoint.currentStepId)?.error;
+  const currentStep = checkpoint.steps.find((step) => step.id === checkpoint.currentStepId);
+  const lastConfirmedStep = checkpoint.steps.find((step) => step.id === checkpoint.lastConfirmedStepId);
+  const technicalError = checkpoint.error ?? currentStepError;
+  if (!technicalError) return;
+  const compatibilityFailure = await compatibilityManager.recordRuntimeFailure(technicalError, {
+    campaignId: checkpoint.campaignId,
+    maskedContact: checkpoint.contact.maskedPhone,
+    ...(checkpoint.currentStepId ? { stepId: checkpoint.currentStepId } : {}),
+    ...(currentStep ? { attempts: currentStep.attempts } : {}),
+    lastSuccessfulCapability: lastConfirmedStep
+      ? lastConfirmedStep.kind === "image" ? "outgoing_media_evidence" : "outgoing_text_evidence"
+      : "open_conversation"
+  });
+  if (!compatibilityFailure) return;
+  const state = await stateStore.load();
+  await stateStore.patch({
+    compatibility: compatibilityFailure.state,
+    operational: false,
+    whatsapp: state.whatsapp
+      ? applyRuntimeFailureToPreflight(state.whatsapp, compatibilityFailure.failure)
+      : state.whatsapp,
+    statusMessage: "WhatsApp Web no es compatible actualmente con una o más funciones necesarias."
   });
 }
 
@@ -602,8 +630,34 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
   switch (request.type) {
     case INTERNAL_MESSAGE_TYPES.getState:
       return loadCurrentExtensionState();
-    case INTERNAL_MESSAGE_TYPES.runPreflight:
-      return runPreflight();
+    case INTERNAL_MESSAGE_TYPES.runPreflight: {
+      const payload = request.payload as InternalRequestMap["RUN_WHATSAPP_PREFLIGHT"];
+      if (payload.developmentFault && !isCompatibilityDevelopmentFault(payload.developmentFault)) {
+        throw new ExtensionError(ERROR_CODES.invalidInput, "El escenario de compatibilidad no es válido.");
+      }
+      const state = await stateStore.load();
+      const campaign = state.activeCampaign;
+      const forceImageDiagnostic = payload.developmentFault === "attachment_capability_break";
+      if (campaign && ["received", "ready", "paused", "daily_limit_reached", "images_required"].includes(campaign.status)) {
+        return campaignRuntime.runCampaignPreflight(campaign.campaignId, payload.developmentFault ?? "none");
+      }
+      return runPreflight({
+        level: "full",
+        requirements: campaign
+          ? { needsText: Boolean(campaign.text.trim()), needsImages: campaign.images.length > 0 }
+          : { needsText: false, needsImages: forceImageDiagnostic },
+        developmentFault: payload.developmentFault ?? "none"
+      });
+    }
+    case INTERNAL_MESSAGE_TYPES.setCompatibilityDevelopmentFault: {
+      const fault = (request.payload as InternalRequestMap["SET_COMPATIBILITY_DEVELOPMENT_FAULT"]).fault;
+      if (!isCompatibilityDevelopmentFault(fault)) {
+        throw new ExtensionError(ERROR_CODES.invalidInput, "El escenario de compatibilidad no es válido.");
+      }
+      const compatibility = await compatibilityStore.setDevelopmentFault(fault);
+      await stateStore.patch({ compatibility });
+      return compatibility;
+    }
     case INTERNAL_MESSAGE_TYPES.sendTestText:
       return sendTestText(request.payload as InternalRequestMap["SEND_TEST_TEXT"]);
     case INTERNAL_MESSAGE_TYPES.processTestContact:

@@ -76,3 +76,10 @@ form small, #character-count { color: #81796b; font-size: 10px; }
 .campaign-current { display: grid; gap: 3px; padding: 10px; border-radius: 10px; background: #f6f2e9; font-size: 11px; }
 .campaign-current strong { color: #40523c; }
 .campaign-controls { display: grid; grid-template-columns: repeat(4, 1fr); }
+.compatibility-drift { color: #8a5a00; font-size: 12px; }
+.technical-details { margin-top: 12px; }
+.technical-details summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+.capability-list { margin: 10px 0 0; padding-left: 18px; font-size: 11px; }
+.capability-list li { margin-bottom: 4px; }
+.compatibility-harness { display: grid; gap: 7px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6ebe8; }
+.compatibility-harness small { color: #81796b; font-size: 10px; }

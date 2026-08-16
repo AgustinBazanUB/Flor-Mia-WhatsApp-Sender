@@ -74,6 +74,7 @@ export type CampaignBlockCode =
   | "whatsapp_reloading"
   | "whatsapp_tab_closed"
   | "whatsapp_session_closed"
+  | "whatsapp_ui_changed"
   | "service_worker_restarted";
 
 export interface CampaignBlockReason {

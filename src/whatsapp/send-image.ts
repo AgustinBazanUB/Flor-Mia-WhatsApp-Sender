@@ -1,12 +1,13 @@
 import type { StepVerification } from "../engine/types";
 import { ERROR_CODES, ExtensionError } from "../shared/errors";
+import { capabilityResolutionError, capabilityUnavailableError } from "../compatibility/diagnostic-error";
 import {
   elementVisible,
-  findAttachButton,
   findImageFileInput,
   findMediaPreview,
   findMediaSendButton,
-  outgoingMediaMessages
+  outgoingMediaMessages,
+  resolveCapability
 } from "./selectors";
 import { waitForCondition } from "./wait";
 
@@ -67,18 +68,27 @@ export async function sendAndVerifyImage(
   const baselineOutgoingIds = outgoingMediaMessages().map((item) => item.identity);
   const before = new Set(baselineOutgoingIds);
 
-  const existingInput = findImageFileInput();
-  const attach = findAttachButton();
+  const inputResolution = resolveCapability<HTMLInputElement>("image_file_input");
+  const attachResolution = resolveCapability<HTMLButtonElement>("attachment_action", document, { required: true });
+  const existingInput = inputResolution.match;
+  const attach = attachResolution.match;
   if (attach) attach.element.click();
   if (!attach && !existingInput) {
-    throw new ExtensionError(ERROR_CODES.attachmentUnavailable, "No se encontró el mecanismo de adjuntos de WhatsApp.");
+    throw capabilityResolutionError(
+      attachResolution.discovery,
+      "Se agotaron las estrategias para localizar el mecanismo de adjuntos."
+    );
   }
 
   const fileInput = existingInput ?? await waitForCondition(() => findImageFileInput(), {
     timeoutMs: imageLoadTimeoutMs,
     description: "el input de imágenes de WhatsApp"
   }).catch((error: unknown) => {
-    throw new ExtensionError(ERROR_CODES.attachmentUnavailable, "WhatsApp no expuso un input de imágenes utilizable.", { cause: error });
+    throw capabilityResolutionError(
+      resolveCapability("image_file_input", document, { required: true }).discovery,
+      "Se agotaron las estrategias para localizar el input de imágenes.",
+      error
+    );
   });
 
   const bytes = base64Bytes(input.dataBase64);
@@ -96,10 +106,11 @@ export async function sendAndVerifyImage(
     timeoutMs: previewTimeoutMs,
     description: "el preview multimedia de WhatsApp"
   }).catch((error: unknown) => {
-    throw new ExtensionError(ERROR_CODES.previewUnavailable, "WhatsApp no mostró el preview de la imagen preparada.", {
-      details: { imageId: input.imageId, sendAttempted: false },
-      cause: error
-    });
+    throw capabilityResolutionError(
+      resolveCapability("media_preview", document, { required: true }).discovery,
+      "Se agotaron las estrategias para localizar el preview multimedia.",
+      error
+    );
   });
 
   const prepared = fileInput.element.files?.item(0);
@@ -112,9 +123,18 @@ export async function sendAndVerifyImage(
   const sendButton = await waitForCondition(
     () => findMediaSendButton(preview.element) ?? findMediaSendButton(),
     { timeoutMs: Math.min(previewTimeoutMs, 10_000), description: "la acción de enviar el preview multimedia" }
-  );
+  ).catch((error: unknown) => {
+    throw capabilityResolutionError(
+      resolveCapability("media_send_action", preview.element, { required: true }).discovery,
+      "Se agotaron las estrategias para localizar la acción de envío multimedia.",
+      error
+    );
+  });
   if (sendButton.element.disabled || sendButton.element.getAttribute("aria-disabled") === "true") {
-    throw new ExtensionError(ERROR_CODES.previewUnavailable, "El botón de envío multimedia está deshabilitado.");
+    throw capabilityUnavailableError(
+      resolveCapability("media_send_action", preview.element, { required: true }).discovery,
+      "La acción de envío multimedia fue localizada, pero no está disponible."
+    );
   }
 
   await lifecycle.beforeSend?.(baselineOutgoingIds);
