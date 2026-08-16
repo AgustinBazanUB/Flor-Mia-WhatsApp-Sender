@@ -408,6 +408,27 @@ describe("multi-contact CampaignEngine", () => {
     expect(runner.calls).toEqual([]);
   });
 
+  it("stops a paused campaign that retains the active contact checkpoint", async () => {
+    const state = setup(2);
+    const running = await state.engine.start("campaign-1");
+    state.campaigns.active = {
+      ...running,
+      status: "paused",
+      activeContactId: "contact-1",
+      currentRecipientIndex: 0,
+      recipients: running.recipients.map((recipient, index) => index === 0
+        ? { ...recipient, status: "paused" }
+        : recipient)
+    };
+
+    const stopped = await state.engine.requestStop("campaign-1");
+
+    expect(stopped.status).toBe("stopped");
+    expect(stopped.stopRequested).toBe(true);
+    expect(stopped.stoppedAt).toBe(NOW.toISOString());
+    expect(state.runner.calls).toEqual([]);
+  });
+
   it("confirms an active stop only after the contact reaches a safe boundary", async () => {
     const { engine, runner } = setup(2);
     let requested = false;

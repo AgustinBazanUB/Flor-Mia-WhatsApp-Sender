@@ -295,14 +295,15 @@ export class CampaignEngine {
   async requestStop(campaignId: string): Promise<CampaignState> {
     const campaign = await this.requireCampaign(campaignId);
     if (TERMINAL_STATUSES.has(campaign.status)) return campaign;
-    const active = campaign.activeContactId !== null;
+    const contactStepInFlight = campaign.activeContactId !== null
+      && ["running", "pause_requested"].includes(campaign.status);
     return this.save(campaign, {
-      status: active ? "pause_requested" : "stopped",
+      status: contactStepInFlight ? "pause_requested" : "stopped",
       stopRequested: true,
       pauseRequested: false,
       wait: null,
       blockReason: null,
-      ...(active ? {} : { stoppedAt: this.now().toISOString() })
+      ...(contactStepInFlight ? {} : { stoppedAt: this.now().toISOString() })
     });
   }
 
