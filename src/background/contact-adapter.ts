@@ -42,7 +42,7 @@ function executionError(error: unknown): StepExecutionResult {
 
 export class ChromeWhatsAppContactAdapter implements ContactAdapter {
   constructor(
-    private readonly blobs: CampaignBlobStore,
+    private readonly blobs: Pick<CampaignBlobStore, "getImage">,
     private readonly transport: WhatsAppTransport = new WhatsAppTransport()
   ) {}
 

@@ -12,6 +12,7 @@ import type {
   WhatsAppPreflightRequest
 } from "../compatibility/types";
 import type { DiagnosticReportBundle } from "../diagnostics/types";
+import type { CompatibilityOverallStatus } from "../compatibility/types";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -93,8 +94,8 @@ export interface InternalResponseMap {
   WA_SEND_IMAGE: ImageSendResult;
   WA_RECONCILE_STEP: StepReconciliationResult;
   WA_OPERATION_STAGE: { recorded: boolean };
-  WEB_APP_PING: { operational: boolean; message: string; extensionVersion: string; configuredLimit: number; sentToday: number; availableToday: number; errorCode?: string };
-  WEB_APP_PREPARE_CAMPAIGN: { campaignId: string; acceptedAt: string };
+  WEB_APP_PING: FlorMiaExtensionStatus;
+  WEB_APP_PREPARE_CAMPAIGN: CampaignPublicStatus;
   WEB_APP_CANCEL_CAMPAIGN: { campaignId: string; cancelledAt: string };
 }
 
@@ -164,8 +165,10 @@ export const WEB_APP_MESSAGE_TYPES = {
   started: "FLORMIA_CAMPAIGN_STARTED",
   progress: "FLORMIA_CAMPAIGN_PROGRESS",
   paused: "FLORMIA_CAMPAIGN_PAUSED",
+  resumed: "FLORMIA_CAMPAIGN_RESUMED",
   completed: "FLORMIA_CAMPAIGN_COMPLETED",
   error: "FLORMIA_CAMPAIGN_ERROR",
+  stopped: "FLORMIA_CAMPAIGN_STOPPED",
   cancelled: "FLORMIA_CAMPAIGN_CANCELLED",
   cancelRequest: "FLORMIA_CAMPAIGN_CANCEL_REQUEST",
   startRequest: "FLORMIA_CAMPAIGN_START",
@@ -188,6 +191,21 @@ export interface WebAppEnvelope {
   payload: Record<string, unknown>;
 }
 
+export interface FlorMiaExtensionStatus {
+  operational: boolean;
+  message: string;
+  extensionVersion: string;
+  manifestVersion: number;
+  protocolVersion: number;
+  configuredLimit: number;
+  sentToday: number;
+  availableToday: number;
+  overallStatus: CompatibilityOverallStatus;
+  campaign: CampaignPublicStatus | null;
+  updatedAt: string;
+  errorCode?: string;
+}
+
 const webAppInboundTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.ping,
   WEB_APP_MESSAGE_TYPES.prepare,
@@ -199,12 +217,70 @@ const webAppInboundTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.statusRequest
 ]);
 
+const webAppControlTypes = new Set<string>([
+  WEB_APP_MESSAGE_TYPES.cancelRequest,
+  WEB_APP_MESSAGE_TYPES.startRequest,
+  WEB_APP_MESSAGE_TYPES.pauseRequest,
+  WEB_APP_MESSAGE_TYPES.resumeRequest,
+  WEB_APP_MESSAGE_TYPES.stopRequest
+]);
+
+const FORBIDDEN_PRODUCTION_KEYS = new Set([
+  "developmentFault",
+  "faultInjection",
+  "simulatedOffline",
+  "selectorBreak",
+  "compatibilityFault"
+]);
+
+function containsForbiddenProductionControl(value: unknown, depth = 0): boolean {
+  if (depth > 8) return true;
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    if (value.length > 5_000) return true;
+    return value.some((item) => containsForbiddenProductionControl(item, depth + 1));
+  }
+  return Object.entries(value as Record<string, unknown>).some(([key, child]) =>
+    FORBIDDEN_PRODUCTION_KEYS.has(key) || containsForbiddenProductionControl(child, depth + 1));
+}
+
+function campaignIdFromEnvelope(value: Record<string, unknown>): string {
+  const payload = value.payload as Record<string, unknown>;
+  const raw = value.campaignId ?? payload.campaignId;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function isSerializedCampaignShape(payload: Record<string, unknown>): boolean {
+  return typeof payload.campaignId === "string"
+    && typeof payload.campaignName === "string"
+    && typeof payload.createdBy === "string"
+    && typeof payload.message === "string"
+    && Array.isArray(payload.recipients)
+    && payload.recipients.length > 0
+    && payload.recipients.every((recipient) => isRecord(recipient)
+      && typeof recipient.recipientId === "string"
+      && typeof recipient.phone === "string"
+      && (recipient.source === "flor_mia" || recipient.source === "excel"))
+    && Array.isArray(payload.images)
+    && payload.images.every((image) => isRecord(image) && typeof image.dataBase64 === "string")
+    && Array.isArray(payload.imageOrder)
+    && typeof payload.imageCount === "number"
+    && typeof payload.totalRecipients === "number";
+}
+
 export function isWebAppInboundEnvelope(value: unknown): value is WebAppEnvelope {
   if (!isRecord(value)) return false;
   if (value.channel !== WEB_APP_CHANNEL || value.protocolVersion !== PROTOCOL_VERSION) return false;
   if (typeof value.type !== "string" || !webAppInboundTypes.has(value.type)) return false;
-  if (typeof value.requestId !== "string" || !value.requestId) return false;
+  if (typeof value.requestId !== "string" || !value.requestId || value.requestId.length > 200) return false;
   if (!isRecord(value.payload)) return false;
-  if (value.campaignId !== undefined && typeof value.campaignId !== "string") return false;
+  if (value.campaignId !== undefined && (typeof value.campaignId !== "string" || !value.campaignId.trim() || value.campaignId.length > 200)) return false;
+  if (value.sequence !== undefined && (!Number.isInteger(value.sequence) || Number(value.sequence) < 0)) return false;
+  if (containsForbiddenProductionControl(value.payload)) return false;
+  if (value.campaignId !== undefined
+    && typeof value.payload.campaignId === "string"
+    && value.campaignId !== value.payload.campaignId) return false;
+  if (value.type === WEB_APP_MESSAGE_TYPES.prepare && !isSerializedCampaignShape(value.payload)) return false;
+  if (webAppControlTypes.has(value.type) && !campaignIdFromEnvelope(value)) return false;
   return true;
 }

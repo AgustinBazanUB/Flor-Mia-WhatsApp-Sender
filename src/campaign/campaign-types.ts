@@ -1,4 +1,6 @@
 import type { SerializedExtensionError } from "../shared/errors";
+import type { CompatibilityOverallStatus } from "../compatibility/types";
+import type { DiagnosticErrorCategory } from "../diagnostics/types";
 
 export const CAMPAIGN_STATUSES = [
   "received",
@@ -91,6 +93,15 @@ export interface CampaignProgress {
   percentage: number;
 }
 
+export interface CampaignPublicDailyLimit {
+  localDate: string;
+  completedToday: number;
+  limit: number;
+  remaining: number;
+  countedContacts: number;
+  updatedAt: string;
+}
+
 export interface CampaignState {
   schemaVersion: 1;
   campaignId: string;
@@ -122,10 +133,39 @@ export interface CampaignState {
 }
 
 export interface CampaignPublicStatus {
+  snapshotSchemaVersion: 1;
   campaignId: string;
   campaignName: string;
+  receivedAt: string;
+  acceptedAt: string;
   status: CampaignStatus;
   progress: CampaignProgress;
+  progressPercentage: number;
+  sent: number;
+  total: number;
+  remaining: number;
+  currentRecipientIndex: number | null;
+  currentRecipientId: string | null;
+  currentRecipientName?: string;
+  maskedPhone: string | null;
+  currentStep: string | null;
+  batch: {
+    number: number;
+    completedInBatch: number;
+    size: number;
+  };
+  sentToday: number;
+  availableToday: number;
+  dailyLimitValue: number;
+  errorSummary: {
+    code: string | null;
+    category: DiagnosticErrorCategory;
+    message: string;
+    recoverable: boolean;
+  } | null;
+  redGreen: CompatibilityOverallStatus;
+  updatedAt: string;
+  extensionVersion: string;
   currentContact: {
     position: number;
     total: number;
@@ -135,11 +175,46 @@ export interface CampaignPublicStatus {
   currentStepId: string | null;
   lastConfirmedStepId: string | null;
   wait: CampaignWaitState | null;
-  dailyLimit: DailyLimitState;
+  dailyLimit: CampaignPublicDailyLimit;
   blockReason: CampaignBlockReason | null;
   pauseRequested: boolean;
   stopRequested: boolean;
   sequence: number;
+  finalSummary: FinalCampaignSummary | null;
+}
+
+export interface FinalCampaignSummary {
+  campaignId: string;
+  completedAt: string;
+  total: number;
+  sent: number;
+  failed: number;
+  durationMs: number;
+  batches: number;
+  sentToday: number;
+  extensionVersion: string;
+}
+
+export interface CampaignHistoryRecord {
+  historySchemaVersion: 1;
+  campaignId: string;
+  campaignName: string;
+  startedAt: string | null;
+  completedAt: string;
+  total: number;
+  completed: number;
+  status: Extract<CampaignStatus, "completed" | "stopped">;
+  errorCategory: DiagnosticErrorCategory | null;
+  extensionVersion: string;
+  dailyCounterImpact: number;
+  durationMs: number;
+  batches: number;
+  recordedAt: string;
+}
+
+export interface CampaignHistoryRepository {
+  upsert(record: CampaignHistoryRecord): Promise<CampaignHistoryRecord>;
+  list(): Promise<CampaignHistoryRecord[]>;
 }
 
 export interface CampaignRepository {

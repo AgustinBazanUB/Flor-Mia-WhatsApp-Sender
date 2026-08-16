@@ -12,9 +12,10 @@ const MAX_DRIFT_HISTORY = 30;
 
 export function createDefaultCompatibilityState(now = new Date().toISOString()): CompatibilityState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     overallStatus: "RED",
     checkedAt: null,
+    lastKnownGoodExtensionVersion: null,
     lastKnownGood: {},
     lastPreflight: null,
     driftHistory: [],
@@ -131,6 +132,9 @@ export function evaluateFunctionalCompatibility(
       ...previousState,
       overallStatus: evaluatedPreflight.overallStatus,
       checkedAt: evaluatedPreflight.checkedAt,
+      lastKnownGoodExtensionVersion: evaluatedPreflight.operational && evaluatedPreflight.overallStatus === "GREEN"
+        ? extensionVersion
+        : previousState.lastKnownGoodExtensionVersion,
       lastKnownGood,
       lastPreflight: snapshot,
       driftHistory: driftHistory.slice(-MAX_DRIFT_HISTORY),

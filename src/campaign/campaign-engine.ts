@@ -226,6 +226,7 @@ export class CampaignEngine {
       stopRequested: true,
       pauseRequested: false,
       wait: null,
+      blockReason: null,
       ...(active ? {} : { stoppedAt: this.now().toISOString() })
     });
   }
@@ -394,6 +395,20 @@ export class CampaignEngine {
       const allCompleted = completedRecipients === recipients.length;
       const completedInBatch = campaign.contactsCompletedInBatch + 1;
       await this.dependencies.contactCheckpoints.clearActive();
+      if (allCompleted) {
+        return this.save(campaign, {
+          status: "completed",
+          recipients,
+          dailyLimit: daily,
+          lastCompletedContactId: recipient.recipientId,
+          activeContactId: null,
+          currentRecipientIndex: null,
+          contactsCompletedInBatch: completedInBatch,
+          wait: null,
+          blockReason: null,
+          completedAt
+        });
+      }
       campaign = await this.save(campaign, {
         recipients,
         dailyLimit: daily,
@@ -402,9 +417,6 @@ export class CampaignEngine {
         currentRecipientIndex: recipient.position - 1,
         contactsCompletedInBatch: completedInBatch
       });
-      if (allCompleted) {
-        return this.save(campaign, { status: "completed", wait: null, completedAt, currentRecipientIndex: null });
-      }
       if (campaign.stopRequested) return this.save(campaign, { status: "stopped", wait: null, stoppedAt: completedAt });
       if (campaign.pauseRequested) return this.save(campaign, { status: "paused", wait: null });
       if (daily.remaining <= 0) {
@@ -435,7 +447,8 @@ export class CampaignEngine {
         recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
           ? { ...item, status: "stopped" }
           : item),
-        stoppedAt: this.now().toISOString()
+        stoppedAt: this.now().toISOString(),
+        blockReason: null
       });
     }
     if (campaign.pauseRequested || checkpoint.pauseReason === "manual_pause") {

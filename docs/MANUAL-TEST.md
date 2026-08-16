@@ -2,6 +2,8 @@
 
 Estas pruebas pueden enviar mensajes reales. Usar únicamente números propios o contactos que hayan autorizado expresamente la prueba. Los tests automatizados no reemplazan esta validación.
 
+La matriz de aceptación formal de la versión 0.6.0 está en [`ACCEPTANCE-TESTS.md`](ACCEPTANCE-TESTS.md). Registrar allí evidencia PASS/FAIL; ninguno de esos casos se considera ejecutado contra WhatsApp real por el solo hecho de pasar los tests automatizados.
+
 ## Preparación
 
 1. Ejecutar `npm run verify`.
@@ -11,7 +13,7 @@ Estas pruebas pueden enviar mensajes reales. Usar únicamente números propios o
 5. Desde Marketing de Flor Mía, preparar una campaña de texto con tres números autorizados, en un orden fácil de reconocer.
 6. Verificar que el popup muestre nombre, `0 / 3`, primer contacto y estado recibido. No debe iniciarse automáticamente.
 
-## Preflight y semáforo 0.4.0–0.5.0
+## Preflight y semáforo 0.4.0–0.6.0
 
 ### H. GREEN base y preflight contextual
 
@@ -54,14 +56,14 @@ Estas pruebas pueden enviar mensajes reales. Usar únicamente números propios o
 3. Al terminar la carga, ejecutar diagnóstico/reanudar y confirmar que un preflight funcional vuelve a **🟢 VERDE**.
 4. Cerrar sesión y comprobar que se informa sesión requerida, diferenciada de `WHATSAPP_UI_CHANGED`.
 
-### M. Reporte para Codex 0.5.0
+### M. Reporte para Codex 0.6.0
 
 1. En **Simulación de compatibilidad (desarrollo)** seleccionar **Adjuntos sin estrategias → ROJO** y aplicar, o provocar uno de los fallos autorizados del arnés técnico.
 2. Confirmar que aparece la ficha de incidente con categoría, posición, ID interno, teléfono enmascarado, step, intentos, último confirmado, semáforo y capability.
 3. Pulsar **Generar reporte para Codex**. Debe abrirse `diagnostics/report.html` dentro de la extensión, nunca una página externa.
 4. En **Texto**, comprobar el resumen en español y la frase: “Preservar atomicidad, verificación y checkpoints. No reemplazar por clicks ciegos.”
 5. Pulsar **Copiar texto**, pegarlo en un editor local y verificar que el contenido coincide.
-6. Cambiar a **JSON**, pulsar **Copiar JSON** y confirmar `reportSchemaVersion: 1`, versión `0.5.0`, incidente, checkpoint, compatibilidad, Last Known Good, candidates y trace.
+6. Cambiar a **JSON**, pulsar **Copiar JSON** y confirmar `reportSchemaVersion: 1`, versión `0.6.0`, incidente, checkpoint, compatibilidad, Last Known Good, candidates y trace.
 7. Buscar manualmente el teléfono completo, el texto exacto de campaña, nombres de chats, `phone=`, `token`, `cookie`, `base64` y fragmentos de imagen. Ninguno debe aparecer.
 8. Confirmar que el nombre de campaña no aparece por defecto. Activar **Incluir el nombre de la campaña** y comprobar que solo ese campo opcional se agrega.
 9. Entregar el texto y, si hace falta, el JSON a Codex manualmente. La extensión no debe enviar nada por sí sola.

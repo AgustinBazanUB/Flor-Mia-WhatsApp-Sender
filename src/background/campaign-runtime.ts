@@ -1,5 +1,6 @@
 import { CampaignEngine } from "../campaign/campaign-engine";
 import { CampaignEventPublisher } from "../campaign/events";
+import { CampaignHistoryStore } from "../campaign/history-store";
 import { DailyLimitStore } from "../campaign/daily-limit";
 import { CampaignStore, createCampaignState } from "../campaign/campaign-store";
 import { progressForCampaign } from "../campaign/progress";
@@ -7,6 +8,8 @@ import { CampaignScheduler, ChromeCampaignWakeupScheduler } from "../campaign/sc
 import { toCampaignPublicStatus } from "../campaign/public-status";
 import type {
   CampaignBlockReason,
+  CampaignHistoryRecord,
+  CampaignHistoryRepository,
   CampaignPublicStatus,
   CampaignRepository,
   CampaignState,
@@ -15,13 +18,13 @@ import type {
 import { processContact } from "../engine/contact-engine";
 import { markInterruptedCheckpointAmbiguous } from "../engine/steps";
 import type { ContactProcessCheckpoint, ImageContactStep } from "../engine/types";
+import type { ContactCheckpointRepository } from "../engine/types";
 import type { ValidatedCampaign } from "../shared/campaign";
 import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
 import { arrayBufferToBase64, base64ToArrayBuffer, type SerializedCampaignImage } from "../shared/serialization";
 import type { WhatsAppPreflightResult } from "../shared/state";
 import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
 import type { CampaignBlobStore } from "../storage/blob-store";
-import type { ContactCheckpointStore } from "../storage/checkpoint-store";
 import type { StateStore } from "../storage/state-store";
 import { ChromeWhatsAppContactAdapter } from "./contact-adapter";
 import type { WhatsAppTransport } from "./whatsapp-transport";
@@ -35,17 +38,29 @@ import type {
 
 const TERMINAL_CAMPAIGNS = new Set<CampaignState["status"]>(["completed", "stopped"]);
 
+type CampaignBlobRepository = Pick<CampaignBlobStore, "putCampaignImages" | "getImage" | "deleteCampaign">;
+
 export interface CampaignRuntimeDependencies {
   stateStore: StateStore;
-  blobStore: CampaignBlobStore;
-  checkpointStore: ContactCheckpointStore;
+  blobStore: CampaignBlobRepository;
+  checkpointStore: ContactCheckpointRepository;
   transport: WhatsAppTransport;
   runPreflight: (request: WhatsAppPreflightRequest) => Promise<WhatsAppPreflightResult>;
   onContactCheckpoint: (checkpoint: ContactProcessCheckpoint) => Promise<void>;
   campaigns?: CampaignRepository;
   dailyLimit?: DailyLimitRepository;
   wakeups?: CampaignWakeupScheduler;
+  events?: CampaignEventPublisher;
+  history?: CampaignHistoryRepository;
+  extensionVersion?: string;
+  includeRecipientNameInWebApp?: boolean;
   now?: () => Date;
+}
+
+function durationMs(start: string, end: string): number {
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  return Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : 0;
 }
 
 function statusMessage(campaign: CampaignState): string {
@@ -78,11 +93,16 @@ export class CampaignRuntime {
   readonly dailyLimit: DailyLimitRepository;
   readonly engine: CampaignEngine;
   readonly scheduler: CampaignScheduler;
-  private readonly events = new CampaignEventPublisher();
+  private readonly events: CampaignEventPublisher;
+  private readonly history: CampaignHistoryRepository;
+  private readonly extensionVersion: string;
   private readonly now: () => Date;
 
   constructor(private readonly dependencies: CampaignRuntimeDependencies) {
     this.now = dependencies.now ?? (() => new Date());
+    this.events = dependencies.events ?? new CampaignEventPublisher();
+    this.history = dependencies.history ?? new CampaignHistoryStore();
+    this.extensionVersion = dependencies.extensionVersion ?? "development";
     this.campaignStore = dependencies.campaigns ?? new CampaignStore();
     this.dailyLimit = dependencies.dailyLimit ?? new DailyLimitStore();
     this.engine = new CampaignEngine({
@@ -111,14 +131,56 @@ export class CampaignRuntime {
       now: () => this.now().getTime(),
       onSettled: async (campaign) => {
         await this.syncCampaign(campaign);
-        if (TERMINAL_CAMPAIGNS.has(campaign.status)) await dependencies.blobStore.deleteCampaign(campaign.campaignId);
       }
     });
   }
 
+  private async finalizeTerminalCampaign(
+    campaign: CampaignState,
+    checkpoint: ContactProcessCheckpoint | null
+  ): Promise<void> {
+    if (campaign.status !== "completed" && campaign.status !== "stopped") return;
+    if (campaign.status === "completed") {
+      const allRecipientsCompleted = campaign.recipients.length > 0
+        && campaign.recipients.every((recipient) => recipient.status === "completed")
+        && campaign.completedRecipients === campaign.recipients.length;
+      if (!allRecipientsCompleted || campaign.activeContactId !== null || !campaign.completedAt) {
+        throw new ExtensionError(ERROR_CODES.internal, "La campaña no puede finalizar porque conserva destinatarios pendientes o activos.", { recoverable: false });
+      }
+      if (checkpoint?.campaignId === campaign.campaignId && checkpoint.status !== "completed") {
+        throw new ExtensionError(ERROR_CODES.internal, "La campaña no puede finalizar con un checkpoint de contacto incompleto.", { recoverable: false });
+      }
+      if (checkpoint?.campaignId === campaign.campaignId) await this.dependencies.checkpointStore.clearActive();
+    }
+
+    const completedAt = campaign.completedAt ?? campaign.stoppedAt;
+    if (!completedAt) {
+      throw new ExtensionError(ERROR_CODES.internal, "La campaña terminal no tiene timestamp de finalización.", { recoverable: false });
+    }
+    const dailyCounterImpact = campaign.dailyLimit.countedContactKeys
+      .filter((key) => key.startsWith(`${campaign.campaignId}:`)).length;
+    const record: CampaignHistoryRecord = {
+      historySchemaVersion: 1,
+      campaignId: campaign.campaignId,
+      campaignName: campaign.campaignName,
+      startedAt: campaign.startedAt ?? null,
+      completedAt,
+      total: campaign.recipients.length,
+      completed: campaign.completedRecipients,
+      status: campaign.status,
+      errorCategory: campaign.status === "stopped" ? "USER_STOP" : null,
+      extensionVersion: this.extensionVersion,
+      dailyCounterImpact,
+      durationMs: durationMs(campaign.startedAt ?? campaign.createdAt, completedAt),
+      batches: campaign.batchNumber,
+      recordedAt: this.now().toISOString()
+    };
+    await this.history.upsert(record);
+    await this.dependencies.blobStore.deleteCampaign(campaign.campaignId);
+  }
+
   async syncCampaign(campaign: CampaignState): Promise<CampaignPublicStatus> {
     const checkpoint = await this.dependencies.checkpointStore.loadActive();
-    const publicStatus = toCampaignPublicStatus(campaign, checkpoint);
     const currentRecipient = campaign.activeContactId
       ? campaign.recipients.find((recipient) => recipient.recipientId === campaign.activeContactId) ?? null
       : campaign.currentRecipientIndex === null
@@ -126,7 +188,16 @@ export class CampaignRuntime {
         : campaign.recipients[campaign.currentRecipientIndex] ?? null;
     const progress = progressForCampaign(campaign);
     const state = await this.dependencies.stateStore.load();
+    await this.finalizeTerminalCampaign(campaign, checkpoint);
+    const publicStatus = toCampaignPublicStatus(campaign, checkpoint, {
+      extensionVersion: this.extensionVersion,
+      redGreen: state.compatibility.overallStatus,
+      includeRecipientName: this.dependencies.includeRecipientNameInWebApp ?? false
+    });
     const unavailable = ["whatsapp_reloading", "whatsapp_tab_closed", "whatsapp_session_closed"].includes(campaign.blockReason?.code ?? "");
+    const completedOperational = campaign.status === "completed"
+      ? Boolean(state.whatsapp?.operational && state.compatibility.overallStatus === "GREEN")
+      : state.operational;
     await this.dependencies.stateStore.save({
       ...state,
       status: extensionStatus(campaign),
@@ -157,7 +228,7 @@ export class CampaignRuntime {
         ? checkpoint.currentStepId
         : campaign.wait?.kind ?? null,
       activeContactProcess: checkpoint?.campaignId === campaign.campaignId ? checkpoint : null,
-      operational: unavailable ? false : state.operational,
+      operational: unavailable ? false : completedOperational,
       statusMessage: statusMessage(campaign)
     });
     await this.events.publish(publicStatus);
@@ -266,7 +337,6 @@ export class CampaignRuntime {
     const campaign = await this.engine.requestStop(campaignId);
     if (campaign.status === "stopped") {
       await this.scheduler.cancel(campaignId);
-      await this.dependencies.blobStore.deleteCampaign(campaignId);
     } else {
       await this.scheduler.schedule(campaign, true);
     }
@@ -294,7 +364,12 @@ export class CampaignRuntime {
       await this.syncCampaign(campaign);
     }
     const checkpoint = await this.dependencies.checkpointStore.loadActive();
-    return toCampaignPublicStatus(campaign, checkpoint);
+    const state = await this.dependencies.stateStore.load();
+    return toCampaignPublicStatus(campaign, checkpoint, {
+      extensionVersion: this.extensionVersion,
+      redGreen: state.compatibility.overallStatus,
+      includeRecipientName: this.dependencies.includeRecipientNameInWebApp ?? false
+    });
   }
 
   async handleAlarm(campaignId: string): Promise<CampaignState | null> {

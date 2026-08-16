@@ -11,6 +11,7 @@ import type { ContactAdapter, ContactProcessCheckpoint } from "../engine/types";
 import {
   INTERNAL_MESSAGE_TYPES,
   isInternalEnvelope,
+  PROTOCOL_VERSION,
   type InternalEnvelope,
   type InternalRequestMap,
   type InternalResponseMap
@@ -53,11 +54,13 @@ const campaignRuntime = new CampaignRuntime({
   checkpointStore,
   transport: whatsappTransport,
   runPreflight: (request) => runPreflight(request, true),
-  onContactCheckpoint: syncCheckpointState
+  onContactCheckpoint: syncCheckpointState,
+  extensionVersion: EXTENSION_VERSION,
+  includeRecipientNameInWebApp: false
 });
 
 async function initialize(): Promise<void> {
-  await stateStore.patch({ compatibility: await compatibilityStore.load() });
+  await stateStore.patch({ extensionVersion: EXTENSION_VERSION, compatibility: await compatibilityStore.load() });
   const campaign = await campaignRuntime.initialize();
   if (campaign) {
     const checkpoint = await checkpointStore.loadActive();
@@ -650,10 +653,12 @@ async function acceptCampaign(payload: SerializedCampaignPayload): Promise<Inter
   const campaign = validateCampaignInput(deserializeCampaign(payload));
   const acceptedAt = new Date().toISOString();
   await campaignRuntime.prepare(campaign);
+  const status = await campaignRuntime.getStatus(campaign.campaignId);
+  if (!status) throw new ExtensionError(ERROR_CODES.internal, "La campaña fue aceptada pero no pudo rehidratarse.");
   await stateStore.appendOperation({
     operationId: createId("campaign"), kind: "campaign-received", success: true, startedAt: acceptedAt, completedAt: acceptedAt
   });
-  return { campaignId: campaign.campaignId, acceptedAt };
+  return status;
 }
 
 async function cancelCampaign(campaignId: string): Promise<InternalResponseMap["WEB_APP_CANCEL_CAMPAIGN"]> {
@@ -904,16 +909,20 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
     case INTERNAL_MESSAGE_TYPES.whatsappOperationStage:
       return recordOperationStage(request.payload as InternalRequestMap["WA_OPERATION_STAGE"]);
     case INTERNAL_MESSAGE_TYPES.webAppPing: {
-      const before = await loadCurrentExtensionState();
-      if (!["running", "pausing", "paused"].includes(before.status)) await runPreflight(750, Boolean(before.activeCampaign));
       const state = await loadCurrentExtensionState();
+      const campaign = await campaignRuntime.getStatus(state.activeCampaign?.campaignId);
       return {
         operational: state.operational,
         message: state.statusMessage,
         extensionVersion: EXTENSION_VERSION,
+        manifestVersion: chrome.runtime.getManifest().manifest_version,
+        protocolVersion: PROTOCOL_VERSION,
         configuredLimit: state.dailyLimit.limit,
         sentToday: state.dailyLimit.completedToday,
         availableToday: state.dailyLimit.remaining,
+        overallStatus: state.compatibility.overallStatus,
+        campaign,
+        updatedAt: state.updatedAt,
         ...(!state.operational ? { errorCode: state.whatsapp?.status === "login_required" ? "session_not_ready" : "extension_not_ready" } : {})
       };
     }

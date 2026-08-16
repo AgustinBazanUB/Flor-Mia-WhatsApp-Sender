@@ -1,10 +1,21 @@
 # Flor Mía WhatsApp Sender
 
-Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.5.0` agrega incidentes estructurados, trazabilidad local acotada y reportes saneados para reparación con Codex sobre el motor persistente de campañas multi-contacto, conservando el `ContactEngine` atómico.
+Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.6.0` completa la sincronización PUSH/PULL con Marketing, secuencias monotónicas, finalización/cleanup verificables, historial mínimo, migraciones forward y CI, conservando el `ContactEngine` atómico.
 
 La extensión no inicia una campaña por recibirla: primero la valida y la deja en estado `received`. El usuario debe ejecutar **Iniciar**, con WhatsApp Web abierto, sesión activa y preflight operativo.
 
-## Alcance de la versión 0.5.0
+## Alcance de la versión 0.6.0
+
+- snapshot público completo y tipado para reconexión de Flor Mía;
+- eventos accepted/started/progress/paused/resumed/error/stopped/completed con `sequence` monotónica;
+- un único último evento persistido, sin cola creciente y con descarte de eventos stale;
+- ejecución independiente de Web-App y popup; PULL rehidrata el estado después de reabrir Marketing;
+- finalización estricta: todos los destinatarios completed y ningún checkpoint incompleto;
+- historial acotado de 50 campañas sin destinatarios ni contenido;
+- cleanup de imágenes después de completed/stopped; retención en paused/error/images_required;
+- payloads y orígenes validados en runtime; fault injection rechazada desde producción;
+- schemas migrables y `lastKnownGoodExtensionVersion` separado de la versión instalada;
+- matriz A–L, documentación del protocolo/privacidad/release y GitHub Actions;
 
 - ficha `DiagnosticIncident` en el popup para campañas pausadas, bloqueadas, detenidas o en error;
 - taxonomía central que mapea los `ERROR_CODES` existentes sin sustituirlos;
@@ -106,7 +117,11 @@ npm run build
 npm run validate:build
 ```
 
-Los tests automatizados usan adaptadores y DOM controlados; no envían mensajes reales. Consultar [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) y [`docs/MANUAL-TEST.md`](docs/MANUAL-TEST.md).
+Los tests automatizados usan adaptadores y DOM controlados; no envían mensajes reales. Consultar [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/WEB-APP-PROTOCOL.md`](docs/WEB-APP-PROTOCOL.md), [`docs/ACCEPTANCE-TESTS.md`](docs/ACCEPTANCE-TESTS.md), [`docs/PRIVACY-SECURITY.md`](docs/PRIVACY-SECURITY.md), [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) y [`docs/MANUAL-TEST.md`](docs/MANUAL-TEST.md).
+
+## Versionado
+
+El proyecto usa SemVer. PATCH corrige sin cambiar el contrato; MINOR agrega comportamiento/campos compatibles; MAJOR se reserva para cambios incompatibles. `extensionVersion` identifica el build instalado, `lastKnownGoodExtensionVersion` el último preflight funcional GREEN y `protocolVersion` cambia únicamente si el envelope Web-App deja de ser compatible.
 
 ## Limitaciones actuales
 

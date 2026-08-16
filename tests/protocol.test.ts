@@ -8,8 +8,15 @@ import {
   WEB_APP_CHANNEL,
   WEB_APP_MESSAGE_TYPES
 } from "../src/shared/protocol";
+import { isAllowedWebAppOrigin } from "../src/config/origins";
 
 describe("typed protocol", () => {
+  it("accepts only the explicit Flor Mía and local development origins", () => {
+    expect(isAllowedWebAppOrigin("https://app-integral-fm.netlify.app")).toBe(true);
+    expect(isAllowedWebAppOrigin("http://localhost:5173")).toBe(true);
+    expect(isAllowedWebAppOrigin("https://app-integral-fm.netlify.app.evil.example")).toBe(false);
+    expect(isAllowedWebAppOrigin("https://example.com")).toBe(false);
+  });
   it("creates and validates internal envelopes", () => {
     const message = createInternalRequest("popup", INTERNAL_MESSAGE_TYPES.sendTestText, { phone: "+5491112345678", message: "Hola" }, "req-1");
     expect(isInternalEnvelope(message)).toBe(true);
@@ -53,6 +60,45 @@ describe("typed protocol", () => {
       expect(isWebAppInboundEnvelope({ ...base, type })).toBe(true);
     }
     expect(isWebAppInboundEnvelope({ ...base, type: WEB_APP_MESSAGE_TYPES.progress })).toBe(false);
+  });
+
+  it("validates a complete serialized campaign payload at the production boundary", () => {
+    const prepare = {
+      channel: WEB_APP_CHANNEL,
+      protocolVersion: PROTOCOL_VERSION,
+      type: WEB_APP_MESSAGE_TYPES.prepare,
+      requestId: "prepare-1",
+      campaignId: "campaign-1",
+      payload: {
+        campaignId: "campaign-1",
+        campaignName: "Campaña",
+        createdBy: "flor_mia",
+        recipients: [{ recipientId: "recipient-1", phone: "5491112345678", name: "Cliente", source: "flor_mia" }],
+        message: "Hola",
+        images: [],
+        imageOrder: [],
+        imageCount: 0,
+        totalRecipients: 1
+      }
+    };
+    expect(isWebAppInboundEnvelope(prepare)).toBe(true);
+    expect(isWebAppInboundEnvelope({ ...prepare, payload: { ...prepare.payload, totalRecipients: "1" } })).toBe(false);
+    expect(isWebAppInboundEnvelope({ ...prepare, payload: { campaignId: "campaign-1" } })).toBe(false);
+  });
+
+  it("rejects development fault controls recursively from the production Web-App", () => {
+    const base = {
+      channel: WEB_APP_CHANNEL,
+      protocolVersion: PROTOCOL_VERSION,
+      type: WEB_APP_MESSAGE_TYPES.startRequest,
+      requestId: "start-1",
+      campaignId: "campaign-1"
+    };
+    expect(isWebAppInboundEnvelope({ ...base, payload: { developmentFault: "selector_break" } })).toBe(false);
+    expect(isWebAppInboundEnvelope({ ...base, payload: { nested: { faultInjection: { step: "text" } } } })).toBe(false);
+    const tooDeep = Array.from({ length: 10 }).reduce<Record<string, unknown>>((child, _, index) => ({ [`level${index}`]: child }), {});
+    expect(isWebAppInboundEnvelope({ ...base, payload: tooDeep })).toBe(false);
+    expect(isWebAppInboundEnvelope({ ...base, payload: {} })).toBe(true);
   });
 
   it("keeps compatibility fault injection outside the Web-App protocol", () => {

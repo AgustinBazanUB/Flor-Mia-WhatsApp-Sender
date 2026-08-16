@@ -99,7 +99,8 @@ export interface ExtensionConfig {
 }
 
 export interface ExtensionState {
-  schemaVersion: 5;
+  schemaVersion: 6;
+  extensionVersion: string;
   status: ExtensionStatus;
   currentCampaign: CampaignSnapshot | null;
   progress: { total: number; sent: number; failed: number };

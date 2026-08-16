@@ -126,9 +126,10 @@ export function isCompatibilityDevelopmentFault(value: unknown): value is Compat
 }
 
 export interface CompatibilityState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   overallStatus: CompatibilityOverallStatus;
   checkedAt: string | null;
+  lastKnownGoodExtensionVersion: string | null;
   lastKnownGood: Partial<Record<WhatsAppCapability, LastKnownGoodCapability>>;
   lastPreflight: CompatibilitySnapshot | null;
   driftHistory: Array<{

@@ -13,7 +13,8 @@ describe("state storage", () => {
     expect(state.status).toBe("idle");
     expect(state.currentCampaign).toBeNull();
     expect(state.lastCheckpoint).toBeNull();
-    expect(state.schemaVersion).toBe(5);
+    expect(state.schemaVersion).toBe(6);
+    expect(state.extensionVersion).toBe("unknown");
     expect(state.config.retryPolicy.maxAttemptsPerStep).toBe(3);
     expect(state.config.campaignPolicy).toMatchObject({
       contactsPerBatch: 3,
@@ -21,7 +22,12 @@ describe("state storage", () => {
       dailyContactLimit: 1_000
     });
     expect(state.dailyLimit).toMatchObject({ completedToday: 0, limit: 1_000, remaining: 1_000 });
-    expect(state.compatibility).toMatchObject({ schemaVersion: 1, overallStatus: "RED", lastKnownGood: {} });
+    expect(state.compatibility).toMatchObject({
+      schemaVersion: 2,
+      overallStatus: "RED",
+      lastKnownGoodExtensionVersion: null,
+      lastKnownGood: {}
+    });
     expect(state.diagnosticIncident).toBeNull();
     expect(state.serviceWorkerRecovery).toBeNull();
     expect(state.config.webAppOrigins).toContain("https://app-integral-fm.netlify.app");
@@ -33,14 +39,21 @@ describe("state storage", () => {
       extensionState: {
         ...createDefaultState(),
         schemaVersion: 1,
+        compatibility: {
+          ...createDefaultState().compatibility,
+          schemaVersion: 1,
+          lastKnownGoodExtensionVersion: undefined
+        },
         config: { diagnosticTimeoutMs: 2_000 }
       }
     };
     const state = await new StateStore(storage).load();
-    expect(state.schemaVersion).toBe(5);
+    expect(state.schemaVersion).toBe(6);
     expect(state.config.diagnosticTimeoutMs).toBe(2_000);
     expect(state.config.retryPolicy.timeouts.previewMs).toBeGreaterThan(0);
     expect(state.config.campaignPolicy.whatsappLoadWaitMs).toBe(30_000);
+    expect(state.compatibility.schemaVersion).toBe(2);
+    expect(state.compatibility.lastKnownGoodExtensionVersion).toBeNull();
   });
 
   it("persists transitions and limits operation history", async () => {

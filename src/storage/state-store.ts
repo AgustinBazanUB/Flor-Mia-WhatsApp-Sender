@@ -28,7 +28,8 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
   const date = new Date(now);
   const localDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    extensionVersion: "unknown",
     status: "idle",
     currentCampaign: null,
     progress: { total: 0, sent: 0, failed: 0 },
@@ -73,6 +74,16 @@ export class StateStore {
     const stored = result[STATE_KEY];
     if (!stored || typeof stored !== "object") return createDefaultState();
     const defaults = createDefaultState();
+    const storedCompatibility = (stored as Partial<ExtensionState>).compatibility as Partial<ExtensionState["compatibility"]> | undefined;
+    const lastKnownGood = {
+      ...defaults.compatibility.lastKnownGood,
+      ...storedCompatibility?.lastKnownGood
+    };
+    const lastKnownGoodExtensionVersion = storedCompatibility?.lastKnownGoodExtensionVersion
+      ?? Object.values(lastKnownGood)
+        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+        .sort((a, b) => b.lastWorkingAt.localeCompare(a.lastWorkingAt))[0]?.extensionVersion
+      ?? null;
     return {
       ...defaults,
       ...stored as Partial<ExtensionState>,
@@ -98,11 +109,10 @@ export class StateStore {
       dailyLimit: { ...defaults.dailyLimit, ...(stored as Partial<ExtensionState>).dailyLimit },
       compatibility: {
         ...defaults.compatibility,
-        ...(stored as Partial<ExtensionState>).compatibility,
-        lastKnownGood: {
-          ...defaults.compatibility.lastKnownGood,
-          ...(stored as Partial<ExtensionState>).compatibility?.lastKnownGood
-        }
+        ...storedCompatibility,
+        schemaVersion: defaults.compatibility.schemaVersion,
+        lastKnownGoodExtensionVersion,
+        lastKnownGood
       }
     };
   }

@@ -59,6 +59,7 @@ describe("functional fingerprint and Last Known Good", () => {
       extensionVersion: "0.4.0",
       selectedStrategy: "main.primary"
     });
+    expect(rehydrated.lastKnownGoodExtensionVersion).toBe("0.4.0");
   });
 
   it("detects functional drift while remaining GREEN", () => {
@@ -148,5 +149,19 @@ describe("functional fingerprint and Last Known Good", () => {
     expect(await store.consumeHealthCheckFault()).toBe("main_interface_capability_break");
     expect(await store.consumeHealthCheckFault()).toBe("none");
     expect((await store.load()).developmentFault).toBe("none");
+  });
+
+  it("migrates schema 1 forward without losing Last Known Good", async () => {
+    const storage = new MemoryStorage();
+    const legacy = evaluateFunctionalCompatibility(successfulPreflight(), createDefaultCompatibilityState(), "0.5.0").state;
+    storage.value.whatsappCompatibilityState = {
+      ...legacy,
+      schemaVersion: 1,
+      lastKnownGoodExtensionVersion: undefined
+    };
+    const migrated = await new CompatibilityStore(storage).load();
+    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.lastKnownGoodExtensionVersion).toBe("0.5.0");
+    expect(migrated.lastKnownGood.main_interface?.selectedStrategy).toBe("main.primary");
   });
 });

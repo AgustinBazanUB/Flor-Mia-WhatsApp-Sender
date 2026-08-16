@@ -1,6 +1,6 @@
 # Diagnóstico, trazas y reporte de reparación
 
-La versión 0.5.0 comprueba capacidades funcionales de WhatsApp Web, deriva incidentes específicos y permite producir localmente un reporte saneado para Codex. Su objetivo es detener una campaña de manera segura, conservar evidencia útil y explicar la capability afectada; no intenta ocultar la automatización ni anticipar todas las interfaces futuras.
+La versión 0.6.0 conserva el modelo diagnóstico introducido en 0.5.0: comprueba capacidades funcionales de WhatsApp Web, deriva incidentes específicos y permite producir localmente un reporte saneado para Codex. Su objetivo es detener una campaña de manera segura, conservar evidencia útil y explicar la capability afectada; no intenta ocultar la automatización ni anticipar todas las interfaces futuras.
 
 ## Capabilities
 

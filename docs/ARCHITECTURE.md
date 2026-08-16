@@ -2,7 +2,7 @@
 
 ## Capas
 
-- `src/campaign/`: máquina de estados, política, store, límite diario, progreso, `CampaignEngine`, scheduler y eventos públicos.
+- `src/campaign/`: máquina de estados, política, store, límite diario, progreso, `CampaignEngine`, scheduler, último evento público e historial terminal acotado.
 - `src/engine/`: `ContactEngine` atómico, pasos, checkpoints, reconciliación y reintentos de un destinatario.
 - `src/background/campaign-runtime.ts`: composición entre campaña, contacto, preflight, persistencia, IndexedDB y alarmas.
 - `src/background/service-worker.ts`: frontera de mensajes Manifest V3 y rehidratación; no contiene la lógica del scheduler.
@@ -57,11 +57,13 @@ Claves principales de `chrome.storage.local`:
 - `activeCampaign`: fuente persistente del scheduler;
 - `activeContactCheckpoint`: unidad atómica activa;
 - `campaignDailyLimit`: contador diario idempotente;
-- `campaignPublicEvent`: último evento saneado para la Web-App.
+- `campaignPublicEvent`: último evento/snapshot saneado para la Web-App;
+- `campaignPublicEventMeta`: última secuencia y lifecycle publicados, sin cola de eventos;
+- `campaignHistory`: hasta 50 resúmenes terminales sin destinatarios ni contenido;
 - `whatsappCompatibilityState`: semáforo, último preflight, Last Known Good, drift y último fallo técnico saneado;
 - `technicalTraceState`: ring buffer técnico, máximo 500 registros por campaña y 1.000 globales; no contiene mensajes, binarios ni teléfonos completos.
 
-El schema de `extensionState` es `5`. La carga fusiona valores anteriores con defaults actuales, conservando la campaña/checkpoint en sus stores dedicados y agregando `diagnosticIncident` y `serviceWorkerRecovery` como campos migrables.
+El schema de `extensionState` es `6` y el de compatibilidad es `2`. Las migraciones son forward, fusionan valores anteriores con defaults y preservan campaña/checkpoint en sus stores dedicados. Compatibilidad distingue la versión instalada de `lastKnownGoodExtensionVersion`.
 
 ## Diagnóstico y reporte para reparación
 
@@ -129,7 +131,9 @@ Canal `flor_mia_whatsapp_extension`, protocolo versión `1`, con `requestId`/`re
 
 Solicitudes: `FLORMIA_CAMPAIGN_PREPARE`, `FLORMIA_CAMPAIGN_START`, `FLORMIA_CAMPAIGN_PAUSE`, `FLORMIA_CAMPAIGN_RESUME`, `FLORMIA_CAMPAIGN_STOP` y `FLORMIA_CAMPAIGN_STATUS_REQUEST`.
 
-Eventos/respuestas: accepted, started, progress, paused, completed, error y cancelled. El bridge rechaza controles cuyo `campaignId` no coincide con la campaña activa y solo publica estado saneado, sin texto ni teléfono completo.
+Eventos/respuestas: accepted, started, progress, paused, resumed, completed, error y stopped. El bridge rechaza controles cuyo `campaignId` no coincide con la campaña activa y solo publica estado saneado, sin texto, teléfono completo ni claves idempotentes del límite diario. Solo se persiste el evento más reciente; Flor Mía recupera cualquier evento perdido mediante `STATUS_REQUEST`/PULL y descarta secuencias antiguas.
+
+Ver [`WEB-APP-PROTOCOL.md`](WEB-APP-PROTOCOL.md) para el envelope y [`PRIVACY-SECURITY.md`](PRIVACY-SECURITY.md) para retención/cleanup.
 
 ## Seguridad
 
