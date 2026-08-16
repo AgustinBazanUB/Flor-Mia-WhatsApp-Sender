@@ -23,6 +23,7 @@ export type ContactPauseReason =
   | "verification_pending"
   | "images_required"
   | "open_conversation_failed"
+  | "manual_pause"
   | "non_recoverable_error";
 
 export interface ContactTarget {
@@ -97,6 +98,7 @@ export interface ContactProcessCheckpoint {
   lastConfirmedStepId: string | null;
   openConversationAttempts: number;
   pauseReason?: ContactPauseReason;
+  error?: SerializedExtensionError;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

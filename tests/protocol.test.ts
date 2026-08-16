@@ -34,4 +34,24 @@ describe("typed protocol", () => {
     expect(isWebAppInboundEnvelope({ ...ping, type: WEB_APP_MESSAGE_TYPES.completed })).toBe(false);
     expect(isWebAppInboundEnvelope({ ...ping, requestId: undefined })).toBe(false);
   });
+
+  it("accepts campaign controls but never outbound progress as inbound commands", () => {
+    const base = {
+      channel: WEB_APP_CHANNEL,
+      protocolVersion: PROTOCOL_VERSION,
+      requestId: "web-control-1",
+      campaignId: "campaign-1",
+      payload: {}
+    };
+    for (const type of [
+      WEB_APP_MESSAGE_TYPES.startRequest,
+      WEB_APP_MESSAGE_TYPES.pauseRequest,
+      WEB_APP_MESSAGE_TYPES.resumeRequest,
+      WEB_APP_MESSAGE_TYPES.stopRequest,
+      WEB_APP_MESSAGE_TYPES.statusRequest
+    ]) {
+      expect(isWebAppInboundEnvelope({ ...base, type })).toBe(true);
+    }
+    expect(isWebAppInboundEnvelope({ ...base, type: WEB_APP_MESSAGE_TYPES.progress })).toBe(false);
+  });
 });

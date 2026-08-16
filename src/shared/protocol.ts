@@ -5,6 +5,7 @@ import type { ContactProcessCheckpoint, StepReconciliationResult } from "../engi
 import type { DevelopmentFault } from "../engine/fault-injection";
 import type { ImageSendInput, ImageSendResult } from "../whatsapp/send-image";
 import type { ReconcileStepInput } from "../whatsapp/reconcile";
+import type { CampaignPublicStatus } from "../campaign/campaign-types";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -17,6 +18,12 @@ export const INTERNAL_MESSAGE_TYPES = {
   processTestContact: "PROCESS_TEST_CONTACT",
   resumeContactProcess: "RESUME_CONTACT_PROCESS",
   reselectContactImages: "RESELECT_CONTACT_IMAGES",
+  campaignStart: "CAMPAIGN_START",
+  campaignPause: "CAMPAIGN_PAUSE",
+  campaignResume: "CAMPAIGN_RESUME",
+  campaignStop: "CAMPAIGN_STOP",
+  campaignStatus: "CAMPAIGN_STATUS",
+  campaignRestoreImages: "CAMPAIGN_RESTORE_IMAGES",
   whatsappPreflight: "WA_PREFLIGHT",
   whatsappOpenConversation: "WA_OPEN_CONVERSATION",
   whatsappSendText: "WA_SEND_TEXT",
@@ -38,6 +45,12 @@ export interface InternalRequestMap {
   PROCESS_TEST_CONTACT: { phone: string; message: string; images: SerializedCampaignImage[]; faultInjection?: DevelopmentFault };
   RESUME_CONTACT_PROCESS: Record<string, never>;
   RESELECT_CONTACT_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
+  CAMPAIGN_START: { campaignId: string };
+  CAMPAIGN_PAUSE: { campaignId: string };
+  CAMPAIGN_RESUME: { campaignId: string };
+  CAMPAIGN_STOP: { campaignId: string };
+  CAMPAIGN_STATUS: { campaignId?: string };
+  CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
   WA_PREFLIGHT: { timeoutMs?: number };
   WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string };
   WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string; timeoutMs?: number; checkpointRequired?: boolean };
@@ -56,6 +69,12 @@ export interface InternalResponseMap {
   PROCESS_TEST_CONTACT: ContactProcessCheckpoint;
   RESUME_CONTACT_PROCESS: ContactProcessCheckpoint;
   RESELECT_CONTACT_IMAGES: ContactProcessCheckpoint;
+  CAMPAIGN_START: CampaignPublicStatus;
+  CAMPAIGN_PAUSE: CampaignPublicStatus;
+  CAMPAIGN_RESUME: CampaignPublicStatus;
+  CAMPAIGN_STOP: CampaignPublicStatus;
+  CAMPAIGN_STATUS: CampaignPublicStatus | null;
+  CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
   WA_PREFLIGHT: WhatsAppPreflightResult;
   WA_OPEN_CONVERSATION: { navigationStarted: true };
   WA_SEND_TEXT: TextTestResult;
@@ -136,7 +155,12 @@ export const WEB_APP_MESSAGE_TYPES = {
   completed: "FLORMIA_CAMPAIGN_COMPLETED",
   error: "FLORMIA_CAMPAIGN_ERROR",
   cancelled: "FLORMIA_CAMPAIGN_CANCELLED",
-  cancelRequest: "FLORMIA_CAMPAIGN_CANCEL_REQUEST"
+  cancelRequest: "FLORMIA_CAMPAIGN_CANCEL_REQUEST",
+  startRequest: "FLORMIA_CAMPAIGN_START",
+  pauseRequest: "FLORMIA_CAMPAIGN_PAUSE",
+  resumeRequest: "FLORMIA_CAMPAIGN_RESUME",
+  stopRequest: "FLORMIA_CAMPAIGN_STOP",
+  statusRequest: "FLORMIA_CAMPAIGN_STATUS_REQUEST"
 } as const;
 
 export type WebAppMessageType = (typeof WEB_APP_MESSAGE_TYPES)[keyof typeof WEB_APP_MESSAGE_TYPES];
@@ -155,7 +179,12 @@ export interface WebAppEnvelope {
 const webAppInboundTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.ping,
   WEB_APP_MESSAGE_TYPES.prepare,
-  WEB_APP_MESSAGE_TYPES.cancelRequest
+  WEB_APP_MESSAGE_TYPES.cancelRequest,
+  WEB_APP_MESSAGE_TYPES.startRequest,
+  WEB_APP_MESSAGE_TYPES.pauseRequest,
+  WEB_APP_MESSAGE_TYPES.resumeRequest,
+  WEB_APP_MESSAGE_TYPES.stopRequest,
+  WEB_APP_MESSAGE_TYPES.statusRequest
 ]);
 
 export function isWebAppInboundEnvelope(value: unknown): value is WebAppEnvelope {

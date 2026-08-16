@@ -1,6 +1,7 @@
 import type { SerializedExtensionError } from "./errors";
 import type { ContactProcessCheckpoint } from "../engine/types";
 import type { RetryPolicyConfig } from "../engine/retry-policy";
+import type { CampaignPolicyConfig, CampaignState, CampaignStatus, DailyLimitState } from "../campaign/campaign-types";
 
 export const EXTENSION_STATES = ["idle", "preflight", "ready", "running", "pausing", "paused", "error", "completed"] as const;
 export type ExtensionStatus = (typeof EXTENSION_STATES)[number];
@@ -58,7 +59,7 @@ export interface CampaignSnapshot {
   messageLength: number;
   imageCount: number;
   receivedAt: string;
-  status: "received" | "cancelled";
+  status: CampaignStatus;
 }
 
 export interface StoredContact {
@@ -91,10 +92,11 @@ export interface ExtensionConfig {
   diagnosticTimeoutMs: number;
   operationTimeoutMs: number;
   retryPolicy: RetryPolicyConfig;
+  campaignPolicy: CampaignPolicyConfig;
 }
 
 export interface ExtensionState {
-  schemaVersion: 2;
+  schemaVersion: 3;
   status: ExtensionStatus;
   currentCampaign: CampaignSnapshot | null;
   progress: { total: number; sent: number; failed: number };
@@ -108,6 +110,8 @@ export interface ExtensionState {
   whatsapp: WhatsAppPreflightResult | null;
   lastTestResult: TextTestResult | null;
   activeContactProcess: ContactProcessCheckpoint | null;
+  activeCampaign: CampaignState | null;
+  dailyLimit: DailyLimitState;
   operations: OperationRecord[];
   updatedAt: string;
 }

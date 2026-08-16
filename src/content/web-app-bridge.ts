@@ -12,6 +12,8 @@ import {
   type WebAppEnvelope
 } from "../shared/protocol";
 import { serializeCampaign } from "../shared/serialization";
+import { CAMPAIGN_EVENT_KEY, type CampaignPublicEvent } from "../campaign/events";
+import type { CampaignPublicStatus } from "../campaign/campaign-types";
 
 function post(message: WebAppEnvelope): void {
   window.postMessage(message, window.location.origin);
@@ -52,16 +54,53 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
   }
   if (request.type === WEB_APP_MESSAGE_TYPES.cancelRequest) {
     const campaignId = request.campaignId || String(request.payload.campaignId || "");
-    const cancelled = await sendRuntimeRequest(
-      "web-app-bridge",
-      INTERNAL_MESSAGE_TYPES.webAppCancelCampaign,
-      { campaignId }
-    );
-    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.cancelled, cancelled, { sequence: 1 }));
+    const stopped = await sendRuntimeRequest("web-app-bridge", INTERNAL_MESSAGE_TYPES.campaignStop, { campaignId });
+    post(responseEnvelope(request, eventType(stopped), stopped as unknown as Record<string, unknown>, { sequence: stopped.sequence }));
+    return;
+  }
+  const campaignId = request.campaignId || String(request.payload.campaignId || "");
+  const controls = {
+    [WEB_APP_MESSAGE_TYPES.startRequest]: INTERNAL_MESSAGE_TYPES.campaignStart,
+    [WEB_APP_MESSAGE_TYPES.pauseRequest]: INTERNAL_MESSAGE_TYPES.campaignPause,
+    [WEB_APP_MESSAGE_TYPES.resumeRequest]: INTERNAL_MESSAGE_TYPES.campaignResume,
+    [WEB_APP_MESSAGE_TYPES.stopRequest]: INTERNAL_MESSAGE_TYPES.campaignStop
+  } as const;
+  if (request.type in controls) {
+    const type = controls[request.type as keyof typeof controls];
+    const status = await sendRuntimeRequest("web-app-bridge", type, { campaignId });
+    const responseType = eventType(status);
+    post(responseEnvelope(request, responseType, status as unknown as Record<string, unknown>, { sequence: status.sequence }));
+    return;
+  }
+  if (request.type === WEB_APP_MESSAGE_TYPES.statusRequest) {
+    const status = await sendRuntimeRequest("web-app-bridge", INTERNAL_MESSAGE_TYPES.campaignStatus, { ...(campaignId ? { campaignId } : {}) });
+    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, (status ?? {}) as unknown as Record<string, unknown>, { sequence: status?.sequence }));
   }
 }
 
+function eventType(status: CampaignPublicStatus): WebAppEnvelope["type"] {
+  if (status.status === "completed") return WEB_APP_MESSAGE_TYPES.completed;
+  if (status.status === "stopped") return WEB_APP_MESSAGE_TYPES.cancelled;
+  if (["paused", "pause_requested", "daily_limit_reached", "images_required"].includes(status.status)) return WEB_APP_MESSAGE_TYPES.paused;
+  if (status.status === "error") return WEB_APP_MESSAGE_TYPES.error;
+  if (status.status === "running") return WEB_APP_MESSAGE_TYPES.started;
+  return WEB_APP_MESSAGE_TYPES.progress;
+}
+
 if (isAllowedWebAppOrigin(window.location.origin)) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    const event = changes[CAMPAIGN_EVENT_KEY]?.newValue as CampaignPublicEvent | undefined;
+    if (!event?.status || event.campaignId !== event.status.campaignId) return;
+    post({
+      channel: WEB_APP_CHANNEL,
+      protocolVersion: PROTOCOL_VERSION,
+      type: eventType(event.status),
+      campaignId: event.campaignId,
+      sequence: event.sequence,
+      payload: event.status as unknown as Record<string, unknown>
+    });
+  });
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.source !== window || event.origin !== window.location.origin || !isWebAppInboundEnvelope(event.data)) return;
     const request = event.data;

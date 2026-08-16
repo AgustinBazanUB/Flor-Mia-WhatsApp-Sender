@@ -45,6 +45,7 @@ form small, #character-count { color: #81796b; font-size: 10px; }
 .button:disabled { cursor: wait; opacity: .58; }
 .button--primary { color: white; background: var(--green); }
 .button--secondary { color: #4d5c47; background: var(--green-soft); }
+.button--danger { color: white; background: var(--error); }
 .button--wide { width: 100%; }
 .result-card { min-height: 82px; }
 .empty-result { color: #81796b; font-size: 12px; }
@@ -63,3 +64,15 @@ form small, #character-count { color: #81796b; font-size: 10px; }
 .process-step.is-verification_pending, .process-step.is-failed, .process-step.is-images_required { background: var(--error-soft); }
 .process-alert { padding: 9px 10px; border-radius: 10px; background: #fff3d8; color: #725618; font-size: 11px; line-height: 1.4; }
 .reselect-form { display: grid; gap: 7px; padding-top: 4px; }
+.campaign-card { display: grid; gap: 11px; }
+.campaign-heading, .campaign-progress-row, .campaign-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.campaign-heading h2 { margin: 0; font: 600 18px/1.2 Georgia, serif; color: #354733; }
+.campaign-status { padding: 5px 8px; border-radius: 999px; background: #f1ede4; color: #686153; font-size: 10px; text-transform: uppercase; }
+.campaign-status.is-running, .campaign-status.is-completed { color: var(--green); background: var(--green-soft); }
+.campaign-status.is-error, .campaign-status.is-stopped { color: var(--error); background: var(--error-soft); }
+.campaign-progress-row { color: #70695c; font-size: 11px; }
+.progress-track { height: 9px; overflow: hidden; border-radius: 999px; background: #e7e0d3; }
+.progress-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--green), #77936c); transition: width .2s ease; }
+.campaign-current { display: grid; gap: 3px; padding: 10px; border-radius: 10px; background: #f6f2e9; font-size: 11px; }
+.campaign-current strong { color: #40523c; }
+.campaign-controls { display: grid; grid-template-columns: repeat(4, 1fr); }

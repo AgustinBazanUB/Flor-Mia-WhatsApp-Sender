@@ -16,20 +16,39 @@ import {
   type InternalResponseMap
 } from "../shared/protocol";
 import { base64ToArrayBuffer, deserializeCampaign, type SerializedCampaignPayload } from "../shared/serialization";
-import type { TextTestResult, WhatsAppPreflightResult } from "../shared/state";
+import type { ExtensionState, TextTestResult, WhatsAppPreflightResult } from "../shared/state";
 import { CampaignBlobStore } from "../storage/blob-store";
 import { ContactCheckpointStore } from "../storage/checkpoint-store";
 import { StateStore } from "../storage/state-store";
 import { ChromeWhatsAppContactAdapter } from "./contact-adapter";
 import { WhatsAppTransport } from "./whatsapp-transport";
+import { CampaignRuntime } from "./campaign-runtime";
+import { campaignIdFromAlarm } from "../campaign/scheduler";
 
 const stateStore = new StateStore();
 const blobStore = new CampaignBlobStore();
 const checkpointStore = new ContactCheckpointStore();
 const whatsappTransport = new WhatsAppTransport();
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+const campaignRuntime = new CampaignRuntime({
+  stateStore,
+  blobStore,
+  checkpointStore,
+  transport: whatsappTransport,
+  runPreflight: (timeoutMs) => runPreflight(timeoutMs, true),
+  onContactCheckpoint: syncCheckpointState
+});
 
 async function initialize(): Promise<void> {
+  const campaign = await campaignRuntime.initialize();
+  if (campaign) {
+    logger.info("service_worker.initialized", {
+      version: EXTENSION_VERSION,
+      campaignId: campaign.campaignId,
+      campaignStatus: campaign.status
+    });
+    return;
+  }
   let state = await stateStore.load();
   const active = await checkpointStore.loadActive();
   if (active) {
@@ -85,26 +104,30 @@ function unavailablePreflight(message: string): WhatsAppPreflightResult {
   };
 }
 
-async function preparePreflightState(): Promise<void> {
+async function preparePreflightState(campaignControl = false): Promise<void> {
   const current = await stateStore.load();
-  if (current.status === "running" || current.status === "pausing" || current.status === "paused") {
+  if (!campaignControl && (current.status === "running" || current.status === "pausing" || current.status === "paused")) {
     throw new ExtensionError(ERROR_CODES.internal, "No se puede ejecutar un diagnóstico mientras hay una operación activa.");
   }
+  if (campaignControl) return;
   if (current.status === "completed" || current.status === "error") await stateStore.transition("idle");
   await stateStore.transition("preflight", { currentStep: "preflight", operational: false, statusMessage: "Comprobando WhatsApp Web…" });
 }
 
-async function runPreflight(timeoutMs = 8_000): Promise<WhatsAppPreflightResult> {
-  await preparePreflightState();
+async function runPreflight(timeoutMs = 8_000, campaignControl = false): Promise<WhatsAppPreflightResult> {
+  await preparePreflightState(campaignControl);
   const tab = await whatsappTransport.findTab();
   if (!tab?.id) {
     const result = unavailablePreflight("WhatsApp Web no está abierto en ninguna pestaña.");
-    await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
+    if (campaignControl) await stateStore.patch({ whatsapp: result, operational: false, statusMessage: result.message });
+    else await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
     return result;
   }
   try {
     const result = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, { timeoutMs }, tab.id);
-    if (result.operational) {
+    if (campaignControl) {
+      await stateStore.patch({ whatsapp: result, operational: result.operational, statusMessage: result.message });
+    } else if (result.operational) {
       await stateStore.transition("ready", { whatsapp: result, operational: true, statusMessage: result.message, currentStep: null });
     } else {
       await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
@@ -117,7 +140,8 @@ async function runPreflight(timeoutMs = 8_000): Promise<WhatsAppPreflightResult>
   } catch (error) {
     const normalized = toExtensionError(error, ERROR_CODES.interfaceLoading);
     const result = unavailablePreflight(normalized.message);
-    await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
+    if (campaignControl) await stateStore.patch({ whatsapp: result, operational: false, statusMessage: result.message });
+    else await stateStore.transition("error", { whatsapp: result, operational: false, statusMessage: result.message, currentStep: null });
     await stateStore.appendError({ ...serializeError(normalized), at: new Date().toISOString() });
     return result;
   }
@@ -311,6 +335,17 @@ async function runContactCheckpoint(
 async function processTestContact(
   payload: InternalRequestMap["PROCESS_TEST_CONTACT"]
 ): Promise<ContactProcessCheckpoint> {
+  const activeCampaign = await campaignRuntime.campaignStore.loadActive();
+  if (activeCampaign && !["completed", "stopped"].includes(activeCampaign.status)) {
+    throw new ExtensionError(ERROR_CODES.campaignConflict, "Hay una campaña activa. Pausala o detenela antes de usar la prueba manual.");
+  }
+  if (activeCampaign) {
+    await blobStore.deleteCampaign(activeCampaign.campaignId);
+    const campaignCheckpoint = await checkpointStore.loadActive();
+    if (campaignCheckpoint?.campaignId === activeCampaign.campaignId) await checkpointStore.clearActive();
+    await campaignRuntime.campaignStore.clearActive();
+    await stateStore.patch({ activeCampaign: null, currentCampaign: null });
+  }
   const phone = normalizePhone(payload.phone);
   if (!isDevelopmentFault(payload.faultInjection ?? "none")) {
     throw new ExtensionError(ERROR_CODES.invalidInput, "La inyección de fallos solicitada no es válida.");
@@ -504,29 +539,8 @@ async function recordOperationStage(
 
 async function acceptCampaign(payload: SerializedCampaignPayload): Promise<InternalResponseMap["WEB_APP_PREPARE_CAMPAIGN"]> {
   const campaign = validateCampaignInput(deserializeCampaign(payload));
-  await blobStore.deleteCampaign(campaign.campaignId);
-  await blobStore.putCampaignImages(campaign.campaignId, campaign.images.map((image) => ({
-    imageId: `image-${image.order}`,
-    order: image.order,
-    name: image.name,
-    type: image.type,
-    blob: new Blob([image.data], { type: image.type })
-  })));
   const acceptedAt = new Date().toISOString();
-  await stateStore.patch({
-    currentCampaign: {
-      campaignId: campaign.campaignId,
-      campaignName: campaign.campaignName,
-      createdBy: campaign.createdBy,
-      totalRecipients: campaign.totalRecipients,
-      messageLength: campaign.message.length,
-      imageCount: campaign.imageCount,
-      receivedAt: acceptedAt,
-      status: "received"
-    },
-    progress: { total: campaign.totalRecipients, sent: 0, failed: 0 },
-    statusMessage: "Campaña recibida y preparada localmente."
-  });
+  await campaignRuntime.prepare(campaign);
   await stateStore.appendOperation({
     operationId: createId("campaign"), kind: "campaign-received", success: true, startedAt: acceptedAt, completedAt: acceptedAt
   });
@@ -535,18 +549,43 @@ async function acceptCampaign(payload: SerializedCampaignPayload): Promise<Inter
 
 async function cancelCampaign(campaignId: string): Promise<InternalResponseMap["WEB_APP_CANCEL_CAMPAIGN"]> {
   if (!campaignId.trim()) throw new ExtensionError(ERROR_CODES.invalidInput, "campaignId es obligatorio.");
-  await blobStore.deleteCampaign(campaignId);
-  const state = await stateStore.load();
-  if (state.currentCampaign?.campaignId === campaignId) {
-    const checkpoint = await checkpointStore.loadActive();
-    if (checkpoint?.campaignId === campaignId) await checkpointStore.clearActive();
-    await stateStore.patch({
-      currentCampaign: { ...state.currentCampaign, status: "cancelled" },
-      activeContactProcess: checkpoint?.campaignId === campaignId ? null : state.activeContactProcess,
-      progress: { total: 0, sent: 0, failed: 0 }
-    });
-  }
+  await campaignRuntime.stop(campaignId);
   return { campaignId, cancelledAt: new Date().toISOString() };
+}
+
+async function loadCurrentExtensionState(): Promise<ExtensionState> {
+  let state = await stateStore.load();
+  let campaign = await campaignRuntime.campaignStore.loadActive();
+  const dailyLimit = await campaignRuntime.dailyLimit.load(
+    campaign?.policy.dailyContactLimit ?? state.config.campaignPolicy.dailyContactLimit,
+    new Date()
+  );
+  if (campaign && (
+    campaign.dailyLimit.localDate !== dailyLimit.localDate
+    || campaign.dailyLimit.completedToday !== dailyLimit.completedToday
+    || campaign.dailyLimit.limit !== dailyLimit.limit
+  )) {
+    campaign = await campaignRuntime.campaignStore.saveActive({
+      ...campaign,
+      dailyLimit,
+      sequence: campaign.sequence + 1,
+      updatedAt: new Date().toISOString()
+    });
+    await campaignRuntime.syncCampaign(campaign);
+    state = await stateStore.load();
+  } else if (
+    state.dailyLimit.localDate !== dailyLimit.localDate
+    || state.dailyLimit.completedToday !== dailyLimit.completedToday
+    || state.dailyLimit.limit !== dailyLimit.limit
+  ) {
+    state = await stateStore.patch({ dailyLimit });
+  }
+  return {
+    ...state,
+    activeCampaign: campaign,
+    dailyLimit,
+    activeContactProcess: await checkpointStore.loadActive()
+  };
 }
 
 function senderAllowed(request: InternalEnvelope, sender: chrome.runtime.MessageSender): boolean {
@@ -562,7 +601,7 @@ function senderAllowed(request: InternalEnvelope, sender: chrome.runtime.Message
 async function handleRequest(request: InternalEnvelope): Promise<unknown> {
   switch (request.type) {
     case INTERNAL_MESSAGE_TYPES.getState:
-      return { ...await stateStore.load(), activeContactProcess: await checkpointStore.loadActive() };
+      return loadCurrentExtensionState();
     case INTERNAL_MESSAGE_TYPES.runPreflight:
       return runPreflight();
     case INTERNAL_MESSAGE_TYPES.sendTestText:
@@ -573,19 +612,33 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
       return resumeContactProcess();
     case INTERNAL_MESSAGE_TYPES.reselectContactImages:
       return reselectContactImages(request.payload as InternalRequestMap["RESELECT_CONTACT_IMAGES"]);
+    case INTERNAL_MESSAGE_TYPES.campaignStart:
+      return campaignRuntime.start((request.payload as InternalRequestMap["CAMPAIGN_START"]).campaignId);
+    case INTERNAL_MESSAGE_TYPES.campaignPause:
+      return campaignRuntime.pause((request.payload as InternalRequestMap["CAMPAIGN_PAUSE"]).campaignId);
+    case INTERNAL_MESSAGE_TYPES.campaignResume:
+      return campaignRuntime.resume((request.payload as InternalRequestMap["CAMPAIGN_RESUME"]).campaignId);
+    case INTERNAL_MESSAGE_TYPES.campaignStop:
+      return campaignRuntime.stop((request.payload as InternalRequestMap["CAMPAIGN_STOP"]).campaignId);
+    case INTERNAL_MESSAGE_TYPES.campaignStatus:
+      return campaignRuntime.getStatus((request.payload as InternalRequestMap["CAMPAIGN_STATUS"]).campaignId);
+    case INTERNAL_MESSAGE_TYPES.campaignRestoreImages: {
+      const payload = request.payload as InternalRequestMap["CAMPAIGN_RESTORE_IMAGES"];
+      return campaignRuntime.restoreImages(payload.campaignId, payload.images);
+    }
     case INTERNAL_MESSAGE_TYPES.whatsappOperationStage:
       return recordOperationStage(request.payload as InternalRequestMap["WA_OPERATION_STAGE"]);
     case INTERNAL_MESSAGE_TYPES.webAppPing: {
-      const before = await stateStore.load();
-      if (!["running", "pausing", "paused"].includes(before.status)) await runPreflight(750);
-      const state = await stateStore.load();
+      const before = await loadCurrentExtensionState();
+      if (!["running", "pausing", "paused"].includes(before.status)) await runPreflight(750, Boolean(before.activeCampaign));
+      const state = await loadCurrentExtensionState();
       return {
         operational: state.operational,
         message: state.statusMessage,
         extensionVersion: EXTENSION_VERSION,
-        configuredLimit: 0,
-        sentToday: 0,
-        availableToday: 0,
+        configuredLimit: state.dailyLimit.limit,
+        sentToday: state.dailyLimit.completedToday,
+        availableToday: state.dailyLimit.remaining,
         ...(!state.operational ? { errorCode: state.whatsapp?.status === "login_required" ? "session_not_ready" : "extension_not_ready" } : {})
       };
     }
@@ -605,6 +658,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     (error: unknown) => sendResponse({ ok: false, requestId: message.requestId, error: serializeError(error) })
   );
   return true;
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  const campaignId = campaignIdFromAlarm(alarm.name);
+  if (!campaignId) return;
+  void campaignRuntime.handleAlarm(campaignId).catch(async (error: unknown) => {
+    const normalized = toExtensionError(error);
+    await stateStore.appendError({ ...serializeError(normalized), at: new Date().toISOString() });
+    logger.error("campaign.alarm_failed", { campaignId, errorCode: normalized.code });
+  });
 });
 
 void initialize();

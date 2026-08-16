@@ -33,6 +33,34 @@
         </dl>
       </section>
 
+      <section id="campaign-card" class="card campaign-card" aria-live="polite">
+        <div class="campaign-heading">
+          <div>
+            <span class="eyebrow">Campaña activa</span>
+            <h2 id="campaign-name">Sin campaña recibida</h2>
+          </div>
+          <strong id="campaign-status" class="campaign-status">—</strong>
+        </div>
+        <div class="campaign-progress-row">
+          <span id="campaign-progress-text">0 / 0 · 0 %</span>
+          <span id="campaign-daily-limit">Hoy: 0 / 1000</span>
+        </div>
+        <div class="progress-track" role="progressbar" aria-label="Progreso de campaña" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span id="campaign-progress-bar"></span>
+        </div>
+        <div class="campaign-current">
+          <span id="campaign-current-contact">Sin contacto activo</span>
+          <strong id="campaign-current-step">Esperando campaña</strong>
+        </div>
+        <p id="campaign-alert" class="process-alert" hidden></p>
+        <div class="campaign-controls">
+          <button id="campaign-start" class="button button--primary" type="button" disabled>Iniciar</button>
+          <button id="campaign-pause" class="button button--secondary" type="button" disabled>Pausar</button>
+          <button id="campaign-resume" class="button button--secondary" type="button" disabled>Reanudar</button>
+          <button id="campaign-stop" class="button button--danger" type="button" disabled>Detener</button>
+        </div>
+      </section>
+
       <section class="card">
         <div class="section-heading">
           <span class="eyebrow">Modo manual</span>

@@ -234,6 +234,36 @@ describe("atomic contact engine", () => {
     expect(adapter.calls.filter((call) => call === "image-1")).toHaveLength(1);
   });
 
+  it("applies a cooperative pause only after the current verified step", async () => {
+    const store = new MemoryCheckpointStore();
+    const adapter = new FakeAdapter();
+    const result = await processContact(checkpoint(2), {
+      adapter,
+      store,
+      policy: POLICY,
+      sleep: async () => undefined,
+      shouldPause: () => adapter.calls.includes("image-1")
+    });
+    expect(result.status).toBe("paused");
+    expect(result.pauseReason).toBe("manual_pause");
+    expect(result.steps.find((step) => step.id === "image-1")?.status).toBe("confirmed");
+    expect(adapter.calls).toEqual(["open", "image-1"]);
+  });
+
+  it("pauses before a click when the request already exists at a safe boundary", async () => {
+    const adapter = new FakeAdapter();
+    const result = await processContact(checkpoint(1), {
+      adapter,
+      store: new MemoryCheckpointStore(),
+      policy: POLICY,
+      sleep: async () => undefined,
+      shouldPause: () => true
+    });
+    expect(result.status).toBe("paused");
+    expect(result.steps.every((step) => step.attempts === 0)).toBe(true);
+    expect(adapter.calls).toEqual(["open"]);
+  });
+
   it("resumes from image 3 after a persisted image-2 checkpoint", async () => {
     const initial = checkpoint(3);
     const confirmed = initial.steps.map((step) => step.position <= 2

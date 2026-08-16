@@ -25,5 +25,10 @@ if (originPatterns.some((pattern) => pattern === "<all_urls>" || pattern === "*:
   throw new Error("El manifest solicita permisos globales.");
 }
 if (!manifest.host_permissions.includes("https://web.whatsapp.com/*")) throw new Error("Falta el permiso de WhatsApp Web.");
+if (!manifest.permissions.includes("storage")) throw new Error("Falta el permiso de persistencia local.");
+if (!manifest.permissions.includes("alarms")) throw new Error("Falta el permiso alarms requerido por el scheduler MV3.");
+if (manifest.permissions.some((permission) => !["storage", "alarms"].includes(permission))) {
+  throw new Error("El manifest contiene permisos de extensión no previstos.");
+}
 if (!manifest.content_scripts.some((item) => item.js.includes("content/web-app-bridge.js"))) throw new Error("Falta el puente de la Web-App.");
 console.log("Build validado: Manifest V3 y artefactos requeridos presentes.");

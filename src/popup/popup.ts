@@ -34,6 +34,18 @@ const resumeButton = element<HTMLButtonElement>("resume-button");
 const reselectForm = element<HTMLFormElement>("reselect-form");
 const reselectImages = element<HTMLInputElement>("reselect-images");
 const reselectButton = element<HTMLButtonElement>("reselect-button");
+const campaignName = element("campaign-name");
+const campaignStatus = element("campaign-status");
+const campaignProgressText = element("campaign-progress-text");
+const campaignDailyLimit = element("campaign-daily-limit");
+const campaignProgressBar = element<HTMLElement>("campaign-progress-bar");
+const campaignCurrentContact = element("campaign-current-contact");
+const campaignCurrentStep = element("campaign-current-step");
+const campaignAlert = element("campaign-alert");
+const campaignStart = element<HTMLButtonElement>("campaign-start");
+const campaignPause = element<HTMLButtonElement>("campaign-pause");
+const campaignResume = element<HTMLButtonElement>("campaign-resume");
+const campaignStop = element<HTMLButtonElement>("campaign-stop");
 
 let currentState: ExtensionState | null = null;
 
@@ -89,7 +101,7 @@ function stepStatus(step: ContactStep): string {
   return labels[step.status];
 }
 
-function renderProcess(checkpoint: ContactProcessCheckpoint | null): void {
+function renderProcess(checkpoint: ContactProcessCheckpoint | null, managedByCampaign: boolean): void {
   processSteps.replaceChildren();
   processAlert.hidden = true;
   processAlert.textContent = "";
@@ -116,7 +128,7 @@ function renderProcess(checkpoint: ContactProcessCheckpoint | null): void {
     processSteps.append(item);
   }
   if (checkpoint.status === "paused") {
-    resumeButton.hidden = false;
+    resumeButton.hidden = managedByCampaign;
     resumeButton.textContent = checkpoint.pauseReason === "verification_pending"
       ? "Reconciliar y reanudar"
       : "Reanudar desde checkpoint";
@@ -136,11 +148,92 @@ function renderProcess(checkpoint: ContactProcessCheckpoint | null): void {
   }
 }
 
+function campaignStatusLabel(status: NonNullable<ExtensionState["activeCampaign"]>["status"]): string {
+  const labels: Record<NonNullable<ExtensionState["activeCampaign"]>["status"], string> = {
+    received: "Recibida",
+    ready: "Preparada",
+    running: "En ejecución",
+    pause_requested: "Pausando",
+    paused: "Pausada",
+    waiting_contact: "Espera contacto",
+    waiting_batch: "Espera tanda",
+    daily_limit_reached: "Límite diario",
+    images_required: "Requiere imágenes",
+    error: "Error",
+    stopped: "Detenida",
+    completed: "Completada"
+  };
+  return labels[status];
+}
+
+function renderCampaign(state: ExtensionState): void {
+  const campaign = state.activeCampaign;
+  campaignAlert.hidden = true;
+  campaignAlert.textContent = "";
+  if (!campaign) {
+    campaignName.textContent = "Sin campaña recibida";
+    campaignStatus.textContent = "—";
+    campaignStatus.className = "campaign-status";
+    campaignProgressText.textContent = "0 / 0 · 0 %";
+    campaignDailyLimit.textContent = `Hoy: ${state.dailyLimit.completedToday} / ${state.dailyLimit.limit}`;
+    campaignProgressBar.style.width = "0%";
+    campaignProgressBar.parentElement?.setAttribute("aria-valuenow", "0");
+    campaignCurrentContact.textContent = "Sin contacto activo";
+    campaignCurrentStep.textContent = "Esperando campaña";
+    campaignStart.disabled = true;
+    campaignPause.disabled = true;
+    campaignResume.disabled = true;
+    campaignStop.disabled = true;
+    return;
+  }
+  const completed = campaign.completedRecipients;
+  const total = campaign.recipients.length;
+  const percentage = total ? Number(((completed / total) * 100).toFixed(2)) : 0;
+  campaignName.textContent = campaign.campaignName;
+  campaignStatus.textContent = campaignStatusLabel(campaign.status);
+  campaignStatus.className = `campaign-status is-${campaign.status}`;
+  campaignProgressText.textContent = `${completed} / ${total} · ${percentage} %`;
+  campaignDailyLimit.textContent = `Hoy: ${campaign.dailyLimit.completedToday} / ${campaign.dailyLimit.limit}`;
+  campaignProgressBar.style.width = `${percentage}%`;
+  campaignProgressBar.parentElement?.setAttribute("aria-valuenow", String(percentage));
+
+  const active = campaign.activeContactId
+    ? campaign.recipients.find((recipient) => recipient.recipientId === campaign.activeContactId)
+    : campaign.recipients.find((recipient) => recipient.status === "pending");
+  campaignCurrentContact.textContent = active
+    ? `Contacto ${active.position} / ${total}${active.name ? ` · ${active.name}` : ""} · ${active.maskedPhone}`
+    : "Sin contacto pendiente";
+  const checkpoint = state.activeContactProcess?.campaignId === campaign.campaignId ? state.activeContactProcess : null;
+  campaignCurrentStep.textContent = checkpoint?.currentStepId
+    ? checkpoint.currentStepId.replace("image-", "Imagen ").replace("text", "Texto")
+    : campaign.wait?.kind === "between_batches"
+      ? "Esperando pausa entre tandas"
+      : campaign.wait?.kind === "between_contacts"
+        ? "Esperando pausa entre contactos"
+        : campaign.status === "received"
+          ? "Esperando inicio manual"
+          : campaignStatusLabel(campaign.status);
+  if (campaign.blockReason) {
+    campaignAlert.hidden = false;
+    campaignAlert.textContent = campaign.blockReason.message;
+  }
+
+  const terminal = campaign.status === "completed" || campaign.status === "stopped";
+  campaignStart.disabled = !["received", "ready"].includes(campaign.status);
+  campaignPause.disabled = !["running", "waiting_contact", "waiting_batch"].includes(campaign.status);
+  campaignResume.disabled = !["paused", "daily_limit_reached"].includes(campaign.status);
+  campaignStop.disabled = terminal;
+}
+
 function renderState(state: ExtensionState): void {
   currentState = state;
   renderPreflight(state.whatsapp, state.operational, state.statusMessage);
+  renderCampaign(state);
   renderResult(state.lastTestResult);
-  renderProcess(state.activeContactProcess);
+  const managedByCampaign = Boolean(state.activeCampaign
+    && state.activeContactProcess?.campaignId === state.activeCampaign.campaignId
+    && !["completed", "stopped"].includes(state.activeCampaign.status));
+  renderProcess(state.activeContactProcess, managedByCampaign);
 }
 
 function showError(error: unknown): void {
@@ -190,6 +283,17 @@ async function serializeReselectedFiles(
   }));
 }
 
+async function restoreSelectedImages(
+  checkpoint: ContactProcessCheckpoint,
+  images: SerializedCampaignImage[]
+): Promise<void> {
+  if (currentState?.activeCampaign?.campaignId === checkpoint.campaignId) {
+    await sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignRestoreImages, { campaignId: checkpoint.campaignId, images });
+  } else {
+    await sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.reselectContactImages, { campaignId: checkpoint.campaignId, images });
+  }
+}
+
 diagnosticButton.addEventListener("click", () => {
   clearError();
   setBusy(diagnosticButton, true, "Diagnosticando…", "Ejecutar diagnóstico");
@@ -224,7 +328,7 @@ form.addEventListener("submit", (event) => {
       images,
       faultInjection: faultInjection.value as DevelopmentFault
     }))
-    .then((checkpoint) => { renderProcess(checkpoint); return refreshState(); })
+    .then(() => refreshState())
     .catch(showError)
     .finally(() => setBusy(sendButton, false, "Procesando y verificando…", "Procesar contacto de prueba"));
 });
@@ -236,7 +340,7 @@ resumeButton.addEventListener("click", () => {
     : "Reanudar desde checkpoint";
   setBusy(resumeButton, true, "Reanudando…", normalText);
   void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.resumeContactProcess, {})
-    .then((checkpoint) => { renderProcess(checkpoint); return refreshState(); })
+    .then(() => refreshState())
     .catch(showError)
     .finally(() => setBusy(resumeButton, false, "Reanudando…", normalText));
 });
@@ -248,10 +352,53 @@ reselectForm.addEventListener("submit", (event) => {
   if (!checkpoint) return showError(new Error("No hay una campaña activa."));
   setBusy(reselectButton, true, "Restaurando…", "Restaurar imágenes");
   void serializeReselectedFiles([...(reselectImages.files ?? [])], checkpoint)
-    .then((images) => sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.reselectContactImages, { campaignId: checkpoint.campaignId, images }))
-    .then((next) => { renderProcess(next); return refreshState(); })
+    .then((images) => restoreSelectedImages(checkpoint, images))
+    .then(() => refreshState())
     .catch(showError)
     .finally(() => setBusy(reselectButton, false, "Restaurando…", "Restaurar imágenes"));
+});
+
+function activeCampaignId(): string {
+  const campaignId = currentState?.activeCampaign?.campaignId;
+  if (!campaignId) throw new Error("No hay una campaña activa.");
+  return campaignId;
+}
+
+campaignStart.addEventListener("click", () => {
+  clearError();
+  setBusy(campaignStart, true, "Iniciando…", "Iniciar");
+  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignStart, { campaignId: activeCampaignId() })
+    .then(() => refreshState()).catch(showError)
+    .finally(() => setBusy(campaignStart, false, "Iniciando…", "Iniciar"));
+});
+
+campaignPause.addEventListener("click", () => {
+  clearError();
+  setBusy(campaignPause, true, "Pausando…", "Pausar");
+  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignPause, { campaignId: activeCampaignId() })
+    .then(() => refreshState()).catch(showError)
+    .finally(() => setBusy(campaignPause, false, "Pausando…", "Pausar"));
+});
+
+campaignResume.addEventListener("click", () => {
+  clearError();
+  setBusy(campaignResume, true, "Reanudando…", "Reanudar");
+  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignResume, { campaignId: activeCampaignId() })
+    .then(() => refreshState()).catch(showError)
+    .finally(() => setBusy(campaignResume, false, "Reanudando…", "Reanudar"));
+});
+
+campaignStop.addEventListener("click", () => {
+  if (!window.confirm("¿Detener esta campaña? No se procesarán más contactos.")) return;
+  clearError();
+  setBusy(campaignStop, true, "Deteniendo…", "Detener");
+  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignStop, { campaignId: activeCampaignId() })
+    .then(() => refreshState()).catch(showError)
+    .finally(() => setBusy(campaignStop, false, "Deteniendo…", "Detener"));
+});
+
+chrome.storage.onChanged.addListener((_changes, areaName) => {
+  if (areaName === "local") void refreshState().catch(showError);
 });
 
 void refreshState().catch(showError);

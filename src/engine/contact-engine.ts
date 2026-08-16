@@ -21,6 +21,7 @@ export interface ContactEngineDependencies {
   now?: () => string;
   sleep?: (delayMs: number) => Promise<void>;
   onCheckpoint?: (checkpoint: ContactProcessCheckpoint) => Promise<void> | void;
+  shouldPause?: () => Promise<boolean> | boolean;
   signal?: AbortSignal;
 }
 
@@ -116,9 +117,10 @@ export async function processContact(
     try {
       await dependencies.adapter.openConversation(checkpoint.contact, policy.timeouts.openConversationMs, dependencies.signal);
       opened = true;
-      checkpoint = await persist({ ...checkpoint, status: "running" });
+      checkpoint = await persist({ ...checkpoint, status: "running", error: undefined });
     } catch (error) {
       const normalized = toExtensionError(error);
+      checkpoint = await persist({ ...checkpoint, error: serializeError(normalized) });
       if (!normalized.recoverable || checkpoint.openConversationAttempts >= openConversationAttemptLimit) {
         checkpoint = await persist({
           ...checkpoint,
@@ -127,6 +129,9 @@ export async function processContact(
         });
         return checkpoint;
       }
+      if (await dependencies.shouldPause?.()) {
+        return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
+      }
       await sleep(retryDelayMs(checkpoint.openConversationAttempts, policy));
     }
   }
@@ -134,6 +139,9 @@ export async function processContact(
   for (const originalStep of checkpoint.steps) {
     let step = checkpoint.steps.find((candidate) => candidate.id === originalStep.id)!;
     if (step.status === "confirmed") continue;
+    if (await dependencies.shouldPause?.()) {
+      return persist({ ...checkpoint, status: "paused", currentStepId: step.id, pauseReason: "manual_pause" });
+    }
     checkpoint = await persist({ ...checkpoint, status: "running", currentStepId: step.id, pauseReason: undefined });
 
     if (step.status === "verification_pending") {
@@ -208,6 +216,9 @@ export async function processContact(
       if (step.status === "confirmed") break;
       if (step.status === "verification_pending" || step.status === "images_required" || checkpoint.status === "failed") return checkpoint;
       if (step.status === "failed") return checkpoint;
+      if (await dependencies.shouldPause?.()) {
+        return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
+      }
       await sleep(retryDelayMs(step.attempts, policy));
     }
 

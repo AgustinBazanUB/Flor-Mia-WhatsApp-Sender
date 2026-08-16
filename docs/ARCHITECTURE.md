@@ -1,75 +1,93 @@
 # Arquitectura
 
-## Componentes
+## Capas
 
-- `src/engine/`: modelo de pasos, motor atómico por contacto, checkpoints, política de reintentos, reconciliación e inyección de fallos de desarrollo.
-- `src/background/service-worker.ts`: coordinador Manifest V3; crea/reanuda el proceso, sincroniza estado y rehidrata checkpoints.
-- `src/background/contact-adapter.ts`: adapta el motor a IndexedDB y al Content Script de WhatsApp.
-- `src/content/whatsapp.ts`: frontera de mensajes internos para diagnóstico, navegación, envío y reconciliación.
-- `src/content/web-app-bridge.ts`: frontera segura `window.postMessage` ↔ runtime de Chrome, restringida a orígenes autorizados.
-- `src/whatsapp/`: selectores, esperas, preflight, envío de texto, envío de imagen y evidencia DOM.
-- `src/storage/`: estado/checkpoint JSON en `chrome.storage.local` y `Blob` temporales en IndexedDB.
-- `src/popup/`: arnés técnico para un contacto, reanudación, re-selección de archivos y fallos simulados.
+- `src/campaign/`: máquina de estados, política, store, límite diario, progreso, `CampaignEngine`, scheduler y eventos públicos.
+- `src/engine/`: `ContactEngine` atómico, pasos, checkpoints, reconciliación y reintentos de un destinatario.
+- `src/background/campaign-runtime.ts`: composición entre campaña, contacto, preflight, persistencia, IndexedDB y alarmas.
+- `src/background/service-worker.ts`: frontera de mensajes Manifest V3 y rehidratación; no contiene la lógica del scheduler.
+- `src/background/contact-adapter.ts`: adapta el `ContactEngine` a WhatsApp e IndexedDB.
+- `src/content/whatsapp.ts`: frontera interna de diagnóstico, navegación, envío y reconciliación.
+- `src/content/web-app-bridge.ts`: puente seguro `window.postMessage` ↔ runtime para orígenes permitidos.
+- `src/whatsapp/`: interacción semántica con el DOM, sin coordenadas, mouse ni teclado físico.
+- `src/storage/`: estado/checkpoint en `chrome.storage.local` y blobs temporales en IndexedDB.
+- `src/popup/`: cliente de estado y control; no coordina la ejecución.
 
-## Máquina de pasos por contacto
-
-Los pasos se construyen dinámicamente y conservan un `operationId` estable:
+## Separación CampaignEngine / ContactEngine
 
 ```text
-campaignId:contactId:image-1
-campaignId:contactId:image-2
-campaignId:contactId:image-3
-campaignId:contactId:text
+Campaña recibida
+  -> preflight + inicio explícito
+  -> CampaignScheduler despierta por chrome.alarms
+  -> CampaignEngine elige el primer pendiente
+  -> ContactEngine procesa exactamente un destinatario
+  -> checkpoint confirmado
+  -> progreso + contador diario
+  -> espera persistente o siguiente destinatario
 ```
 
-Para cada contacto se ejecutan únicamente los pasos existentes, ordenados como imágenes individuales y texto al final. Los estados de paso son `pending`, `in_progress`, `verification_pending`, `confirmed`, `failed` e `images_required`.
+El `CampaignEngine` nunca conoce selectores de WhatsApp ni reimplementa reintentos. Cada llamada a `advance()` procesa como máximo un contacto y devuelve después de persistir. El `CampaignScheduler` combina despertares simultáneos, por lo que no existen dos destinatarios concurrentes.
 
-El motor persiste antes del intento, después del resultado y después de cada reconciliación. `lastConfirmedStepId` es la frontera segura de reanudación. Los pasos `confirmed` nunca se ejecutan otra vez.
+El `ContactEngine` conserva la secuencia `imagen 1 → imagen 2 → imagen 3 → texto`, omitiendo pasos inexistentes. Un paso se confirma únicamente con evidencia DOM y un paso `confirmed` nunca se repite.
 
-## Envío y verificación de imágenes
+## Máquina de estados de campaña
 
-1. Captura las identidades de mensajes multimedia salientes existentes.
-2. Localiza el control de adjuntos mediante estrategias centralizadas.
-3. Reconstruye un `File` desde el `Blob` local y verifica nombre, tipo y tamaño en el input.
-4. Espera el preview y comprueba nuevamente sus metadatos.
-5. Acciona el botón semántico de envío.
-6. Confirma únicamente si aparece un mensaje multimedia saliente nuevo y el preview deja de estar visible.
+Estados persistidos: `received`, `ready`, `running`, `pause_requested`, `paused`, `waiting_contact`, `waiting_batch`, `daily_limit_reached`, `images_required`, `error`, `stopped` y `completed`.
 
-El cierre del preview por sí solo no confirma éxito. Si el clic ocurrió pero falta evidencia concluyente, el resultado es ambiguo.
+Las transiciones se validan en `campaign-state-machine.ts`. No se permite saltar desde una campaña terminal a ejecución ni avanzar al siguiente destinatario cuando el resultado del actual es `verification_pending`, `images_required`, `paused` o `failed`.
 
-## Envío y verificación de texto
+Semántica de controles:
 
-El motor rechaza sobrescribir borradores, escribe el texto, toma un snapshot de mensajes salientes y confirma únicamente un nodo nuevo con contenido canónicamente coincidente. El texto nunca se ejecuta si una imagen anterior no quedó confirmada.
+- **Iniciar:** solo campaña recibida/válida y preflight operativo; programa el primer pendiente.
+- **Pausar:** fija `pauseRequested`. Si hay contacto activo, `ContactEngine` llega a la próxima frontera segura antes de confirmar `paused`.
+- **Reanudar:** exige nuevo preflight, recupera espera/checkpoint y continúa el contacto o destinatario correcto.
+- **Detener:** fija `stopRequested`; si existe contacto activo espera la misma frontera segura. `stopped` no es un error.
 
-## Reintentos y atomicidad
+## Persistencia
 
-La política centralizada configura máximo de intentos, backoff y timeouts para conversación, carga de imagen, preview, composer, confirmación y reconciliación. Los fallos previos al envío pueden reintentarse hasta tres veces. Un fallo no recuperable detiene el contacto inmediatamente.
+`CampaignStore` guarda campaña, nombre, orden y estado de destinatarios, índice/ID activo, último completado, progreso, tanda, flags de control, espera, error, política, contador y timestamps. El teléfono completo normalizado se mantiene únicamente porque es necesario para abrir el chat; las vistas y eventos exponen la versión enmascarada.
 
-Cuando se agotan los intentos, el proceso se pausa. Ningún paso posterior puede adelantarse a uno pendiente o fallido.
+El texto se guarda una vez por campaña. Los metadatos de imágenes se guardan en el snapshot y sus `Blob` compartidos en IndexedDB; nunca se copian por destinatario.
 
-## Resultados ambiguos
+Claves principales de `chrome.storage.local`:
 
-Si se accionó enviar pero la verificación no concluyó, el paso pasa a `verification_pending`. La próxima reanudación ejecuta primero una reconciliación DOM:
+- `extensionState`: vista global para popup y compatibilidad técnica;
+- `activeCampaign`: fuente persistente del scheduler;
+- `activeContactCheckpoint`: unidad atómica activa;
+- `campaignDailyLimit`: contador diario idempotente;
+- `campaignPublicEvent`: último evento saneado para la Web-App.
 
-- nuevo saliente coincidente: confirma y continúa;
-- composer o preview todavía preparado: clasifica `not_sent` y permite un nuevo intento;
-- evidencia insuficiente: mantiene la pausa sin duplicar.
+## Scheduler, tandas y Manifest V3
 
-## Persistencia y terminación de Manifest V3
+La política tipada está centralizada en `campaign-policy.ts`. Después de un contacto completado, el motor persiste `wait.until` y usa un `chrome.alarms` con nombre ligado a la campaña. El timeout no vive solo en memoria, así que un Service Worker suspendido puede despertar y continuar desde la frontera persistida.
 
-El checkpoint guarda campaña, contacto, pasos, intentos, verificaciones, error, paso actual e historial técnico acotado. Al iniciar, el Service Worker lo rehidrata. Cualquier paso encontrado `in_progress` se transforma en `verification_pending`; así una terminación entre clic y confirmación no provoca un reenvío ciego.
+La alarma no evita suspensión del equipo ni mantiene Chrome abierto. No se ejecuta un bucle infinito y no se inicia una campaña al rehidratarla. Solo una espera ya programada puede reprogramarse automáticamente; un contacto incierto queda pausado.
 
-Las imágenes permanecen en IndexedDB mientras exista la campaña. Si falta un `Blob`, el paso pasa a `images_required` y el usuario puede re-seleccionar el archivo original sin perder el checkpoint.
+## Límite diario
+
+`DailyLimitStore` es la fuente de verdad. Un destinatario se cuenta después de que `ContactEngine` retorna `completed`, con clave idempotente `campaignId:recipientId`. El límite se evalúa antes del siguiente contacto; nunca corta el activo.
+
+La fecha usa el calendario local. Cada acción y consulta refresca el contador. Si la fecha cambió, se crea un estado diario nuevo aunque Chrome haya permanecido cerrado durante la medianoche.
+
+## Rehidratación y WhatsApp no disponible
+
+Al iniciar el Service Worker se cargan campaña, contador y checkpoint. Se reutiliza `markInterruptedCheckpointAmbiguous`: un step con envío intentado queda en verificación pendiente y uno anterior al click puede volver a `pending`.
+
+Las causas recuperables se distinguen como `whatsapp_reloading`, `whatsapp_tab_closed`, `whatsapp_session_closed`, `contact_ambiguous` e `images_required`. Todas bloquean el siguiente contacto. Reanudar requiere preflight y conserva el índice real.
 
 ## Contrato Web-App
 
-El canal `flor_mia_whatsapp_extension`, versión `1`, valida origen, remitente, tipo y payload. En esta etapa `CAMPAIGN_PREPARE` valida y guarda texto, destinatarios e imágenes, pero no recorre la lista. El motor probado de un contacto es la base reutilizable que el Prompt 3 conectará al scheduler multi-contacto.
+Canal `flor_mia_whatsapp_extension`, protocolo versión `1`, con `requestId`/`replyTo`, `campaignId` y `sequence` cuando aplica.
 
-## Seguridad y privacidad
+Solicitudes: `FLORMIA_CAMPAIGN_PREPARE`, `FLORMIA_CAMPAIGN_START`, `FLORMIA_CAMPAIGN_PAUSE`, `FLORMIA_CAMPAIGN_RESUME`, `FLORMIA_CAMPAIGN_STOP` y `FLORMIA_CAMPAIGN_STATUS_REQUEST`.
+
+Eventos/respuestas: accepted, started, progress, paused, completed, error y cancelled. El bridge rechaza controles cuyo `campaignId` no coincide con la campaña activa y solo publica estado saneado, sin texto ni teléfono completo.
+
+## Seguridad
 
 - sin cookies, credenciales, QR ni tokens;
-- sin coordenadas, Selenium, Playwright o automatización del sistema operativo en el producto;
-- sin `<all_urls>`;
-- teléfonos enmascarados y textos omitidos de logs técnicos;
-- identificadores estables para correlación, sin contenido privado;
-- ninguna ejecución automática al cargar una página.
+- sin generación o scraping de destinatarios;
+- sin `<all_urls>` ni permisos innecesarios;
+- sin automatización del sistema operativo o coordenadas;
+- sin técnicas anti-detección o evasión;
+- logs técnicos sin texto completo ni teléfono completo.

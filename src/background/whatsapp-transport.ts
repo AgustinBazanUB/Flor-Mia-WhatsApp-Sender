@@ -30,7 +30,17 @@ export class WhatsAppTransport {
   ): Promise<InternalResponseMap[T]> {
     const targetTabId = tabId ?? (await this.requireTab()).id;
     const request = createInternalRequest("service-worker", type, payload);
-    const response = await chrome.tabs.sendMessage(targetTabId, request) as InternalResponse<InternalResponseMap[T]> | undefined;
+    let response: InternalResponse<InternalResponseMap[T]> | undefined;
+    try {
+      response = await chrome.tabs.sendMessage(targetTabId, request) as InternalResponse<InternalResponseMap[T]> | undefined;
+    } catch (error) {
+      const tab = await this.findTab();
+      throw new ExtensionError(
+        tab ? ERROR_CODES.interfaceLoading : ERROR_CODES.whatsappNotOpen,
+        tab ? "WhatsApp Web se está recargando o su Content Script todavía no responde." : "La pestaña de WhatsApp Web fue cerrada.",
+        { cause: error }
+      );
+    }
     if (!response?.ok || response.data === undefined) {
       throw new ExtensionError(
         isExtensionErrorCode(response?.error?.code) ? response.error.code : ERROR_CODES.internal,

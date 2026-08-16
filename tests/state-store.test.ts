@@ -13,8 +13,14 @@ describe("state storage", () => {
     expect(state.status).toBe("idle");
     expect(state.currentCampaign).toBeNull();
     expect(state.lastCheckpoint).toBeNull();
-    expect(state.schemaVersion).toBe(2);
+    expect(state.schemaVersion).toBe(3);
     expect(state.config.retryPolicy.maxAttemptsPerStep).toBe(3);
+    expect(state.config.campaignPolicy).toMatchObject({
+      contactsPerBatch: 3,
+      delayBetweenBatchesMs: 15_000,
+      dailyContactLimit: 1_000
+    });
+    expect(state.dailyLimit).toMatchObject({ completedToday: 0, limit: 1_000, remaining: 1_000 });
     expect(state.config.webAppOrigins).toContain("https://app-integral-fm.netlify.app");
   });
 
@@ -28,9 +34,10 @@ describe("state storage", () => {
       }
     };
     const state = await new StateStore(storage).load();
-    expect(state.schemaVersion).toBe(2);
+    expect(state.schemaVersion).toBe(3);
     expect(state.config.diagnosticTimeoutMs).toBe(2_000);
     expect(state.config.retryPolicy.timeouts.previewMs).toBeGreaterThan(0);
+    expect(state.config.campaignPolicy.whatsappLoadWaitMs).toBe(30_000);
   });
 
   it("persists transitions and limits operation history", async () => {
