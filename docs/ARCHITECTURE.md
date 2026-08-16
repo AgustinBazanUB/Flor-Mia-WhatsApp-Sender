@@ -10,8 +10,9 @@
 - `src/content/whatsapp.ts`: frontera interna de diagnóstico, navegación, envío y reconciliación.
 - `src/content/web-app-bridge.ts`: puente seguro `window.postMessage` ↔ runtime para orígenes permitidos.
 - `src/compatibility/`: requirements contextuales, fingerprints funcionales, Last Known Good, clasificación drift/break y errores técnicos saneados.
+- `src/diagnostics/`: incidente estructurado, taxonomía, sanitización, entorno, reporte `TechnicalReportV1`, texto de reparación y página local de exportación.
 - `src/whatsapp/`: interacción semántica con el DOM, sin coordenadas, mouse ni teclado físico.
-- `src/storage/`: estado/checkpoint/compatibilidad en `chrome.storage.local` y blobs temporales en IndexedDB.
+- `src/storage/`: estado/checkpoint/compatibilidad/trazas acotadas en `chrome.storage.local` y blobs temporales en IndexedDB.
 - `src/popup/`: cliente de estado y control; no coordina la ejecución.
 
 ## Separación CampaignEngine / ContactEngine
@@ -57,7 +58,27 @@ Claves principales de `chrome.storage.local`:
 - `activeContactCheckpoint`: unidad atómica activa;
 - `campaignDailyLimit`: contador diario idempotente;
 - `campaignPublicEvent`: último evento saneado para la Web-App.
-- `whatsappCompatibilityState`: semáforo, último preflight, Last Known Good, drift y último fallo técnico saneado.
+- `whatsappCompatibilityState`: semáforo, último preflight, Last Known Good, drift y último fallo técnico saneado;
+- `technicalTraceState`: ring buffer técnico, máximo 500 registros por campaña y 1.000 globales; no contiene mensajes, binarios ni teléfonos completos.
+
+El schema de `extensionState` es `5`. La carga fusiona valores anteriores con defaults actuales, conservando la campaña/checkpoint en sus stores dedicados y agregando `diagnosticIncident` y `serviceWorkerRecovery` como campos migrables.
+
+## Diagnóstico y reporte para reparación
+
+`DiagnosticIncident` se deriva del estado real de campaña, checkpoint y compatibilidad. No mantiene una copia manual del step: usa `currentStepId`, intentos, verificación y `lastConfirmedStepId` persistidos. La taxonomía mapea el código original a una categoría de diagnóstico (`WHATSAPP_UI_CHANGED`, `AMBIGUOUS_SEND_RESULT`, `CONNECTION_ERROR`, etc.) sin reemplazar `ERROR_CODES`.
+
+El Service Worker es la frontera de captura y exportación. La página `diagnostics/report.html` es solo un cliente interno: solicita el reporte, alterna Texto/JSON y copia por `navigator.clipboard` después de un clic. No coordina la campaña y cerrar esa página o el popup no altera la ejecución.
+
+`TechnicalReportV1` combina únicamente evidencia disponible:
+
+- incidente, progreso y límite diario saneados;
+- checkpoint sin texto, `phoneDigits` ni metadata privada innecesaria;
+- preflight, strategies, Last Known Good, current discovery, candidates, drift y breaks;
+- conexión local, URL de WhatsApp reducida a origin/path y versión de Chrome reducida a `Chrome/<versión>`;
+- últimas operaciones, trazas acotadas y recuperación del Service Worker;
+- archivos probables y restricciones explícitas que preservan atomicidad, verificación, checkpoints y prevención de duplicados.
+
+La sanitización es defensa en profundidad y se vuelve a aplicar al construir el reporte. Nombres DOM accidentales, query params, rutas locales, teléfonos, campos sensibles camelCase, data URLs y base64 quedan eliminados o redactados. El nombre de campaña solo aparece con opt-in; la lista de destinatarios y el mensaje completo nunca se exportan.
 
 ## Scheduler, tandas y Manifest V3
 

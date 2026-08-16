@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reporte para Codex · Flor Mía</title>
+    <link rel="stylesheet" href="./report.css" />
+  </head>
+  <body>
+    <main class="report-shell">
+      <header class="report-header">
+        <div>
+          <span class="eyebrow">Diagnóstico local</span>
+          <h1>Reporte para Codex</h1>
+          <p>Texto legible y JSON técnico saneado. Ningún dato se envía automáticamente.</p>
+        </div>
+        <span id="report-status" class="status">Generando…</span>
+      </header>
+
+      <section id="incident-summary" class="summary" hidden>
+        <div><span>Categoría</span><strong id="summary-category">—</strong></div>
+        <div><span>Capability</span><strong id="summary-capability">—</strong></div>
+        <div><span>Paso</span><strong id="summary-step">—</strong></div>
+        <div><span>Contacto</span><strong id="summary-contact">—</strong></div>
+      </section>
+
+      <label class="privacy-option">
+        <input id="include-campaign-name" type="checkbox" />
+        Incluir el nombre de la campaña en el reporte
+      </label>
+
+      <nav class="tabs" aria-label="Formato del reporte">
+        <button id="tab-text" class="tab is-active" type="button" aria-selected="true">Texto</button>
+        <button id="tab-json" class="tab" type="button" aria-selected="false">JSON</button>
+      </nav>
+
+      <section id="panel-text" class="panel">
+        <div class="panel-heading">
+          <h2>Texto legible</h2>
+          <button id="copy-text" type="button">Copiar texto</button>
+        </div>
+        <pre id="report-text">Generando reporte…</pre>
+      </section>
+
+      <section id="panel-json" class="panel" hidden>
+        <div class="panel-heading">
+          <h2>JSON técnico</h2>
+          <button id="copy-json" type="button">Copiar JSON</button>
+        </div>
+        <pre id="report-json">{}</pre>
+      </section>
+
+      <p class="privacy-note">Se excluyen destinatarios completos, teléfonos, texto de campaña, chats, HTML, cookies, tokens, QR e imágenes/base64.</p>
+      <p id="report-error" class="error" role="alert" hidden></p>
+      <p id="copy-feedback" class="feedback" aria-live="polite"></p>
+    </main>
+    <script type="module" src="./report.js"></script>
+  </body>
+</html>

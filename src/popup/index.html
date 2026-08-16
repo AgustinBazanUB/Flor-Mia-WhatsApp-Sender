@@ -78,6 +78,30 @@
         </div>
       </section>
 
+      <section id="incident-card" class="card incident-card" aria-live="polite" hidden>
+        <div class="incident-heading">
+          <div>
+            <span class="eyebrow">Incidente técnico</span>
+            <h2 id="incident-title">ERROR</h2>
+          </div>
+          <strong id="incident-category" class="incident-category">—</strong>
+        </div>
+        <dl class="incident-grid">
+          <div><dt>Campaña</dt><dd id="incident-campaign">—</dd></div>
+          <div><dt>Contacto</dt><dd id="incident-contact">—</dd></div>
+          <div><dt>Contacto técnico</dt><dd id="incident-recipient-id">—</dd></div>
+          <div><dt>Teléfono</dt><dd id="incident-phone">—</dd></div>
+          <div><dt>Paso</dt><dd id="incident-step">—</dd></div>
+          <div><dt>Intentos</dt><dd id="incident-attempts">—</dd></div>
+          <div><dt>Último confirmado</dt><dd id="incident-last-confirmed">—</dd></div>
+          <div><dt>Semáforo</dt><dd id="incident-overall">—</dd></div>
+          <div class="incident-grid__wide"><dt>Capability</dt><dd id="incident-capability">—</dd></div>
+          <div class="incident-grid__wide"><dt>Resultado</dt><dd id="incident-result">—</dd></div>
+        </dl>
+        <button id="generate-report" class="button button--danger button--wide" type="button">Generar reporte para Codex</button>
+        <small>El reporte se genera y se sanea localmente. No se envía automáticamente.</small>
+      </section>
+
       <section class="card">
         <div class="section-heading">
           <span class="eyebrow">Modo manual</span>

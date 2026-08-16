@@ -21,9 +21,12 @@ webAppScript.matches = webAppMatches;
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(resolve(dist, "popup"), { recursive: true });
+await mkdir(resolve(dist, "diagnostics"), { recursive: true });
 await writeFile(resolve(dist, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 await cp(resolve(root, "src/popup/index.html"), resolve(dist, "popup/index.html"));
 await cp(resolve(root, "src/popup/popup.css"), resolve(dist, "popup/popup.css"));
+await cp(resolve(root, "src/diagnostics/report.html"), resolve(dist, "diagnostics/report.html"));
+await cp(resolve(root, "src/diagnostics/report.css"), resolve(dist, "diagnostics/report.css"));
 
 const builds = [
   {
@@ -44,6 +47,11 @@ const builds = [
   {
     entryPoints: [resolve(root, "src/popup/popup.ts")],
     outfile: resolve(dist, "popup/popup.js"),
+    format: "esm"
+  },
+  {
+    entryPoints: [resolve(root, "src/diagnostics/report.ts")],
+    outfile: resolve(dist, "diagnostics/report.js"),
     format: "esm"
   }
 ];

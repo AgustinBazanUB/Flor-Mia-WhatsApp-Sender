@@ -11,6 +11,7 @@ import type {
   CompatibilityState,
   WhatsAppPreflightRequest
 } from "../compatibility/types";
+import type { DiagnosticReportBundle } from "../diagnostics/types";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -20,6 +21,7 @@ export const INTERNAL_MESSAGE_TYPES = {
   getState: "GET_EXTENSION_STATE",
   runPreflight: "RUN_WHATSAPP_PREFLIGHT",
   setCompatibilityDevelopmentFault: "SET_COMPATIBILITY_DEVELOPMENT_FAULT",
+  generateDiagnosticReport: "GENERATE_DIAGNOSTIC_REPORT",
   sendTestText: "SEND_TEST_TEXT",
   processTestContact: "PROCESS_TEST_CONTACT",
   resumeContactProcess: "RESUME_CONTACT_PROCESS",
@@ -42,12 +44,13 @@ export const INTERNAL_MESSAGE_TYPES = {
 } as const;
 
 export type InternalMessageType = (typeof INTERNAL_MESSAGE_TYPES)[keyof typeof INTERNAL_MESSAGE_TYPES];
-export type InternalSource = "popup" | "service-worker" | "whatsapp-content" | "web-app-bridge";
+export type InternalSource = "popup" | "diagnostics-page" | "service-worker" | "whatsapp-content" | "web-app-bridge";
 
 export interface InternalRequestMap {
   GET_EXTENSION_STATE: Record<string, never>;
   RUN_WHATSAPP_PREFLIGHT: { developmentFault?: CompatibilityDevelopmentFault };
   SET_COMPATIBILITY_DEVELOPMENT_FAULT: { fault: CompatibilityDevelopmentFault };
+  GENERATE_DIAGNOSTIC_REPORT: { includeCampaignName?: boolean };
   SEND_TEST_TEXT: { phone: string; message: string };
   PROCESS_TEST_CONTACT: { phone: string; message: string; images: SerializedCampaignImage[]; faultInjection?: DevelopmentFault };
   RESUME_CONTACT_PROCESS: Record<string, never>;
@@ -73,6 +76,7 @@ export interface InternalResponseMap {
   GET_EXTENSION_STATE: ExtensionState;
   RUN_WHATSAPP_PREFLIGHT: WhatsAppPreflightResult;
   SET_COMPATIBILITY_DEVELOPMENT_FAULT: CompatibilityState;
+  GENERATE_DIAGNOSTIC_REPORT: DiagnosticReportBundle;
   SEND_TEST_TEXT: TextTestResult;
   PROCESS_TEST_CONTACT: ContactProcessCheckpoint;
   RESUME_CONTACT_PROCESS: ContactProcessCheckpoint;
@@ -130,7 +134,7 @@ export function isInternalEnvelope(value: unknown): value is InternalEnvelope {
   return value.channel === INTERNAL_CHANNEL
     && value.protocolVersion === PROTOCOL_VERSION
     && typeof value.requestId === "string"
-    && ["popup", "service-worker", "whatsapp-content", "web-app-bridge"].includes(String(value.source))
+    && ["popup", "diagnostics-page", "service-worker", "whatsapp-content", "web-app-bridge"].includes(String(value.source))
     && typeof value.type === "string"
     && internalTypes.has(value.type)
     && isRecord(value.payload);

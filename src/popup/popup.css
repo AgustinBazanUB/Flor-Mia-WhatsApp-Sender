@@ -83,3 +83,14 @@ form small, #character-count { color: #81796b; font-size: 10px; }
 .capability-list li { margin-bottom: 4px; }
 .compatibility-harness { display: grid; gap: 7px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6ebe8; }
 .compatibility-harness small { color: #81796b; font-size: 10px; }
+.incident-card { display: grid; gap: 12px; border-color: #e5b6b0; background: #fffaf9; }
+.incident-card[hidden] { display: none; }
+.incident-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.incident-heading h2 { margin: 0; color: var(--error); font: 700 18px/1.2 Georgia, serif; }
+.incident-category { max-width: 220px; padding: 5px 8px; border-radius: 999px; color: var(--error); background: var(--error-soft); font-size: 9px; overflow-wrap: anywhere; }
+.incident-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 0; }
+.incident-grid div { min-width: 0; padding: 9px 10px; border-radius: 10px; background: #f9efed; }
+.incident-grid__wide { grid-column: 1 / -1; }
+.incident-grid dt { color: #826d68; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
+.incident-grid dd { margin: 3px 0 0; color: #493c39; font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+.incident-card > small { color: #81796b; font-size: 10px; text-align: center; }

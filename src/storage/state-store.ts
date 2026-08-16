@@ -28,7 +28,7 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
   const date = new Date(now);
   const localDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     status: "idle",
     currentCampaign: null,
     progress: { total: 0, sent: 0, failed: 0 },
@@ -58,6 +58,8 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
       updatedAt: now
     },
     compatibility: createDefaultCompatibilityState(now),
+    diagnosticIncident: null,
+    serviceWorkerRecovery: null,
     operations: [],
     updatedAt: now
   };

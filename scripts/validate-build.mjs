@@ -8,7 +8,10 @@ const required = [
   "content/web-app-bridge.js",
   "popup/index.html",
   "popup/popup.js",
-  "popup/popup.css"
+  "popup/popup.css",
+  "diagnostics/report.html",
+  "diagnostics/report.js",
+  "diagnostics/report.css"
 ];
 
 for (const path of required) await access(resolve("dist", path));

@@ -1,6 +1,6 @@
-# Diagnóstico de compatibilidad
+# Diagnóstico, trazas y reporte de reparación
 
-La versión 0.4.0 comprueba capacidades funcionales de WhatsApp Web en lugar de asumir que un selector aislado seguirá existiendo. Su objetivo es detener una campaña de manera segura y explicar la capability afectada; no intenta ocultar la automatización ni anticipar todas las interfaces futuras.
+La versión 0.5.0 comprueba capacidades funcionales de WhatsApp Web, deriva incidentes específicos y permite producir localmente un reporte saneado para Codex. Su objetivo es detener una campaña de manera segura, conservar evidencia útil y explicar la capability afectada; no intenta ocultar la automatización ni anticipar todas las interfaces futuras.
 
 ## Capabilities
 
@@ -26,7 +26,7 @@ Las capabilities multimedia no bloquean una campaña solo de texto. Para una cam
 
 - **Full preflight:** se ejecuta antes de iniciar o reanudar. Abre el destinatario explícito sin enviar, obtiene el contexto real del composer y, si corresponde, prepara/cierra un preview con el blob de la campaña sin accionar envío.
 - **Lightweight health check:** se ejecuta en fronteras entre contactos. Comprueba salud y estrategias observables sin crear un preview ni repetir pruebas pesadas.
-- **Targeted diagnostic:** la estructura permite profundizar una capability después de que una operación real falla; el reporte/exportación final se completa en el Prompt 5.
+- **Targeted diagnostic:** permite profundizar una capability después de que una operación real falla y alimentar el reporte estructurado.
 
 ## Last Known Good
 
@@ -59,6 +59,24 @@ Los códigos específicos son `CAPABILITY_UNAVAILABLE`, `WHATSAPP_UI_CHANGED`, `
 
 No existe un segundo retry a nivel campaña. La reconciliación y los reintentos de steps siguen perteneciendo exclusivamente al `ContactEngine`.
 
+## DiagnosticIncident y taxonomía
+
+Cuando campaña, contacto o preflight quedan en una condición relevante, `DiagnosticIncident` registra IDs internos, posición, teléfono enmascarado, step, orden de imagen, intentos, acción, último step confirmado, semáforo, capability y error saneado. Se deriva de stores existentes; no crea un segundo checkpoint.
+
+La categoría se obtiene en `diagnostics/taxonomy.ts` y conserva el código original. Distingue `EXTENSION_ERROR`, `TEMPORARY_WHATSAPP_ERROR`, `CONNECTION_ERROR`, `CONTACT_ERROR`, `AUTH_ERROR`, `WHATSAPP_UI_CHANGED`, `AMBIGUOUS_SEND_RESULT`, `RESOURCE_ERROR`, `DAILY_LIMIT`, `USER_PAUSE` y `USER_STOP`.
+
+## TechnicalTraceStore
+
+La traza se guarda en `chrome.storage.local` separada de los blobs. Cada registro contiene tiempos, campaña/contacto/step, intento, acción, resultado, código/categoría, método de verificación, capability, estrategia y duración. La política conserva como máximo 500 registros por campaña y 1.000 globales, deduplica por `traceId` y elimina los más antiguos. Puede limpiar una campaña explícitamente.
+
+Los records del `ContactEngine` se derivan de `checkpoint.history`; no se agrega un segundo sistema de reintentos ni se interceptan clicks.
+
+## TechnicalReportV1
+
+El reporte combina `DiagnosticIncident`, campaña/checkpoint saneados, entorno, preflight, compatibilidad, Last Known Good, current discovery, candidates, drift/break, límite diario, operaciones recientes, trace y recuperación del Service Worker. Usa `reportSchemaVersion: 1`, keys técnicas en inglés y `null` cuando no existe evidencia.
+
+El formato Texto es un prompt de reparación en español. Incluye archivos probables y prohíbe eliminar verificaciones, saltar checkpoints, usar coordenadas o introducir evasión. El JSON se entrega por separado en la misma página interna.
+
 ## Evidencia y privacidad
 
 No se almacena HTML completo, texto de conversaciones, contenido de mensajes, nombres detectados en el DOM, cookies, QR, tokens ni teléfonos completos dentro del diagnóstico de compatibilidad.
@@ -71,7 +89,9 @@ Un candidato se limita a:
 - `data-testid`, `data-icon`, `type` y `contenteditable`;
 - una jerarquía corta basada únicamente en tags y atributos técnicos.
 
-Los valores con forma de teléfono se reemplazan por `[redacted]`. El contexto de campaña usa el número ya enmascarado. La cantidad y longitud de candidatos también están acotadas.
+Los valores con forma de teléfono se reemplazan por `[REDACTED_PHONE]`. El contexto de campaña usa el número ya enmascarado. La cantidad y longitud de candidatos también están acotadas. La URL de WhatsApp pierde query/hash, el stack normaliza rutas locales y los campos sensibles —incluidos nombres camelCase como `accessToken` o `dataBase64`— quedan redactados.
+
+Por defecto se excluyen la lista de destinatarios, teléfonos completos, mensaje, conversaciones, nombres detectados, HTML, storage de WhatsApp, cookies, tokens, credenciales, QR y binarios/base64. El nombre de campaña es opt-in. Copiar requiere un gesto del usuario y no se solicita permiso global `clipboardWrite`; nada se transmite automáticamente.
 
 ## Arnés de desarrollo
 
@@ -83,4 +103,4 @@ El popup puede simular:
 
 La orden usa el protocolo interno con validación del origen `chrome-extension://.../popup/`. No existe un mensaje Web-App equivalente y el bridge productivo no puede activar la inyección.
 
-La infraestructura de esta versión conserva evidencia estructurada y saneada. La exportación JSON y el texto final orientado a reparación pertenecen al Prompt 5.
+La página interna `diagnostics/report.html` ofrece pestañas Texto/JSON y copia local. Su lectura no inicia, pausa, reanuda ni detiene campañas.

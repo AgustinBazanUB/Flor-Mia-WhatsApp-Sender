@@ -65,4 +65,15 @@ describe("typed protocol", () => {
     expect(isInternalEnvelope(internal)).toBe(true);
     expect(Object.values(WEB_APP_MESSAGE_TYPES)).not.toContain(INTERNAL_MESSAGE_TYPES.setCompatibilityDevelopmentFault);
   });
+
+  it("accepts diagnostic report requests only as typed internal messages", () => {
+    const request = createInternalRequest(
+      "diagnostics-page",
+      INTERNAL_MESSAGE_TYPES.generateDiagnosticReport,
+      { includeCampaignName: false },
+      "diagnostic-report-1"
+    );
+    expect(isInternalEnvelope(request)).toBe(true);
+    expect(Object.values(WEB_APP_MESSAGE_TYPES)).not.toContain(INTERNAL_MESSAGE_TYPES.generateDiagnosticReport);
+  });
 });

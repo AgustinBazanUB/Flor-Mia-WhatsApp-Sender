@@ -11,6 +11,7 @@ import type {
   PreflightLevel,
   WhatsAppCapability
 } from "../compatibility/types";
+import type { DiagnosticIncident, ServiceWorkerRecoveryInfo } from "../diagnostics/types";
 
 export const EXTENSION_STATES = ["idle", "preflight", "ready", "running", "pausing", "paused", "error", "completed"] as const;
 export type ExtensionStatus = (typeof EXTENSION_STATES)[number];
@@ -98,7 +99,7 @@ export interface ExtensionConfig {
 }
 
 export interface ExtensionState {
-  schemaVersion: 4;
+  schemaVersion: 5;
   status: ExtensionStatus;
   currentCampaign: CampaignSnapshot | null;
   progress: { total: number; sent: number; failed: number };
@@ -115,6 +116,8 @@ export interface ExtensionState {
   activeCampaign: CampaignState | null;
   dailyLimit: DailyLimitState;
   compatibility: CompatibilityState;
+  diagnosticIncident: DiagnosticIncident | null;
+  serviceWorkerRecovery: ServiceWorkerRecoveryInfo | null;
   operations: OperationRecord[];
   updatedAt: string;
 }

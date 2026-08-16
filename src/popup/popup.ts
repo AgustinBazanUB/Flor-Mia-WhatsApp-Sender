@@ -4,6 +4,7 @@ import { INTERNAL_MESSAGE_TYPES, sendRuntimeRequest } from "../shared/protocol";
 import { arrayBufferToBase64, type SerializedCampaignImage } from "../shared/serialization";
 import type { ExtensionState, TextTestResult, WhatsAppPreflightResult } from "../shared/state";
 import type { CompatibilityDevelopmentFault, CompatibilityState } from "../compatibility/types";
+import type { DiagnosticIncident } from "../diagnostics/types";
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -52,6 +53,20 @@ const campaignStart = element<HTMLButtonElement>("campaign-start");
 const campaignPause = element<HTMLButtonElement>("campaign-pause");
 const campaignResume = element<HTMLButtonElement>("campaign-resume");
 const campaignStop = element<HTMLButtonElement>("campaign-stop");
+const incidentCard = element("incident-card");
+const incidentTitle = element("incident-title");
+const incidentCategory = element("incident-category");
+const incidentCampaign = element("incident-campaign");
+const incidentContact = element("incident-contact");
+const incidentRecipientId = element("incident-recipient-id");
+const incidentPhone = element("incident-phone");
+const incidentStep = element("incident-step");
+const incidentAttempts = element("incident-attempts");
+const incidentLastConfirmed = element("incident-last-confirmed");
+const incidentOverall = element("incident-overall");
+const incidentCapability = element("incident-capability");
+const incidentResult = element("incident-result");
+const generateReport = element<HTMLButtonElement>("generate-report");
 
 let currentState: ExtensionState | null = null;
 
@@ -263,10 +278,38 @@ function renderCampaign(state: ExtensionState): void {
   campaignStop.disabled = terminal;
 }
 
+function renderIncident(incident: DiagnosticIncident | null, activeCampaignName: string | null): void {
+  incidentCard.hidden = !incident;
+  if (!incident) return;
+  incidentTitle.textContent = incident.disposition === "error"
+    ? "ERROR"
+    : incident.disposition === "stopped"
+      ? "DETENIDA"
+      : incident.disposition === "blocked"
+        ? "BLOQUEADA"
+        : "PAUSA";
+  incidentCategory.textContent = incident.errorCategory ?? "SIN_CLASIFICAR";
+  incidentCampaign.textContent = activeCampaignName ?? incident.campaignName ?? incident.campaignId ?? "No disponible";
+  incidentContact.textContent = incident.recipientPosition && incident.totalRecipients
+    ? `${incident.recipientPosition} / ${incident.totalRecipients}`
+    : "No disponible";
+  incidentRecipientId.textContent = incident.recipientInternalId ?? "No disponible";
+  incidentPhone.textContent = incident.maskedPhone ?? "No disponible";
+  incidentStep.textContent = incident.stepId
+    ? `${incident.stepId}${incident.imageOrder ? ` · Imagen ${incident.imageOrder}` : ""}`
+    : incident.actionAttempted ?? "No disponible";
+  incidentAttempts.textContent = incident.attempts === null ? "No disponible" : String(incident.attempts);
+  incidentLastConfirmed.textContent = incident.lastConfirmedStepId ?? "Ninguno confirmado";
+  incidentOverall.textContent = incident.overallStatus === "GREEN" ? "🟢 VERDE" : "🔴 ROJO";
+  incidentCapability.textContent = incident.capability ?? "No disponible";
+  incidentResult.textContent = incident.resultSummary;
+}
+
 function renderState(state: ExtensionState): void {
   currentState = state;
   renderPreflight(state.whatsapp, state.compatibility, state.statusMessage);
   renderCampaign(state);
+  renderIncident(state.diagnosticIncident, state.activeCampaign?.campaignName ?? null);
   renderResult(state.lastTestResult);
   const managedByCampaign = Boolean(state.activeCampaign
     && state.activeContactProcess?.campaignId === state.activeCampaign.campaignId
@@ -446,6 +489,11 @@ campaignStop.addEventListener("click", () => {
   void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignStop, { campaignId: activeCampaignId() })
     .then(() => refreshState()).catch(showError)
     .finally(() => setBusy(campaignStop, false, "Deteniendo…", "Detener"));
+});
+
+generateReport.addEventListener("click", () => {
+  clearError();
+  void chrome.tabs.create({ url: chrome.runtime.getURL("diagnostics/report.html") }).catch(showError);
 });
 
 chrome.storage.onChanged.addListener((_changes, areaName) => {

@@ -1,3 +1,5 @@
+import { sanitizeStackTrace } from "../diagnostics/sanitizer";
+
 export const ERROR_CODES = {
   whatsappNotOpen: "WHATSAPP_NOT_OPEN",
   sessionNotReady: "SESSION_NOT_READY",
@@ -52,6 +54,7 @@ export interface SerializedExtensionError {
   message: string;
   recoverable: boolean;
   details?: Record<string, unknown>;
+  stack?: string;
 }
 
 export function toExtensionError(error: unknown, fallbackCode: ExtensionErrorCode = ERROR_CODES.internal): ExtensionError {
@@ -61,10 +64,12 @@ export function toExtensionError(error: unknown, fallbackCode: ExtensionErrorCod
 
 export function serializeError(error: unknown): SerializedExtensionError {
   const normalized = toExtensionError(error);
+  const stack = sanitizeStackTrace(normalized.stack);
   return {
     code: normalized.code,
     message: normalized.message,
     recoverable: normalized.recoverable,
-    ...(normalized.details ? { details: normalized.details } : {})
+    ...(normalized.details ? { details: normalized.details } : {}),
+    ...(stack ? { stack } : {})
   };
 }

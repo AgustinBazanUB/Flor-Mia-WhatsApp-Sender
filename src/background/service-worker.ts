@@ -24,6 +24,7 @@ import { ChromeWhatsAppContactAdapter } from "./contact-adapter";
 import { WhatsAppTransport } from "./whatsapp-transport";
 import { CampaignRuntime } from "./campaign-runtime";
 import { campaignIdFromAlarm } from "../campaign/scheduler";
+import type { CampaignPublicStatus, CampaignState } from "../campaign/campaign-types";
 import { CompatibilityStore } from "../storage/compatibility-store";
 import { CompatibilityManager, applyRuntimeFailureToPreflight } from "../compatibility/manager";
 import { createUnavailablePreflight } from "../compatibility/preflight-result";
@@ -31,6 +32,12 @@ import {
   isCompatibilityDevelopmentFault,
   type WhatsAppPreflightRequest
 } from "../compatibility/types";
+import { TechnicalTraceStore } from "../storage/technical-trace-store";
+import { technicalTraceFromCheckpoint } from "../diagnostics/trace-from-checkpoint";
+import { createDiagnosticIncident } from "../diagnostics/incident";
+import { buildDiagnosticEnvironment } from "../diagnostics/environment";
+import { createDiagnosticReportBundle } from "../diagnostics/report-builder";
+import { classifyDiagnosticError } from "../diagnostics/taxonomy";
 
 const stateStore = new StateStore();
 const blobStore = new CampaignBlobStore();
@@ -39,6 +46,7 @@ const whatsappTransport = new WhatsAppTransport();
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const compatibilityStore = new CompatibilityStore();
 const compatibilityManager = new CompatibilityManager(compatibilityStore, EXTENSION_VERSION);
+const technicalTraceStore = new TechnicalTraceStore();
 const campaignRuntime = new CampaignRuntime({
   stateStore,
   blobStore,
@@ -52,6 +60,17 @@ async function initialize(): Promise<void> {
   await stateStore.patch({ compatibility: await compatibilityStore.load() });
   const campaign = await campaignRuntime.initialize();
   if (campaign) {
+    const checkpoint = await checkpointStore.loadActive();
+    await stateStore.patch({
+      serviceWorkerRecovery: {
+        recoveredAt: new Date().toISOString(),
+        campaignId: campaign.campaignId,
+        campaignStatus: campaign.status,
+        checkpointPresent: Boolean(checkpoint),
+        checkpointStatus: checkpoint?.status ?? null
+      }
+    });
+    await refreshDiagnosticIncident();
     logger.info("service_worker.initialized", {
       version: EXTENSION_VERSION,
       campaignId: campaign.campaignId,
@@ -83,11 +102,29 @@ async function initialize(): Promise<void> {
       currentStep: rehydrated.currentStepId,
       statusMessage: mustPause
         ? "Proceso recuperado. Revisá el checkpoint antes de reanudar."
-        : state.statusMessage
+        : state.statusMessage,
+      serviceWorkerRecovery: {
+        recoveredAt: new Date().toISOString(),
+        campaignId: rehydrated.campaignId,
+        campaignStatus: null,
+        checkpointPresent: true,
+        checkpointStatus: rehydrated.status
+      }
     });
   } else {
-    state = await stateStore.save({ ...state, activeContactProcess: null });
+    state = await stateStore.save({
+      ...state,
+      activeContactProcess: null,
+      serviceWorkerRecovery: {
+        recoveredAt: new Date().toISOString(),
+        campaignId: null,
+        campaignStatus: null,
+        checkpointPresent: false,
+        checkpointStatus: null
+      }
+    });
   }
+  await refreshDiagnosticIncident();
   logger.info("service_worker.initialized", { version: EXTENSION_VERSION, state: state.status, activeCheckpoint: Boolean(active) });
 }
 
@@ -104,10 +141,48 @@ async function preparePreflightState(campaignControl = false): Promise<void> {
   await stateStore.transition("preflight", { currentStep: "preflight", operational: false, statusMessage: "Comprobando WhatsApp Web…" });
 }
 
+async function recordPreflightTrace(
+  result: WhatsAppPreflightResult,
+  request: WhatsAppPreflightRequest,
+  startedAt: string
+): Promise<void> {
+  const state = await stateStore.load();
+  const failure = result.failures[0] ?? null;
+  const errorCode = result.operational
+    ? null
+    : result.qrDetected
+      ? ERROR_CODES.sessionNotReady
+      : !result.pageDetected
+        ? ERROR_CODES.whatsappNotOpen
+        : result.status === "loading"
+          ? ERROR_CODES.interfaceLoading
+          : ERROR_CODES.preflightFailed;
+  const completedAt = new Date().toISOString();
+  await technicalTraceStore.append({
+    timestampStart: startedAt,
+    timestampEnd: completedAt,
+    campaignId: state.activeCampaign?.campaignId ?? "extension",
+    contactId: state.activeContactProcess?.contact.contactId ?? null,
+    stepId: null,
+    attempt: null,
+    action: `preflight_${request.level ?? "full"}`,
+    outcome: result.operational ? "green" : result.status,
+    errorCode,
+    errorCategory: errorCode
+      ? classifyDiagnosticError({ code: errorCode }, { online: navigator.onLine })
+      : null,
+    verificationMethod: null,
+    capability: failure?.capability ?? null,
+    strategy: failure?.lastKnownWorkingStrategy ?? null,
+    durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt))
+  });
+}
+
 async function runPreflight(
   input: number | WhatsAppPreflightRequest = {},
   campaignControl = false
 ): Promise<WhatsAppPreflightResult> {
+  const traceStartedAt = new Date().toISOString();
   let request: WhatsAppPreflightRequest = typeof input === "number" ? { timeoutMs: input } : input;
   if (request.level === "lightweight" && (!request.developmentFault || request.developmentFault === "none")) {
     const developmentFault = await compatibilityStore.consumeHealthCheckFault();
@@ -119,6 +194,7 @@ async function runPreflight(
     const evaluated = await compatibilityManager.evaluate(createUnavailablePreflight("WhatsApp Web no está abierto en ninguna pestaña.", request));
     if (campaignControl) await stateStore.patch({ whatsapp: evaluated.preflight, compatibility: evaluated.state, operational: false, statusMessage: evaluated.preflight.message });
     else await stateStore.transition("error", { whatsapp: evaluated.preflight, compatibility: evaluated.state, operational: false, statusMessage: evaluated.preflight.message, currentStep: null });
+    await recordPreflightTrace(evaluated.preflight, request, traceStartedAt);
     return evaluated.preflight;
   }
   try {
@@ -135,6 +211,7 @@ async function runPreflight(
       operationId: createId("diagnostic"), kind: "diagnostic", success: result.operational,
       startedAt: result.checkedAt, completedAt: new Date().toISOString()
     });
+    await recordPreflightTrace(result, request, traceStartedAt);
     return result;
   } catch (error) {
     const normalized = toExtensionError(error, ERROR_CODES.interfaceLoading);
@@ -147,6 +224,7 @@ async function runPreflight(
     if (campaignControl) await stateStore.patch({ whatsapp: result, compatibility, operational: false, statusMessage: result.message });
     else await stateStore.transition("error", { whatsapp: result, compatibility, operational: false, statusMessage: result.message, currentStep: null });
     await stateStore.appendError({ ...serializeError(normalized), at: new Date().toISOString() });
+    await recordPreflightTrace(result, request, traceStartedAt);
     return result;
   }
 }
@@ -247,7 +325,7 @@ function statusMessageForCheckpoint(checkpoint: ContactProcessCheckpoint): strin
 }
 
 async function syncCheckpointState(checkpoint: ContactProcessCheckpoint): Promise<void> {
-  await stateStore.patch({
+  let updatedState = await stateStore.patch({
     activeContactProcess: checkpoint,
     currentStep: checkpoint.currentStepId,
     currentContact: {
@@ -267,30 +345,33 @@ async function syncCheckpointState(checkpoint: ContactProcessCheckpoint): Promis
     },
     statusMessage: statusMessageForCheckpoint(checkpoint)
   });
+  await technicalTraceStore.appendMany(technicalTraceFromCheckpoint(checkpoint, updatedState.compatibility));
   const currentStepError = checkpoint.steps.find((step) => step.id === checkpoint.currentStepId)?.error;
   const currentStep = checkpoint.steps.find((step) => step.id === checkpoint.currentStepId);
   const lastConfirmedStep = checkpoint.steps.find((step) => step.id === checkpoint.lastConfirmedStepId);
   const technicalError = checkpoint.error ?? currentStepError;
-  if (!technicalError) return;
-  const compatibilityFailure = await compatibilityManager.recordRuntimeFailure(technicalError, {
-    campaignId: checkpoint.campaignId,
-    maskedContact: checkpoint.contact.maskedPhone,
-    ...(checkpoint.currentStepId ? { stepId: checkpoint.currentStepId } : {}),
-    ...(currentStep ? { attempts: currentStep.attempts } : {}),
-    lastSuccessfulCapability: lastConfirmedStep
-      ? lastConfirmedStep.kind === "image" ? "outgoing_media_evidence" : "outgoing_text_evidence"
-      : "open_conversation"
-  });
-  if (!compatibilityFailure) return;
-  const state = await stateStore.load();
-  await stateStore.patch({
-    compatibility: compatibilityFailure.state,
-    operational: false,
-    whatsapp: state.whatsapp
-      ? applyRuntimeFailureToPreflight(state.whatsapp, compatibilityFailure.failure)
-      : state.whatsapp,
-    statusMessage: "WhatsApp Web no es compatible actualmente con una o más funciones necesarias."
-  });
+  if (technicalError) {
+    const compatibilityFailure = await compatibilityManager.recordRuntimeFailure(technicalError, {
+      campaignId: checkpoint.campaignId,
+      maskedContact: checkpoint.contact.maskedPhone,
+      ...(checkpoint.currentStepId ? { stepId: checkpoint.currentStepId } : {}),
+      ...(currentStep ? { attempts: currentStep.attempts } : {}),
+      lastSuccessfulCapability: lastConfirmedStep
+        ? lastConfirmedStep.kind === "image" ? "outgoing_media_evidence" : "outgoing_text_evidence"
+        : "open_conversation"
+    });
+    if (compatibilityFailure) {
+      updatedState = await stateStore.patch({
+        compatibility: compatibilityFailure.state,
+        operational: false,
+        whatsapp: updatedState.whatsapp
+          ? applyRuntimeFailureToPreflight(updatedState.whatsapp, compatibilityFailure.failure)
+          : updatedState.whatsapp,
+        statusMessage: "WhatsApp Web no es compatible actualmente con una o más funciones necesarias."
+      });
+    }
+  }
+  await refreshDiagnosticIncident(updatedState);
 }
 
 async function finalizeContactState(checkpoint: ContactProcessCheckpoint, startedAt: string): Promise<void> {
@@ -577,8 +658,140 @@ async function acceptCampaign(payload: SerializedCampaignPayload): Promise<Inter
 
 async function cancelCampaign(campaignId: string): Promise<InternalResponseMap["WEB_APP_CANCEL_CAMPAIGN"]> {
   if (!campaignId.trim()) throw new ExtensionError(ERROR_CODES.invalidInput, "campaignId es obligatorio.");
-  await campaignRuntime.stop(campaignId);
+  await runCampaignControl("campaign_stop", campaignId, () => campaignRuntime.stop(campaignId));
   return { campaignId, cancelledAt: new Date().toISOString() };
+}
+
+async function runCampaignControl(
+  action: "campaign_start" | "campaign_pause" | "campaign_resume" | "campaign_stop",
+  campaignId: string,
+  operation: () => Promise<CampaignPublicStatus>
+): Promise<CampaignPublicStatus> {
+  const timestampStart = new Date().toISOString();
+  try {
+    const result = await operation();
+    const timestampEnd = new Date().toISOString();
+    await technicalTraceStore.append({
+      timestampStart,
+      timestampEnd,
+      campaignId,
+      contactId: null,
+      stepId: null,
+      attempt: null,
+      action,
+      outcome: result.status,
+      errorCode: null,
+      errorCategory: action === "campaign_pause" ? "USER_PAUSE" : action === "campaign_stop" ? "USER_STOP" : null,
+      verificationMethod: "campaign-state-transition",
+      capability: null,
+      strategy: null,
+      durationMs: Math.max(0, Date.parse(timestampEnd) - Date.parse(timestampStart))
+    });
+    return result;
+  } catch (error) {
+    const normalized = serializeError(error);
+    const timestampEnd = new Date().toISOString();
+    await technicalTraceStore.append({
+      timestampStart,
+      timestampEnd,
+      campaignId,
+      contactId: null,
+      stepId: null,
+      attempt: null,
+      action,
+      outcome: "failed",
+      errorCode: normalized.code,
+      errorCategory: classifyDiagnosticError(normalized),
+      verificationMethod: "campaign-state-transition",
+      capability: null,
+      strategy: null,
+      durationMs: Math.max(0, Date.parse(timestampEnd) - Date.parse(timestampStart))
+    });
+    throw error;
+  }
+}
+
+async function refreshDiagnosticIncident(
+  providedState?: ExtensionState,
+  providedCampaign?: CampaignState | null,
+  providedCheckpoint?: ContactProcessCheckpoint | null
+): Promise<ExtensionState> {
+  const state = providedState ?? await stateStore.load();
+  const campaign = providedCampaign === undefined ? await campaignRuntime.campaignStore.loadActive() : providedCampaign;
+  const checkpoint = providedCheckpoint === undefined ? await checkpointStore.loadActive() : providedCheckpoint;
+  const incident = createDiagnosticIncident({
+    state: { ...state, activeCampaign: campaign, activeContactProcess: checkpoint },
+    campaign,
+    checkpoint,
+    compatibility: state.compatibility,
+    online: navigator.onLine,
+    includeCampaignName: false
+  });
+  if (JSON.stringify(state.diagnosticIncident) === JSON.stringify(incident)) {
+    return { ...state, activeCampaign: campaign, activeContactProcess: checkpoint };
+  }
+  const saved = await stateStore.patch({ diagnosticIncident: incident });
+  return { ...saved, activeCampaign: campaign, activeContactProcess: checkpoint };
+}
+
+async function generateDiagnosticReport(
+  payload: InternalRequestMap["GENERATE_DIAGNOSTIC_REPORT"]
+): Promise<InternalResponseMap["GENERATE_DIAGNOSTIC_REPORT"]> {
+  const state = await loadCurrentExtensionState();
+  const campaign = await campaignRuntime.campaignStore.loadActive();
+  const checkpoint = await checkpointStore.loadActive();
+  const incident = createDiagnosticIncident({
+    state,
+    campaign,
+    checkpoint,
+    compatibility: state.compatibility,
+    online: navigator.onLine,
+    includeCampaignName: payload.includeCampaignName ?? false
+  });
+  if (!incident) {
+    throw new ExtensionError(ERROR_CODES.invalidInput, "No existe un incidente técnico para generar el reporte.");
+  }
+  const generatedAt = new Date().toISOString();
+  await technicalTraceStore.append({
+    timestampStart: generatedAt,
+    timestampEnd: generatedAt,
+    campaignId: incident.campaignId ?? "extension",
+    contactId: incident.recipientInternalId,
+    stepId: incident.stepId,
+    attempt: incident.attempts,
+    action: "generate_codex_report",
+    outcome: "generated",
+    errorCode: null,
+    errorCategory: null,
+    verificationMethod: null,
+    capability: incident.capability,
+    strategy: null,
+    durationMs: 0
+  });
+  const tab = await whatsappTransport.findTab();
+  const trace = incident.campaignId
+    ? await technicalTraceStore.listCampaign(incident.campaignId, 200)
+    : await technicalTraceStore.listRecent(200);
+  return createDiagnosticReportBundle({
+    generatedAt,
+    extensionVersion: EXTENSION_VERSION,
+    manifestVersion: chrome.runtime.getManifest().manifest_version,
+    environment: buildDiagnosticEnvironment({
+      userAgent: navigator.userAgent,
+      online: navigator.onLine,
+      whatsappUrl: tab?.url ?? null,
+      preflight: state.whatsapp,
+      now: new Date(generatedAt)
+    }),
+    incident,
+    state,
+    campaign,
+    checkpoint,
+    compatibility: state.compatibility,
+    trace,
+    serviceWorkerRecovery: state.serviceWorkerRecovery,
+    includeCampaignName: payload.includeCampaignName ?? false
+  });
 }
 
 async function loadCurrentExtensionState(): Promise<ExtensionState> {
@@ -608,17 +821,19 @@ async function loadCurrentExtensionState(): Promise<ExtensionState> {
   ) {
     state = await stateStore.patch({ dailyLimit });
   }
-  return {
+  const checkpoint = await checkpointStore.loadActive();
+  return refreshDiagnosticIncident({
     ...state,
     activeCampaign: campaign,
     dailyLimit,
-    activeContactProcess: await checkpointStore.loadActive()
-  };
+    activeContactProcess: checkpoint
+  }, campaign, checkpoint);
 }
 
 function senderAllowed(request: InternalEnvelope, sender: chrome.runtime.MessageSender): boolean {
   if (sender.id !== chrome.runtime.id) return false;
   if (request.source === "popup") return sender.url?.startsWith(`chrome-extension://${chrome.runtime.id}/popup/`) === true;
+  if (request.source === "diagnostics-page") return sender.url?.startsWith(`chrome-extension://${chrome.runtime.id}/diagnostics/`) === true;
   if (request.source === "whatsapp-content") return sender.url?.startsWith("https://web.whatsapp.com/") === true;
   if (request.source === "web-app-bridge") {
     try { return Boolean(sender.url && isAllowedWebAppOrigin(new URL(sender.url).origin)); } catch { return false; }
@@ -658,6 +873,8 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
       await stateStore.patch({ compatibility });
       return compatibility;
     }
+    case INTERNAL_MESSAGE_TYPES.generateDiagnosticReport:
+      return generateDiagnosticReport(request.payload as InternalRequestMap["GENERATE_DIAGNOSTIC_REPORT"]);
     case INTERNAL_MESSAGE_TYPES.sendTestText:
       return sendTestText(request.payload as InternalRequestMap["SEND_TEST_TEXT"]);
     case INTERNAL_MESSAGE_TYPES.processTestContact:
@@ -667,13 +884,17 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
     case INTERNAL_MESSAGE_TYPES.reselectContactImages:
       return reselectContactImages(request.payload as InternalRequestMap["RESELECT_CONTACT_IMAGES"]);
     case INTERNAL_MESSAGE_TYPES.campaignStart:
-      return campaignRuntime.start((request.payload as InternalRequestMap["CAMPAIGN_START"]).campaignId);
+      return runCampaignControl("campaign_start", (request.payload as InternalRequestMap["CAMPAIGN_START"]).campaignId, () =>
+        campaignRuntime.start((request.payload as InternalRequestMap["CAMPAIGN_START"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignPause:
-      return campaignRuntime.pause((request.payload as InternalRequestMap["CAMPAIGN_PAUSE"]).campaignId);
+      return runCampaignControl("campaign_pause", (request.payload as InternalRequestMap["CAMPAIGN_PAUSE"]).campaignId, () =>
+        campaignRuntime.pause((request.payload as InternalRequestMap["CAMPAIGN_PAUSE"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignResume:
-      return campaignRuntime.resume((request.payload as InternalRequestMap["CAMPAIGN_RESUME"]).campaignId);
+      return runCampaignControl("campaign_resume", (request.payload as InternalRequestMap["CAMPAIGN_RESUME"]).campaignId, () =>
+        campaignRuntime.resume((request.payload as InternalRequestMap["CAMPAIGN_RESUME"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignStop:
-      return campaignRuntime.stop((request.payload as InternalRequestMap["CAMPAIGN_STOP"]).campaignId);
+      return runCampaignControl("campaign_stop", (request.payload as InternalRequestMap["CAMPAIGN_STOP"]).campaignId, () =>
+        campaignRuntime.stop((request.payload as InternalRequestMap["CAMPAIGN_STOP"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignStatus:
       return campaignRuntime.getStatus((request.payload as InternalRequestMap["CAMPAIGN_STATUS"]).campaignId);
     case INTERNAL_MESSAGE_TYPES.campaignRestoreImages: {

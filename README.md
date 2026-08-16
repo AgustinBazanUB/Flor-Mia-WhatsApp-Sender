@@ -1,10 +1,19 @@
 # Flor Mía WhatsApp Sender
 
-Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.4.0` agrega compatibilidad funcional verificable sobre el motor persistente de campañas multi-contacto y conserva el `ContactEngine` atómico.
+Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.5.0` agrega incidentes estructurados, trazabilidad local acotada y reportes saneados para reparación con Codex sobre el motor persistente de campañas multi-contacto, conservando el `ContactEngine` atómico.
 
 La extensión no inicia una campaña por recibirla: primero la valida y la deja en estado `received`. El usuario debe ejecutar **Iniciar**, con WhatsApp Web abierto, sesión activa y preflight operativo.
 
-## Alcance de la versión 0.4.0
+## Alcance de la versión 0.5.0
+
+- ficha `DiagnosticIncident` en el popup para campañas pausadas, bloqueadas, detenidas o en error;
+- taxonomía central que mapea los `ERROR_CODES` existentes sin sustituirlos;
+- `TechnicalTraceStore` persistente con máximo de 500 registros por campaña y 1.000 globales;
+- página interna **Reporte para Codex** con vista Texto/JSON y copia mediante gesto del usuario;
+- `TechnicalReportV1` estable con campaña/checkpoint saneados, preflight, Last Known Good, discovery, candidates, drift/break, trazas y recuperación del Service Worker;
+- exclusión por defecto de destinatarios, teléfonos completos, mensaje, chats, HTML, cookies, tokens, QR y binarios/base64;
+- nombre de campaña excluido por defecto y disponible solo mediante opción explícita;
+- reporte local: nada se transmite automáticamente y no se agregó permiso de portapapeles;
 
 - preflight contextual completo: una campaña de texto no depende de multimedia y una campaña con imágenes sí la exige;
 - semáforo estrictamente binario `GREEN`/`RED`, presentado como **🟢 VERDE** o **🔴 ROJO**;
@@ -104,6 +113,7 @@ Los tests automatizados usan adaptadores y DOM controlados; no envían mensajes 
 - La sesión y el QR siempre se manejan manualmente.
 - La confirmación DOM detecta un nuevo saliente; no garantiza entrega ni lectura en el teléfono.
 - WhatsApp Web no publica una API DOM estable. La extensión detecta roturas funcionales y se detiene con seguridad, pero un cambio real puede exigir actualizar el registro de selectores.
-- La versión 0.4.0 prepara evidencia técnica saneada, pero todavía no exporta el reporte JSON/texto de reparación completo previsto para el Prompt 5.
+- El reporte orienta una reparación, pero no aplica cambios automáticamente ni transmite datos a Codex o a otro servidor.
+- La inclusión del nombre de campaña es opt-in; el texto y la lista de destinatarios nunca forman parte del reporte.
 - La captura DOM avanzada y la auditoría end-to-end definitiva continúan fuera de esta etapa.
 - La validación real de una campaña requiere cargar `dist/` en Chrome y usar destinatarios autorizados.
