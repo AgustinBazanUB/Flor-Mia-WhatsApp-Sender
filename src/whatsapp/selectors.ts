@@ -107,9 +107,10 @@ const selectorRegistry = {
     strategies: [
       { id: "media-preview.accessibility.dialog", method: "accessibility", priority: 10, selector: "[role='dialog'][aria-label*='preview' i]" },
       { id: "media-preview.testid.editor", method: "data-testid", priority: 20, selector: "[data-testid='media-editor']" },
-      { id: "media-preview.testid.preview", method: "data-testid", priority: 30, selector: "[data-testid='media-preview']" },
-      { id: "media-preview.structural.dialog-media", method: "structural", priority: 40, selector: "[role='dialog'] [data-testid*='media' i]" },
-      { id: "media-preview.semantic.animate", method: "semantic-attribute", priority: 50, selector: "[data-animate-media-viewer='true']" }
+      { id: "media-preview.testid.editor-canvas", method: "data-testid", priority: 30, selector: "[data-testid='media-editor-canvas']" },
+      { id: "media-preview.testid.preview", method: "data-testid", priority: 40, selector: "[data-testid='media-preview']" },
+      { id: "media-preview.structural.dialog-media", method: "structural", priority: 50, selector: "[role='dialog'] [data-testid*='media' i]" },
+      { id: "media-preview.semantic.animate", method: "semantic-attribute", priority: 60, selector: "[data-animate-media-viewer='true']" }
     ]
   },
   media_send_action: {

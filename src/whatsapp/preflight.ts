@@ -165,6 +165,15 @@ async function dismissProbePreview(preview: HTMLElement, input: HTMLInputElement
   return closed;
 }
 
+function discoverMediaSendAction(
+  preview: HTMLElement,
+  options: CapabilityResolverOptions
+): CapabilityDiscovery {
+  const scoped = resolveCapability("media_send_action", preview, options);
+  if (scoped.match) return scoped.discovery;
+  return resolveCapability("media_send_action", document, options).discovery;
+}
+
 async function discoverMediaContext(
   required: Set<WhatsAppCapability>,
   request: WhatsAppPreflightRequest,
@@ -175,7 +184,7 @@ async function discoverMediaContext(
   let previewResolution = resolveCapability("media_preview", document, previewOptions);
   if (previewResolution.match) {
     discoveries.media_preview = previewResolution.discovery;
-    discoveries.media_send_action = resolveCapability("media_send_action", previewResolution.match.element, sendOptions).discovery;
+    discoveries.media_send_action = discoverMediaSendAction(previewResolution.match.element, sendOptions);
     return;
   }
   const requiresFullMediaProbe = required.has("image_file_input")
@@ -231,7 +240,7 @@ async function discoverMediaContext(
     );
     return;
   }
-  const send = resolveCapability("media_send_action", previewResolution.match.element, sendOptions).discovery;
+  const send = discoverMediaSendAction(previewResolution.match.element, sendOptions);
   const safelyDismissed = await dismissProbePreview(previewResolution.match.element, fileInput.element);
   discoveries.media_preview = safelyDismissed
     ? previewResolution.discovery

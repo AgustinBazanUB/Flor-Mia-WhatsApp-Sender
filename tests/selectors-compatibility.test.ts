@@ -21,6 +21,13 @@ describe("selector capability registry", () => {
     expect(result.discovery.attempts.slice(0, 2).every((attempt) => attempt.result === "not_found")).toBe(true);
   });
 
+  it("recognizes the current WhatsApp media editor canvas as a preview", () => {
+    document.body.innerHTML = "<div data-testid='media-editor-canvas'></div>";
+    const result = resolveCapability("media_preview", document, { required: true });
+    expect(result.discovery.state).toBe("available");
+    expect(result.discovery.selectedStrategy).toBe("media-preview.testid.editor-canvas");
+  });
+
   it("reports every exhausted strategy when none works", () => {
     const result = resolveCapability("attachment_action", document, { required: true });
     expect(result.discovery.state).toBe("unavailable");

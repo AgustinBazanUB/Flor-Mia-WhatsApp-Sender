@@ -71,7 +71,8 @@ describe("contextual WhatsApp preflight", () => {
   it("completes a full image preflight when preview and send strategies are observable", async () => {
     baseConversation(`
       <input type="file" accept="image/*">
-      <div data-testid="media-editor"><button aria-label="Send" data-testid="media-editor-send"></button></div>`);
+      <div data-testid="media-editor-canvas"></div>
+      <button aria-label="Send" data-testid="media-editor-send"></button>`);
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
       level: "full",
@@ -79,6 +80,7 @@ describe("contextual WhatsApp preflight", () => {
     });
     expect(result.overallStatus).toBe("GREEN");
     expect(result.capabilities.media_preview.state).toBe("available");
+    expect(result.capabilities.media_preview.selectedStrategy).toBe("media-preview.testid.editor-canvas");
     expect(result.capabilities.media_send_action.state).toBe("available");
     expect(result.strategiesUsed.length).toBeGreaterThan(8);
   });
