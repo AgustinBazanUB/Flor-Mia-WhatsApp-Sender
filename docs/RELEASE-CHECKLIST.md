@@ -1,4 +1,4 @@
-# Checklist de release 0.9.0 RC
+# Checklist de release 0.9.1 RC
 
 ## Automatizado
 
@@ -14,7 +14,7 @@
 
 ## Manual con Chrome/WhatsApp real
 
-- [ ] cargar `dist/` sin empaquetar y confirmar versión 0.9.0 RC;
+- [ ] cargar `dist/` sin empaquetar y confirmar versión 0.9.1 RC;
 - [ ] ejecutar matriz A–P de `ACCEPTANCE-TESTS.md` con números autorizados;
 - [ ] confirmar recepción PUSH y reconexión PULL en Marketing de Flor Mía;
 - [ ] confirmar campaña completa y resumen final visible en ambas superficies;

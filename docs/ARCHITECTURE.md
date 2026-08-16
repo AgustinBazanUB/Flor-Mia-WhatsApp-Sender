@@ -134,7 +134,9 @@ Ver [`DIAGNOSTICS.md`](DIAGNOSTICS.md) para el modelo de evidencia y sus límite
 
 Canal `flor_mia_whatsapp_extension`, protocolo versión `1`, con `requestId`/`replyTo`, `campaignId` y `sequence` cuando aplica.
 
-Solicitudes: `FLORMIA_CAMPAIGN_PREPARE`, `FLORMIA_CAMPAIGN_START`, `FLORMIA_CAMPAIGN_PAUSE`, `FLORMIA_CAMPAIGN_RESUME`, `FLORMIA_CAMPAIGN_STOP` y `FLORMIA_CAMPAIGN_STATUS_REQUEST`.
+Solicitudes: `FLORMIA_EXTENSION_PING`, `FLORMIA_EXTENSION_PREFLIGHT_REQUEST`, `FLORMIA_CAMPAIGN_PREPARE`, `FLORMIA_CAMPAIGN_START`, `FLORMIA_CAMPAIGN_PAUSE`, `FLORMIA_CAMPAIGN_RESUME`, `FLORMIA_CAMPAIGN_STOP` y `FLORMIA_CAMPAIGN_STATUS_REQUEST`.
+
+`PING` consulta el último estado sin ejecutar trabajo pesado. `PREFLIGHT_REQUEST` solamente se emite por una acción explícita **Comprobar** y fuerza un diagnóstico nuevo; la Web-App no mantiene polling periódico. El bridge reenvía el payload de campaña ya serializado y validado estructuralmente sin decodificar/recodificar las imágenes; la validación binaria completa permanece en el Service Worker antes de persistir assets.
 
 Prepare/Start/Pause/Resume/Stop conservan el `requestId` original hasta el Service Worker y se deduplican en un buffer persistente acotado. Los controles pueden incluir `sequence`; si no coincide con el snapshot actual, se rechazan como stale antes de mutar.
 

@@ -1,10 +1,10 @@
 # Flor Mía WhatsApp Sender
 
-Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.9.0 RC` agrega garantías de contexto, pestaña vinculada, consistencia ante crash, comandos serializados/idempotentes y alarmas no obsoletas, conservando el `ContactEngine` atómico.
+Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.9.1 RC` agrega recuperación manual de preflight desde la Web-App y reduce trabajo/memoria ociosos, conservando las garantías de contexto, pestaña vinculada, consistencia ante crash, comandos serializados/idempotentes, alarmas no obsoletas y el `ContactEngine` atómico.
 
 La extensión no inicia una campaña por recibirla: primero la valida y la deja en estado `received`. El usuario debe ejecutar **Iniciar**, con WhatsApp Web abierto, sesión activa y preflight operativo.
 
-## Alcance de la versión 0.9.0 RC
+## Alcance de la versión 0.9.1 RC
 
 - prueba estructurada del destinatario activo inmediatamente antes de cada click y durante reconciliación;
 - pestaña de WhatsApp vinculada durante toda la unidad activa, sin fallback automático a otra pestaña;
@@ -40,6 +40,9 @@ La extensión no inicia una campaña por recibirla: primero la valida y la deja 
 - `Last Known Good` persistente por capability y detección separada de drift funcional y rotura real;
 - diagnósticos dirigidos con capability, step, estrategias agotadas y candidatos DOM saneados;
 - health check liviano entre destinatarios, sin ejecutar un preflight pesado antes de cada step;
+- preflight renovable desde **Comprobar** en la Web-App, sin depender de un estado rojo anterior;
+- sincronización por eventos/foco en lugar de polling cada 20 segundos, para permitir que Manifest V3 suspenda el Service Worker cuando está ocioso;
+- reenvío directo del payload base64 ya validado por protocolo hacia el Service Worker, evitando una decodificación y recodificación completa por imagen en el bridge;
 - pausa segura ante una rotura de interfaz, conservando checkpoint, destinatario, assets y progreso;
 - arnés de desarrollo del popup para simular fallback, semáforo rojo y pausa automática sin modificar WhatsApp real;
 - destinatarios procesados secuencialmente y en el orden recibido;

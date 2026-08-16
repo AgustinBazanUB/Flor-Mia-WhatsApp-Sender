@@ -15,6 +15,7 @@ La extensión valida el envelope y la forma del payload en runtime. Rechaza tipo
 | Tipo | Uso | Respuesta |
 |---|---|---|
 | `FLORMIA_EXTENSION_PING` | Salud y snapshot actual | `FLORMIA_EXTENSION_STATUS` |
+| `FLORMIA_EXTENSION_PREFLIGHT_REQUEST` | Diagnóstico nuevo solicitado explícitamente por el usuario | `FLORMIA_EXTENSION_STATUS` actualizado |
 | `FLORMIA_CAMPAIGN_PREPARE` | Validar/persistir, sin iniciar | `FLORMIA_CAMPAIGN_ACCEPTED` |
 | `FLORMIA_CAMPAIGN_START` | Inicio explícito | `...STARTED` o estado bloqueante |
 | `FLORMIA_CAMPAIGN_PAUSE` | Pausa cooperativa | `...PAUSED`/progreso seguro |
@@ -22,7 +23,7 @@ La extensión valida el envelope y la forma del payload en runtime. Rechaza tipo
 | `FLORMIA_CAMPAIGN_STOP` | Detención de usuario | `...STOPPED` |
 | `FLORMIA_CAMPAIGN_STATUS_REQUEST` | Rehidratación/reconexión | `FLORMIA_EXTENSION_STATUS` con snapshot de campaña |
 
-El `campaignId` de un control debe coincidir con la campaña activa. Preparar una campaña distinta mientras existe una no terminal produce conflicto.
+El `campaignId` de un control debe coincidir con la campaña activa. Preparar una campaña distinta mientras existe una no terminal produce conflicto. `PING` es barato y no modifica WhatsApp; `PREFLIGHT_REQUEST` puede inspeccionar capacidades y preparar/cerrar un preview técnico cuando exista una campaña activa con imágenes, por lo que no se ejecuta mediante polling.
 
 Ejemplo de consulta:
 

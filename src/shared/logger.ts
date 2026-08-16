@@ -18,7 +18,7 @@ export function redactLogValue(value: unknown, key = ""): unknown {
 function write(level: LogLevel, event: string, context: LogContext = {}): void {
   const entry = { scope: "flor-mia-whatsapp-sender", event, ...redactLogValue(context) as object };
   const method = level === "debug" ? console.debug : level === "info" ? console.info : level === "warn" ? console.warn : console.error;
-  method(entry);
+  method(JSON.stringify(entry));
 }
 
 export const logger = {

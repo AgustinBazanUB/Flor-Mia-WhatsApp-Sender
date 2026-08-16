@@ -41,6 +41,7 @@ describe("typed protocol", () => {
       payload: {}
     };
     expect(isWebAppInboundEnvelope(ping)).toBe(true);
+    expect(isWebAppInboundEnvelope({ ...ping, type: WEB_APP_MESSAGE_TYPES.preflightRequest })).toBe(true);
     expect(isWebAppInboundEnvelope({ ...ping, type: WEB_APP_MESSAGE_TYPES.completed })).toBe(false);
     expect(isWebAppInboundEnvelope({ ...ping, requestId: undefined })).toBe(false);
   });

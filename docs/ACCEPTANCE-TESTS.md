@@ -148,4 +148,4 @@ Los casos automatizados usan adaptadores, clock, scheduler/alarmas y storage fal
 
 ## Criterio de aprobación
 
-Cada caso manual debe registrar fecha, versión 0.9.0 RC, Chrome, condición de WhatsApp, campaña/contactos autorizados (solo IDs en evidencia), resultado PASS/FAIL y observación. Un FAIL de atomicidad, duplicación, origen, privacidad, cleanup o recuperación bloquea la release.
+Cada caso manual debe registrar fecha, versión 0.9.1 RC, Chrome, condición de WhatsApp, campaña/contactos autorizados (solo IDs en evidencia), resultado PASS/FAIL y observación. Un FAIL de atomicidad, duplicación, origen, privacidad, cleanup o recuperación bloquea la release.

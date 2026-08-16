@@ -164,6 +164,7 @@ export async function sendRuntimeRequest<T extends InternalMessageType>(
 
 export const WEB_APP_MESSAGE_TYPES = {
   ping: "FLORMIA_EXTENSION_PING",
+  preflightRequest: "FLORMIA_EXTENSION_PREFLIGHT_REQUEST",
   status: "FLORMIA_EXTENSION_STATUS",
   prepare: "FLORMIA_CAMPAIGN_PREPARE",
   accepted: "FLORMIA_CAMPAIGN_ACCEPTED",
@@ -213,6 +214,7 @@ export interface FlorMiaExtensionStatus {
 
 const webAppInboundTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.ping,
+  WEB_APP_MESSAGE_TYPES.preflightRequest,
   WEB_APP_MESSAGE_TYPES.prepare,
   WEB_APP_MESSAGE_TYPES.cancelRequest,
   WEB_APP_MESSAGE_TYPES.startRequest,

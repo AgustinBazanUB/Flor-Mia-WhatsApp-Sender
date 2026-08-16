@@ -1,5 +1,4 @@
 import { isAllowedWebAppOrigin } from "../config/origins";
-import { validateCampaignInput } from "../shared/campaign";
 import { serializeError } from "../shared/errors";
 import { logger } from "../shared/logger";
 import {
@@ -11,7 +10,7 @@ import {
   WEB_APP_MESSAGE_TYPES,
   type WebAppEnvelope
 } from "../shared/protocol";
-import { deserializeCampaign, serializeCampaign, type SerializedCampaignPayload } from "../shared/serialization";
+import type { SerializedCampaignPayload } from "../shared/serialization";
 import {
   CAMPAIGN_EVENT_KEY,
   type CampaignPublicEvent,
@@ -80,12 +79,17 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
     post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, status as unknown as Record<string, unknown>));
     return;
   }
+  if (request.type === WEB_APP_MESSAGE_TYPES.preflightRequest) {
+    await sendRuntimeRequest("web-app-bridge", INTERNAL_MESSAGE_TYPES.runPreflight, { developmentFault: "none" });
+    const status = await sendRuntimeRequest("web-app-bridge", INTERNAL_MESSAGE_TYPES.webAppPing, {});
+    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, status as unknown as Record<string, unknown>));
+    return;
+  }
   if (request.type === WEB_APP_MESSAGE_TYPES.prepare) {
-    const campaign = validateCampaignInput(deserializeCampaign(request.payload as unknown as SerializedCampaignPayload));
     const accepted = await sendRuntimeRequest(
       "web-app-bridge",
       INTERNAL_MESSAGE_TYPES.webAppPrepareCampaign,
-      serializeCampaign(campaign),
+      request.payload as unknown as SerializedCampaignPayload,
       request.requestId
     );
     post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.accepted, accepted as unknown as Record<string, unknown>, {
@@ -159,7 +163,7 @@ if (isAllowedWebAppOrigin(window.location.origin)) {
     void handleRequest(request).catch((error: unknown) => {
       const serialized = serializeError(error);
       logger.warn("web_app.request_rejected", { type: request.type, errorCode: serialized.code });
-      if (request.type === WEB_APP_MESSAGE_TYPES.ping) {
+      if (request.type === WEB_APP_MESSAGE_TYPES.ping || request.type === WEB_APP_MESSAGE_TYPES.preflightRequest) {
         post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, {
           operational: false,
           message: serialized.message,
