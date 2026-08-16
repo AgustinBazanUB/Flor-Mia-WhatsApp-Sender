@@ -54,6 +54,7 @@ function campaign(): CampaignState {
   };
   return {
     schemaVersion: 1,
+    runToken: "run-preflight",
     campaignId: "campaign-1",
     campaignName: "Campaña contextual",
     createdBy: "tests",

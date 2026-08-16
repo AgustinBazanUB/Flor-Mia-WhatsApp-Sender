@@ -202,7 +202,7 @@ function fixture() {
   const state = {
     ...createDefaultState(NOW),
     status: "error" as const,
-    activeCampaign: campaign,
+    activeCampaign: null,
     activeContactProcess: checkpoint,
     whatsapp: preflight,
     compatibility,

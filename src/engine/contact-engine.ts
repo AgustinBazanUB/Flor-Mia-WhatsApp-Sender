@@ -139,7 +139,8 @@ export async function processContact(
   for (const originalStep of checkpoint.steps) {
     let step = checkpoint.steps.find((candidate) => candidate.id === originalStep.id)!;
     if (step.status === "confirmed") continue;
-    if (await dependencies.shouldPause?.()) {
+    const requiresReconciliation = step.status === "verification_pending";
+    if (!requiresReconciliation && await dependencies.shouldPause?.()) {
       return persist({ ...checkpoint, status: "paused", currentStepId: step.id, pauseReason: "manual_pause" });
     }
     checkpoint = await persist({ ...checkpoint, status: "running", currentStepId: step.id, pauseReason: undefined });
@@ -155,6 +156,9 @@ export async function processContact(
       checkpoint = await applyReconciliation(checkpoint, step, reconciled, persist, now);
       step = checkpoint.steps.find((candidate) => candidate.id === originalStep.id)!;
       if (step.status === "verification_pending") return checkpoint;
+      if (await dependencies.shouldPause?.()) {
+        return persist({ ...checkpoint, status: "paused", currentStepId: step.status === "confirmed" ? null : step.id, pauseReason: "manual_pause" });
+      }
       if (step.status === "confirmed") continue;
     }
 

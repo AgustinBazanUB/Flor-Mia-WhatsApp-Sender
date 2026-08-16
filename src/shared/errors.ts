@@ -6,6 +6,7 @@ export const ERROR_CODES = {
   interfaceLoading: "INTERFACE_LOADING",
   invalidContact: "INVALID_CONTACT",
   contactUnavailable: "CONTACT_UNAVAILABLE",
+  contactContextUnverified: "CONTACT_CONTEXT_UNVERIFIED",
   elementNotFound: "ELEMENT_NOT_FOUND",
   timeout: "TIMEOUT",
   verificationFailed: "VERIFICATION_FAILED",

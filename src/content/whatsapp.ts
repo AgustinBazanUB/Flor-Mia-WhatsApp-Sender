@@ -12,6 +12,7 @@ import { runWhatsAppPreflight } from "../whatsapp/preflight";
 import { scheduleConversationNavigation, sendAndVerifyText } from "../whatsapp/send-text";
 import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
+import { requireConversationContext } from "../whatsapp/conversation-context";
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
   return { ok: true, requestId, data };
@@ -50,6 +51,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappPreflight) {
         const data = await runWhatsAppPreflight(message.payload as InternalRequestMap["WA_PREFLIGHT"]);
         sendResponse(success(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappProveConversation) {
+        const payload = message.payload as InternalRequestMap["WA_PROVE_CONVERSATION"];
+        sendResponse(success(message.requestId, requireConversationContext(payload.phoneDigits)));
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendText) {

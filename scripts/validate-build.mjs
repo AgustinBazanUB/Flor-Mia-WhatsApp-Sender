@@ -19,6 +19,7 @@ const manifest = JSON.parse(await readFile(resolve("dist", "manifest.json"), "ut
 const sourceManifest = JSON.parse(await readFile(resolve("manifest.json"), "utf8"));
 if (manifest.manifest_version !== 3) throw new Error("El build no contiene Manifest V3.");
 if (manifest.version !== sourceManifest.version) throw new Error("La versión del build no coincide con manifest.json.");
+if (manifest.version_name !== sourceManifest.version_name) throw new Error("El nombre de versión RC del build no coincide con manifest.json.");
 const originPatterns = [
   ...(manifest.host_permissions || []),
   ...(manifest.optional_host_permissions || []),

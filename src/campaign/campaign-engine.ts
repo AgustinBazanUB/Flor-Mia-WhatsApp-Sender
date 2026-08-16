@@ -9,6 +9,14 @@ import type {
   DailyLimitRepository
 } from "./campaign-types";
 import { COMPATIBILITY_ERROR_CODES } from "../compatibility/diagnostic-error";
+import { hasUnresolvedSendEvidence } from "../engine/checkpoint-safety";
+
+export type CampaignCompletionFaultPoint =
+  | "after_contact_completed"
+  | "after_daily_increment"
+  | "before_campaign_save"
+  | "after_campaign_save"
+  | "before_checkpoint_clear";
 
 export interface CampaignContactRunner {
   run(
@@ -31,6 +39,7 @@ export interface CampaignEngineDependencies {
   }>;
   now?: () => Date;
   onCampaign?: (campaign: CampaignState) => Promise<void> | void;
+  completionFault?: (point: CampaignCompletionFaultPoint) => Promise<void> | void;
 }
 
 const TERMINAL_STATUSES = new Set<CampaignState["status"]>(["stopped", "completed"]);
@@ -149,6 +158,72 @@ export class CampaignEngine {
     return saved;
   }
 
+  private async completionFault(point: CampaignCompletionFaultPoint): Promise<void> {
+    await this.dependencies.completionFault?.(point);
+  }
+
+  private async applyCompletedCheckpoint(
+    campaign: CampaignState,
+    recipient: CampaignState["recipients"][number]
+  ): Promise<CampaignState> {
+    await this.completionFault("after_contact_completed");
+    const daily = await this.dependencies.dailyLimit.recordCompletion(
+      campaign.policy.dailyContactLimit,
+      `${campaign.campaignId}:${recipient.recipientId}`,
+      this.now()
+    );
+    await this.completionFault("after_daily_increment");
+    const completedAt = this.now().toISOString();
+    const recipients = campaign.recipients.map((item) => item.recipientId === recipient.recipientId
+      ? { ...item, status: "completed" as const, completedAt, error: undefined }
+      : item);
+    const allCompleted = recipients.every((item) => item.status === "completed");
+    const completedInBatch = campaign.contactsCompletedInBatch + 1;
+    const basePatch: Partial<CampaignState> = {
+      recipients,
+      dailyLimit: daily,
+      lastCompletedContactId: recipient.recipientId,
+      activeContactId: null,
+      currentRecipientIndex: allCompleted ? null : recipient.position - 1,
+      contactsCompletedInBatch: completedInBatch,
+      blockReason: null
+    };
+    let terminalPatch: Partial<CampaignState>;
+    if (allCompleted) {
+      terminalPatch = { status: "completed", wait: null, completedAt };
+    } else if (campaign.stopRequested) {
+      terminalPatch = { status: "stopped", wait: null, stoppedAt: completedAt };
+    } else if (campaign.pauseRequested) {
+      terminalPatch = { status: "paused", wait: null };
+    } else if (daily.remaining <= 0) {
+      terminalPatch = {
+        status: "daily_limit_reached",
+        wait: null,
+        blockReason: block("daily_limit_reached", "El contacto activo finalizó; el siguiente queda bloqueado por el límite diario.", completedAt, true)
+      };
+    } else {
+      const batchBoundary = completedInBatch >= campaign.policy.contactsPerBatch;
+      const delayMs = batchBoundary ? campaign.policy.delayBetweenBatchesMs : campaign.policy.delayBetweenContactsMs;
+      const scheduledAt = this.now();
+      terminalPatch = {
+        status: batchBoundary ? "waiting_batch" : "waiting_contact",
+        batchNumber: batchBoundary ? campaign.batchNumber + 1 : campaign.batchNumber,
+        contactsCompletedInBatch: batchBoundary ? 0 : completedInBatch,
+        wait: {
+          kind: batchBoundary ? "between_batches" : "between_contacts",
+          scheduledAt: scheduledAt.toISOString(),
+          until: new Date(scheduledAt.getTime() + delayMs).toISOString()
+        }
+      };
+    }
+    await this.completionFault("before_campaign_save");
+    const saved = await this.save(campaign, { ...basePatch, ...terminalPatch });
+    await this.completionFault("after_campaign_save");
+    await this.completionFault("before_checkpoint_clear");
+    await this.dependencies.contactCheckpoints.clearActive();
+    return saved;
+  }
+
   async start(campaignId: string): Promise<CampaignState> {
     let campaign = await this.requireCampaign(campaignId);
     if (TERMINAL_STATUSES.has(campaign.status)) {
@@ -209,7 +284,7 @@ export class CampaignEngine {
     campaign = await this.save(campaign, {
       status: pendingWait?.kind === "between_batches" ? "waiting_batch" : pendingWait ? "waiting_contact" : "ready",
       pauseRequested: false,
-      stopRequested: false,
+      stopRequested: campaign.stopRequested,
       dailyLimit: daily,
       blockReason: null,
       wait: pendingWait
@@ -235,6 +310,16 @@ export class CampaignEngine {
     campaign: CampaignState,
     checkpoint: ContactProcessCheckpoint | null = null
   ): Promise<CampaignState> {
+    if (checkpoint?.campaignId === campaign.campaignId && checkpoint.status === "completed") {
+      const checkpointRecipient = campaign.recipients.find((recipient) => recipient.recipientId === checkpoint.contact.contactId);
+      if (checkpointRecipient?.status === "completed") {
+        await this.dependencies.contactCheckpoints.clearActive();
+        return campaign;
+      }
+      if (checkpointRecipient && campaign.activeContactId === checkpointRecipient.recipientId) {
+        return this.applyCompletedCheckpoint(campaign, checkpointRecipient);
+      }
+    }
     if (TERMINAL_STATUSES.has(campaign.status)) return campaign;
     if (campaign.status === "waiting_batch" || campaign.status === "waiting_contact") return campaign;
     if (["received", "paused", "daily_limit_reached", "images_required", "error"].includes(campaign.status)) return campaign;
@@ -374,73 +459,30 @@ export class CampaignEngine {
       await this.dependencies.contactCheckpoints.saveActive(checkpoint);
     }
 
-    checkpoint = await this.dependencies.contactRunner.run(checkpoint, async () => {
-      const latest = await this.dependencies.campaigns.loadActive();
-      return !latest || latest.campaignId !== campaignId || latest.pauseRequested || latest.stopRequested;
-    });
+    if (checkpoint.status !== "completed") {
+      checkpoint = await this.dependencies.contactRunner.run(checkpoint, async () => {
+        const latest = await this.dependencies.campaigns.loadActive();
+        return !latest || latest.campaignId !== campaignId || latest.pauseRequested || latest.stopRequested;
+      });
+    }
 
     campaign = await this.requireCampaign(campaignId);
     recipient = campaign.recipients.find((item) => item.recipientId === campaign.activeContactId) ?? recipient;
     if (checkpoint.status === "completed") {
-      const daily = await this.dependencies.dailyLimit.recordCompletion(
-        campaign.policy.dailyContactLimit,
-        `${campaign.campaignId}:${recipient.recipientId}`,
-        this.now()
-      );
-      const completedAt = this.now().toISOString();
-      const recipients = campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
-        ? { ...item, status: "completed" as const, completedAt, error: undefined }
-        : item);
-      const completedRecipients = recipients.filter((item) => item.status === "completed").length;
-      const allCompleted = completedRecipients === recipients.length;
-      const completedInBatch = campaign.contactsCompletedInBatch + 1;
-      await this.dependencies.contactCheckpoints.clearActive();
-      if (allCompleted) {
-        return this.save(campaign, {
-          status: "completed",
-          recipients,
-          dailyLimit: daily,
-          lastCompletedContactId: recipient.recipientId,
-          activeContactId: null,
-          currentRecipientIndex: null,
-          contactsCompletedInBatch: completedInBatch,
-          wait: null,
-          blockReason: null,
-          completedAt
-        });
-      }
-      campaign = await this.save(campaign, {
-        recipients,
-        dailyLimit: daily,
-        lastCompletedContactId: recipient.recipientId,
-        activeContactId: null,
-        currentRecipientIndex: recipient.position - 1,
-        contactsCompletedInBatch: completedInBatch
-      });
-      if (campaign.stopRequested) return this.save(campaign, { status: "stopped", wait: null, stoppedAt: completedAt });
-      if (campaign.pauseRequested) return this.save(campaign, { status: "paused", wait: null });
-      if (daily.remaining <= 0) {
-        return this.save(campaign, {
-          status: "daily_limit_reached",
-          wait: null,
-          blockReason: block("daily_limit_reached", "El contacto activo finalizó; el siguiente queda bloqueado por el límite diario.", completedAt, true)
-        });
-      }
-      const batchBoundary = completedInBatch >= campaign.policy.contactsPerBatch;
-      const delayMs = batchBoundary ? campaign.policy.delayBetweenBatchesMs : campaign.policy.delayBetweenContactsMs;
-      const scheduledAt = this.now();
-      return this.save(campaign, {
-        status: batchBoundary ? "waiting_batch" : "waiting_contact",
-        batchNumber: batchBoundary ? campaign.batchNumber + 1 : campaign.batchNumber,
-        contactsCompletedInBatch: batchBoundary ? 0 : completedInBatch,
-        wait: {
-          kind: batchBoundary ? "between_batches" : "between_contacts",
-          scheduledAt: scheduledAt.toISOString(),
-          until: new Date(scheduledAt.getTime() + delayMs).toISOString()
-        }
-      });
+      return this.applyCompletedCheckpoint(campaign, recipient);
     }
 
+    if (hasUnresolvedSendEvidence(checkpoint)) {
+      const blocked = checkpointBlock(checkpoint, this.now().toISOString());
+      return this.save(campaign, {
+        status: "paused",
+        pauseRequested: false,
+        recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
+          ? { ...item, status: "paused", error: checkpoint.error }
+          : item),
+        blockReason: blocked.reason
+      });
+    }
     if (campaign.stopRequested) {
       return this.save(campaign, {
         status: "stopped",

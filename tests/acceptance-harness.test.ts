@@ -30,9 +30,9 @@ describe("A–L integration harness without real messages", () => {
   it("provides deterministic clock, fake alarms and persistent restartable checkpoints", async () => {
     const clock = new FakeCampaignClock();
     const alarms = new FakeCampaignAlarms();
-    await alarms.schedule("campaign-1", clock.now().getTime() + 1_000);
+    await alarms.schedule("campaign-1", "run-1", clock.now().getTime() + 1_000);
     clock.advance(1_000);
-    expect(alarms.scheduled.get("campaign-1")).toBe(clock.now().getTime());
+    expect(alarms.scheduled.get("campaign-1:run-1")).toBe(clock.now().getTime());
 
     const store = new RestartableCheckpointStore();
     await store.saveActive(acceptanceCheckpoint(1));

@@ -309,6 +309,35 @@ describe("atomic contact engine", () => {
     expect(adapter.calls.at(-1)).toBe("text");
   });
 
+  it.each([
+    ["confirmed", { outcome: "confirmed" as const, verification: verification("stop-confirmed") }, "confirmed"],
+    ["not_sent", {
+      outcome: "not_sent" as const,
+      verification: { outcome: "not_sent" as const, method: "preview-still-open", observedAt: "2026-08-15T00:00:00.000Z", sendAttempted: false }
+    }, "pending"],
+    ["ambiguous", {
+      outcome: "ambiguous" as const,
+      verification: { outcome: "ambiguous" as const, method: "still-uncertain", observedAt: "2026-08-15T00:00:00.000Z", sendAttempted: true }
+    }, "verification_pending"]
+  ])("reconciles a post-click step as %s before honoring a stop/pause intent", async (_name, reconciliation, expectedStepStatus) => {
+    const store = new MemoryCheckpointStore();
+    const adapter = new FakeAdapter();
+    adapter.ambiguousStep = "image-1";
+    const ambiguous = await run(checkpoint(1), adapter, store);
+    adapter.reconciliation = reconciliation;
+
+    const result = await processContact(ambiguous, {
+      adapter,
+      store,
+      policy: POLICY,
+      sleep: async () => undefined,
+      shouldPause: () => true
+    });
+    expect(result.status).toBe("paused");
+    expect(result.steps[0]?.status).toBe(expectedStepStatus);
+    expect(adapter.calls.filter((call) => call === "image-1")).toHaveLength(1);
+  });
+
   it("honors the durable pre-click marker when the tab response is lost", async () => {
     const store = new MemoryCheckpointStore();
     const initial = checkpoint(1);

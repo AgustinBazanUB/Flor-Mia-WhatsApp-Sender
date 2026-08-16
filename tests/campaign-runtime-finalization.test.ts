@@ -59,6 +59,7 @@ function campaign(status: CampaignState["status"]): CampaignState {
   const completed = status === "completed";
   return {
     schemaVersion: 1,
+    runToken: "run-final",
     campaignId: "campaign-final",
     campaignName: "Campaña final",
     createdBy: "flor_mia",
@@ -151,6 +152,12 @@ function setup(state: CampaignState, activeCheckpoint: ContactProcessCheckpoint 
 }
 
 describe("CampaignRuntime terminal finalization", () => {
+  it("ignores an alarm from an obsolete run token", async () => {
+    const state = campaign("paused");
+    const { runtime } = setup(state, checkpoint("paused"));
+    await expect(runtime.handleAlarm(state.campaignId, "obsolete-run")).resolves.toBeNull();
+  });
+
   it("records history, clears a confirmed checkpoint and deletes shared images only after completion", async () => {
     const state = campaign("completed");
     const { runtime, blobs, checkpoints, history } = setup(state, checkpoint("completed"));
@@ -209,6 +216,36 @@ describe("CampaignRuntime terminal finalization", () => {
     expect(publicStatus.status).toBe("stopped");
     expect(blobs.deleted).toEqual(["campaign-final"]);
     expect(await history.list()).toEqual([expect.objectContaining({ status: "stopped", errorCategory: "USER_STOP" })]);
+  });
+
+  it("refuses stopped cleanup while post-click evidence is still ambiguous", async () => {
+    const paused = campaign("paused");
+    const stopped: CampaignState = {
+      ...paused,
+      status: "stopped",
+      currentRecipientIndex: null,
+      activeContactId: null,
+      stopRequested: true,
+      stoppedAt: NOW,
+      sequence: 4
+    };
+    const ambiguous = checkpoint("paused");
+    ambiguous.pauseReason = "verification_pending";
+    ambiguous.steps = [{
+      id: "text",
+      operationId: "campaign-final:recipient-1:text",
+      position: 1,
+      kind: "text",
+      text: "Hola",
+      status: "verification_pending",
+      attempts: 1,
+      verification: { outcome: "ambiguous", method: "test", observedAt: NOW, sendAttempted: true }
+    }];
+    const { runtime, blobs, checkpoints, history } = setup(stopped, ambiguous);
+    await expect(runtime.syncCampaign(stopped)).rejects.toThrow(/ambiguo/i);
+    expect(blobs.deleted).toEqual([]);
+    expect(checkpoints.active).toBe(ambiguous);
+    expect(await history.list()).toEqual([]);
   });
 
   it("refuses completion cleanup if a contact checkpoint is incomplete", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CAMPAIGN_POLICY } from "../src/campaign/campaign-policy";
 import { CampaignStore, createCampaignState } from "../src/campaign/campaign-store";
 import { refreshDailyLimit } from "../src/campaign/daily-limit";
-import { validateCampaignInput } from "../src/shared/campaign";
+import { MAX_CAMPAIGN_RECIPIENTS, validateCampaignInput } from "../src/shared/campaign";
 import type { KeyValueStorage } from "../src/storage/state-store";
 
 class MemoryStorage implements KeyValueStorage {
@@ -57,5 +57,58 @@ describe("campaign persistence", () => {
     expect(rehydrated?.recipients.map((recipient) => recipient.recipientId)).toEqual(["r-1", "r-2"]);
     expect(rehydrated?.images[0]).toEqual({ imageId: "image-1", order: 1, name: "uno.png", type: "image/png", size: 1 });
     expect(rehydrated?.images[0]).not.toHaveProperty("data");
+  });
+
+  it("persists 5000 recipients within the documented local storage budget", async () => {
+    const storage = new MemoryStorage();
+    const recipients = Array.from({ length: MAX_CAMPAIGN_RECIPIENTS }, (_, index) => ({
+      recipientId: `recipient-${index}`,
+      clientId: `client-${index}`,
+      name: `Cliente ${index}`,
+      phone: "5491111111111",
+      source: "flor_mia" as const
+    }));
+    const campaign = validateCampaignInput({
+      campaignId: "campaign-5000",
+      campaignName: "Capacidad máxima",
+      createdBy: "flor_mia",
+      recipients,
+      message: "Mensaje acotado",
+      images: [],
+      imageOrder: [],
+      imageCount: 0,
+      totalRecipients: recipients.length
+    });
+    const state = createCampaignState(
+      campaign,
+      DEFAULT_CAMPAIGN_POLICY,
+      refreshDailyLimit(null, 1_000, new Date(2026, 7, 15, 10, 0, 0))
+    );
+    await new CampaignStore(storage).saveActive(state);
+    const bytes = new TextEncoder().encode(JSON.stringify(storage.value)).byteLength;
+    expect(bytes).toBeLessThan(5 * 1024 * 1024);
+    expect((await new CampaignStore(storage).loadActive())?.recipients).toHaveLength(MAX_CAMPAIGN_RECIPIENTS);
+  });
+
+  it("migrates a legacy campaign with a new persistent run token", async () => {
+    const storage = new MemoryStorage();
+    const campaign = validateCampaignInput({
+      campaignId: "legacy-run",
+      campaignName: "Legacy",
+      createdBy: "tests",
+      recipients: [{ recipientId: "r-1", name: "", phone: "5491111111111", source: "flor_mia" }],
+      message: "Hola",
+      images: [],
+      imageOrder: [],
+      imageCount: 0,
+      totalRecipients: 1
+    });
+    const state = createCampaignState(campaign, DEFAULT_CAMPAIGN_POLICY, refreshDailyLimit(null, 1_000));
+    const legacy = { ...state };
+    delete legacy.runToken;
+    storage.value = { activeCampaign: legacy };
+    const migrated = await new CampaignStore(storage).loadActive();
+    expect(migrated?.runToken).toMatch(/^campaign-run-/);
+    expect((storage.value.activeCampaign as { runToken?: string }).runToken).toBe(migrated?.runToken);
   });
 });

@@ -24,7 +24,7 @@ import { StateStore } from "../storage/state-store";
 import { ChromeWhatsAppContactAdapter } from "./contact-adapter";
 import { WhatsAppTransport } from "./whatsapp-transport";
 import { CampaignRuntime } from "./campaign-runtime";
-import { campaignIdFromAlarm } from "../campaign/scheduler";
+import { campaignAlarmFromName } from "../campaign/scheduler";
 import type { CampaignPublicStatus, CampaignState } from "../campaign/campaign-types";
 import { CompatibilityStore } from "../storage/compatibility-store";
 import { CompatibilityManager, applyRuntimeFailureToPreflight } from "../compatibility/manager";
@@ -39,6 +39,8 @@ import { createDiagnosticIncident } from "../diagnostics/incident";
 import { buildDiagnosticEnvironment } from "../diagnostics/environment";
 import { createDiagnosticReportBundle } from "../diagnostics/report-builder";
 import { classifyDiagnosticError } from "../diagnostics/taxonomy";
+import { AsyncCommandQueue } from "./command-queue";
+import { WebAppCommandGate } from "./web-app-command-gate";
 
 const stateStore = new StateStore();
 const blobStore = new CampaignBlobStore();
@@ -48,6 +50,8 @@ const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const compatibilityStore = new CompatibilityStore();
 const compatibilityManager = new CompatibilityManager(compatibilityStore, EXTENSION_VERSION);
 const technicalTraceStore = new TechnicalTraceStore();
+const campaignCommandQueue = new AsyncCommandQueue();
+const webAppCommandGate = new WebAppCommandGate();
 const campaignRuntime = new CampaignRuntime({
   stateStore,
   blobStore,
@@ -59,7 +63,7 @@ const campaignRuntime = new CampaignRuntime({
   includeRecipientNameInWebApp: false
 });
 
-async function initialize(): Promise<void> {
+async function initializeImplementation(): Promise<void> {
   await stateStore.patch({ extensionVersion: EXTENSION_VERSION, compatibility: await compatibilityStore.load() });
   const campaign = await campaignRuntime.initialize();
   if (campaign) {
@@ -131,8 +135,20 @@ async function initialize(): Promise<void> {
   logger.info("service_worker.initialized", { version: EXTENSION_VERSION, state: state.status, activeCheckpoint: Boolean(active) });
 }
 
-chrome.runtime.onInstalled.addListener(() => void initialize());
-chrome.runtime.onStartup.addListener(() => void initialize());
+let initializationPromise: Promise<void> | null = null;
+
+function initializeOnce(): Promise<void> {
+  if (!initializationPromise) {
+    initializationPromise = campaignCommandQueue.run(initializeImplementation).catch((error: unknown) => {
+      initializationPromise = null;
+      throw error;
+    });
+  }
+  return initializationPromise;
+}
+
+chrome.runtime.onInstalled.addListener(() => void initializeOnce());
+chrome.runtime.onStartup.addListener(() => void initializeOnce());
 
 async function preparePreflightState(campaignControl = false): Promise<void> {
   const current = await stateStore.load();
@@ -725,7 +741,7 @@ async function refreshDiagnosticIncident(
   const campaign = providedCampaign === undefined ? await campaignRuntime.campaignStore.loadActive() : providedCampaign;
   const checkpoint = providedCheckpoint === undefined ? await checkpointStore.loadActive() : providedCheckpoint;
   const incident = createDiagnosticIncident({
-    state: { ...state, activeCampaign: campaign, activeContactProcess: checkpoint },
+    state: { ...state, activeContactProcess: checkpoint },
     campaign,
     checkpoint,
     compatibility: state.compatibility,
@@ -733,10 +749,10 @@ async function refreshDiagnosticIncident(
     includeCampaignName: false
   });
   if (JSON.stringify(state.diagnosticIncident) === JSON.stringify(incident)) {
-    return { ...state, activeCampaign: campaign, activeContactProcess: checkpoint };
+    return { ...state, activeContactProcess: checkpoint };
   }
   const saved = await stateStore.patch({ diagnosticIncident: incident });
-  return { ...saved, activeCampaign: campaign, activeContactProcess: checkpoint };
+  return { ...saved, activeContactProcess: checkpoint };
 }
 
 async function generateDiagnosticReport(
@@ -829,7 +845,6 @@ async function loadCurrentExtensionState(): Promise<ExtensionState> {
   const checkpoint = await checkpointStore.loadActive();
   return refreshDiagnosticIncident({
     ...state,
-    activeCampaign: campaign,
     dailyLimit,
     activeContactProcess: checkpoint
   }, campaign, checkpoint);
@@ -846,7 +861,7 @@ function senderAllowed(request: InternalEnvelope, sender: chrome.runtime.Message
   return false;
 }
 
-async function handleRequest(request: InternalEnvelope): Promise<unknown> {
+async function dispatchRequest(request: InternalEnvelope): Promise<unknown> {
   switch (request.type) {
     case INTERNAL_MESSAGE_TYPES.getState:
       return loadCurrentExtensionState();
@@ -855,8 +870,7 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
       if (payload.developmentFault && !isCompatibilityDevelopmentFault(payload.developmentFault)) {
         throw new ExtensionError(ERROR_CODES.invalidInput, "El escenario de compatibilidad no es válido.");
       }
-      const state = await stateStore.load();
-      const campaign = state.activeCampaign;
+      const campaign = await campaignRuntime.campaignStore.loadActive();
       const forceImageDiagnostic = payload.developmentFault === "attachment_capability_break";
       if (campaign && ["received", "ready", "paused", "daily_limit_reached", "images_required"].includes(campaign.status)) {
         return campaignRuntime.runCampaignPreflight(campaign.campaignId, payload.developmentFault ?? "none");
@@ -889,16 +903,16 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
     case INTERNAL_MESSAGE_TYPES.reselectContactImages:
       return reselectContactImages(request.payload as InternalRequestMap["RESELECT_CONTACT_IMAGES"]);
     case INTERNAL_MESSAGE_TYPES.campaignStart:
-      return runCampaignControl("campaign_start", (request.payload as InternalRequestMap["CAMPAIGN_START"]).campaignId, () =>
+      return executeCampaignControl(request, "campaign_start", () =>
         campaignRuntime.start((request.payload as InternalRequestMap["CAMPAIGN_START"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignPause:
-      return runCampaignControl("campaign_pause", (request.payload as InternalRequestMap["CAMPAIGN_PAUSE"]).campaignId, () =>
+      return executeCampaignControl(request, "campaign_pause", () =>
         campaignRuntime.pause((request.payload as InternalRequestMap["CAMPAIGN_PAUSE"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignResume:
-      return runCampaignControl("campaign_resume", (request.payload as InternalRequestMap["CAMPAIGN_RESUME"]).campaignId, () =>
+      return executeCampaignControl(request, "campaign_resume", () =>
         campaignRuntime.resume((request.payload as InternalRequestMap["CAMPAIGN_RESUME"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignStop:
-      return runCampaignControl("campaign_stop", (request.payload as InternalRequestMap["CAMPAIGN_STOP"]).campaignId, () =>
+      return executeCampaignControl(request, "campaign_stop", () =>
         campaignRuntime.stop((request.payload as InternalRequestMap["CAMPAIGN_STOP"]).campaignId));
     case INTERNAL_MESSAGE_TYPES.campaignStatus:
       return campaignRuntime.getStatus((request.payload as InternalRequestMap["CAMPAIGN_STATUS"]).campaignId);
@@ -927,12 +941,58 @@ async function handleRequest(request: InternalEnvelope): Promise<unknown> {
       };
     }
     case INTERNAL_MESSAGE_TYPES.webAppPrepareCampaign:
-      return acceptCampaign(request.payload as SerializedCampaignPayload);
+      return executeWebAppPrepare(request);
     case INTERNAL_MESSAGE_TYPES.webAppCancelCampaign:
       return cancelCampaign((request.payload as InternalRequestMap["WEB_APP_CANCEL_CAMPAIGN"]).campaignId);
     default:
       throw new ExtensionError(ERROR_CODES.protocolError, "Tipo de mensaje interno no admitido.", { recoverable: false });
   }
+}
+
+async function executeCampaignControl(
+  request: InternalEnvelope,
+  action: "campaign_start" | "campaign_pause" | "campaign_resume" | "campaign_stop",
+  operation: () => Promise<CampaignPublicStatus>
+): Promise<CampaignPublicStatus> {
+  const payload = request.payload as InternalRequestMap["CAMPAIGN_START"];
+  if (request.source !== "web-app-bridge") return runCampaignControl(action, payload.campaignId, operation);
+  return webAppCommandGate.execute({
+    requestId: request.requestId,
+    type: request.type,
+    campaignId: payload.campaignId,
+    ...(payload.expectedSequence === undefined ? {} : { expectedSequence: payload.expectedSequence })
+  }, () => campaignRuntime.getStatus(payload.campaignId), () => runCampaignControl(action, payload.campaignId, operation));
+}
+
+async function executeWebAppPrepare(request: InternalEnvelope): Promise<CampaignPublicStatus> {
+  const payload = request.payload as SerializedCampaignPayload;
+  const campaignId = payload.campaignId;
+  if (request.source !== "web-app-bridge") return acceptCampaign(payload);
+  return webAppCommandGate.execute({
+    requestId: request.requestId,
+    type: request.type,
+    campaignId
+  }, async () => {
+    const current = await campaignRuntime.getStatus();
+    return current?.campaignId === campaignId ? current : null;
+  }, () => acceptCampaign(payload));
+}
+
+const SERIALIZED_MUTATIONS = new Set<string>([
+  INTERNAL_MESSAGE_TYPES.campaignStart,
+  INTERNAL_MESSAGE_TYPES.campaignPause,
+  INTERNAL_MESSAGE_TYPES.campaignResume,
+  INTERNAL_MESSAGE_TYPES.campaignStop,
+  INTERNAL_MESSAGE_TYPES.campaignRestoreImages,
+  INTERNAL_MESSAGE_TYPES.webAppPrepareCampaign,
+  INTERNAL_MESSAGE_TYPES.webAppCancelCampaign
+]);
+
+async function handleRequest(request: InternalEnvelope): Promise<unknown> {
+  await initializeOnce();
+  return SERIALIZED_MUTATIONS.has(request.type)
+    ? campaignCommandQueue.run(() => dispatchRequest(request))
+    : dispatchRequest(request);
 }
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
@@ -945,13 +1005,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  const campaignId = campaignIdFromAlarm(alarm.name);
-  if (!campaignId) return;
-  void campaignRuntime.handleAlarm(campaignId).catch(async (error: unknown) => {
+  const identity = campaignAlarmFromName(alarm.name);
+  if (!identity) return;
+  void initializeOnce().then(() => campaignCommandQueue.run(() => campaignRuntime.handleAlarm(identity.campaignId, identity.runToken))).catch(async (error: unknown) => {
     const normalized = toExtensionError(error);
     await stateStore.appendError({ ...serializeError(normalized), at: new Date().toISOString() });
-    logger.error("campaign.alarm_failed", { campaignId, errorCode: normalized.code });
+    logger.error("campaign.alarm_failed", { campaignId: identity.campaignId, errorCode: normalized.code });
   });
 });
 
-void initialize();
+void initializeOnce();

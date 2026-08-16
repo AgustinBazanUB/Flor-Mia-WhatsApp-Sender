@@ -8,10 +8,12 @@ import {
   outgoingMessages
 } from "./selectors";
 import { waitForCondition } from "./wait";
+import { requireConversationContext } from "./conversation-context";
 
 export interface ReconcileStepInput {
   kind: "image" | "text";
   operationId: string;
+  expectedPhoneDigits: string;
   baselineOutgoingIds: string[];
   message?: string;
   timeoutMs?: number;
@@ -34,7 +36,7 @@ function inspect(input: ReconcileStepInput): StepReconciliationResult | null {
   const baseline = new Set(input.baselineOutgoingIds);
   if (input.kind === "text") {
     const expected = canonicalMessageText(input.message ?? "");
-    const outgoing = outgoingMessages().find((item) => !baseline.has(item.identity) && item.text === expected);
+    const outgoing = outgoingMessages().find((item) => item.stableIdentity && !baseline.has(item.identity) && item.text === expected);
     if (outgoing) return result("confirmed", "reconciled-new-outgoing-text-dom", true, outgoing.identity);
     const composer = findComposer();
     if (composer && canonicalMessageText(composer.element.textContent ?? "") === expected && expected) {
@@ -43,7 +45,7 @@ function inspect(input: ReconcileStepInput): StepReconciliationResult | null {
     return null;
   }
 
-  const outgoing = outgoingMediaMessages().find((item) => !baseline.has(item.identity));
+  const outgoing = outgoingMediaMessages().find((item) => item.stableIdentity && !baseline.has(item.identity));
   if (outgoing) return result("confirmed", "reconciled-new-outgoing-media-dom", true, outgoing.identity);
   const preview = findMediaPreview();
   if (preview && findMediaSendButton(preview.element)) {
@@ -53,6 +55,7 @@ function inspect(input: ReconcileStepInput): StepReconciliationResult | null {
 }
 
 export async function reconcileWhatsAppStep(input: ReconcileStepInput): Promise<StepReconciliationResult> {
+  requireConversationContext(input.expectedPhoneDigits);
   const immediate = inspect(input);
   if (immediate) return immediate;
   const resolved = await waitForCondition(() => inspect(input), {

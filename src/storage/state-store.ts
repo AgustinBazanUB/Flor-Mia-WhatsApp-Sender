@@ -28,7 +28,7 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
   const date = new Date(now);
   const localDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     extensionVersion: "unknown",
     status: "idle",
     currentCampaign: null,
@@ -84,10 +84,17 @@ export class StateStore {
         .filter((item): item is NonNullable<typeof item> => Boolean(item))
         .sort((a, b) => b.lastWorkingAt.localeCompare(a.lastWorkingAt))[0]?.extensionVersion
       ?? null;
+    const storedState = stored as Partial<ExtensionState> & { activeCampaign?: unknown };
+    const activeCampaign = storedState.activeCampaign
+      && typeof storedState.activeCampaign === "object"
+      && (storedState.activeCampaign as { snapshotSchemaVersion?: unknown }).snapshotSchemaVersion === 1
+      ? storedState.activeCampaign as ExtensionState["activeCampaign"]
+      : null;
     return {
       ...defaults,
-      ...stored as Partial<ExtensionState>,
+      ...storedState,
       schemaVersion: defaults.schemaVersion,
+      activeCampaign,
       config: {
         ...defaults.config,
         ...(stored as Partial<ExtensionState>).config,

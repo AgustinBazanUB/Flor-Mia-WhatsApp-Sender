@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { CampaignScheduler, type CampaignWakeupScheduler } from "../src/campaign/scheduler";
+import {
+  campaignAlarmFromName,
+  campaignAlarmName,
+  CampaignScheduler,
+  type CampaignWakeupScheduler
+} from "../src/campaign/scheduler";
 import type { CampaignState } from "../src/campaign/campaign-types";
 
 class FakeWakeups implements CampaignWakeupScheduler {
-  readonly scheduled: Array<{ campaignId: string; when: number }> = [];
-  readonly cancelled: string[] = [];
-  async schedule(campaignId: string, when: number): Promise<void> { this.scheduled.push({ campaignId, when }); }
-  async cancel(campaignId: string): Promise<void> { this.cancelled.push(campaignId); }
+  readonly scheduled: Array<{ campaignId: string; runToken: string; when: number }> = [];
+  readonly cancelled: Array<{ campaignId: string; runToken: string }> = [];
+  async schedule(campaignId: string, runToken: string, when: number): Promise<void> { this.scheduled.push({ campaignId, runToken, when }); }
+  async cancel(campaignId: string, runToken: string): Promise<void> { this.cancelled.push({ campaignId, runToken }); }
 }
 
 function campaign(status: CampaignState["status"]): CampaignState {
   return {
     schemaVersion: 1,
+    runToken: "run-current",
     campaignId: "campaign-1",
     campaignName: "Prueba",
     createdBy: "tests",
@@ -48,7 +54,7 @@ describe("persistent campaign scheduler", () => {
     const engine = { advance: async () => waiting };
     const scheduler = new CampaignScheduler({ engine: engine as never, wakeups, now: () => Date.parse("2026-08-15T10:00:00.000Z") });
     await scheduler.run("campaign-1");
-    expect(wakeups.scheduled).toEqual([{ campaignId: "campaign-1", when: Date.parse(waiting.wait.until) }]);
+    expect(wakeups.scheduled).toEqual([{ campaignId: "campaign-1", runToken: "run-current", when: Date.parse(waiting.wait.until) }]);
   });
 
   it("coalesces concurrent wakeups so only one contact can run", async () => {
@@ -69,6 +75,12 @@ describe("persistent campaign scheduler", () => {
     release();
     await Promise.all([first, second]);
     expect(executions).toBe(1);
-    expect(wakeups.cancelled).toEqual(["campaign-1"]);
+    expect(wakeups.cancelled).toEqual([{ campaignId: "campaign-1", runToken: "run-current" }]);
+  });
+
+  it("round-trips campaign and run token in an alarm name", () => {
+    const name = campaignAlarmName("campaign:reuse", "run/token:2");
+    expect(campaignAlarmFromName(name)).toEqual({ campaignId: "campaign:reuse", runToken: "run/token:2" });
+    expect(campaignAlarmFromName("flor-mia-campaign:legacy-without-token")).toBeNull();
   });
 });

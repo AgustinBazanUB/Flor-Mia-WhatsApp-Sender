@@ -17,6 +17,7 @@ function campaign(status: CampaignState["status"] = "received", sequence = 1): C
   const completed = status === "completed";
   return {
     schemaVersion: 1,
+    runToken: "run-public",
     campaignId: "campaign-sync",
     campaignName: "Campaña de aceptación",
     createdBy: "flor_mia",

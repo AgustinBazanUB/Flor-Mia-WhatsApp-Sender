@@ -104,6 +104,7 @@ export interface CampaignPublicDailyLimit {
 
 export interface CampaignState {
   schemaVersion: 1;
+  runToken?: string;
   campaignId: string;
   campaignName: string;
   createdBy: string;

@@ -5,7 +5,7 @@
 - `src/campaign/`: máquina de estados, política, store, límite diario, progreso, `CampaignEngine`, scheduler, último evento público e historial terminal acotado.
 - `src/engine/`: `ContactEngine` atómico, pasos, checkpoints, reconciliación y reintentos de un destinatario.
 - `src/background/campaign-runtime.ts`: composición entre campaña, contacto, preflight, persistencia, IndexedDB y alarmas.
-- `src/background/service-worker.ts`: frontera de mensajes Manifest V3 y rehidratación; no contiene la lógica del scheduler.
+- `src/background/service-worker.ts`: frontera de mensajes Manifest V3 y rehidratación; serializa toda mutación de campaña en una cola single-flight y no contiene la lógica del scheduler.
 - `src/background/contact-adapter.ts`: adapta el `ContactEngine` a WhatsApp e IndexedDB.
 - `src/content/whatsapp.ts`: frontera interna de diagnóstico, navegación, envío y reconciliación.
 - `src/content/web-app-bridge.ts`: puente seguro `window.postMessage` ↔ runtime para orígenes permitidos.
@@ -30,7 +30,7 @@ Campaña recibida
 
 El `CampaignEngine` nunca conoce selectores de WhatsApp ni reimplementa reintentos. Cada llamada a `advance()` procesa como máximo un contacto y devuelve después de persistir. El `CampaignScheduler` combina despertares simultáneos, por lo que no existen dos destinatarios concurrentes.
 
-El `ContactEngine` conserva la secuencia `imagen 1 → imagen 2 → imagen 3 → texto`, omitiendo pasos inexistentes. Un paso se confirma únicamente con evidencia DOM y un paso `confirmed` nunca se repite.
+El `ContactEngine` conserva la secuencia `imagen 1 → imagen 2 → imagen 3 → texto`, omitiendo pasos inexistentes. Un paso se confirma únicamente con evidencia DOM de identidad estable y un paso `confirmed` nunca se repite. La semántica no es exactly-once transaccional con WhatsApp: el objetivo es **at-most-once unless safely proven not sent**.
 
 ## Máquina de estados de campaña
 
@@ -43,7 +43,7 @@ Semántica de controles:
 - **Iniciar:** solo campaña recibida/válida y preflight operativo; programa el primer pendiente.
 - **Pausar:** fija `pauseRequested`. Si hay contacto activo, `ContactEngine` llega a la próxima frontera segura antes de confirmar `paused`.
 - **Reanudar:** exige nuevo preflight, recupera espera/checkpoint y continúa el contacto o destinatario correcto.
-- **Detener:** fija `stopRequested`; si existe contacto activo espera la misma frontera segura. `stopped` no es un error.
+- **Detener:** fija `stopRequested`; si existe evidencia post-click ambigua, conserva checkpoint/blobs y reconcilia antes de llegar a una frontera segura. `stopped` no es un error.
 
 ## Persistencia
 
@@ -53,7 +53,7 @@ El texto se guarda una vez por campaña. Los metadatos de imágenes se guardan e
 
 Claves principales de `chrome.storage.local`:
 
-- `extensionState`: vista global para popup y compatibilidad técnica;
+- `extensionState`: vista pública resumida para popup y compatibilidad técnica, sin duplicar texto ni queue de destinatarios;
 - `activeCampaign`: fuente persistente del scheduler;
 - `activeContactCheckpoint`: unidad atómica activa;
 - `campaignDailyLimit`: contador diario idempotente;
@@ -62,8 +62,9 @@ Claves principales de `chrome.storage.local`:
 - `campaignHistory`: hasta 50 resúmenes terminales sin destinatarios ni contenido;
 - `whatsappCompatibilityState`: semáforo, último preflight, Last Known Good, drift y último fallo técnico saneado;
 - `technicalTraceState`: ring buffer técnico, máximo 500 registros por campaña y 1.000 globales; no contiene mensajes, binarios ni teléfonos completos.
+- `webAppCommandLog`: hasta 100 IDs de comandos mutantes, sin payloads privados, para deduplicación persistente.
 
-El schema de `extensionState` es `6` y el de compatibilidad es `2`. Las migraciones son forward, fusionan valores anteriores con defaults y preservan campaña/checkpoint en sus stores dedicados. Compatibilidad distingue la versión instalada de `lastKnownGoodExtensionVersion`.
+El schema de `extensionState` es `7` y el de compatibilidad es `2`. La migración elimina la copia legacy de `CampaignState` y preserva campaña/checkpoint en sus stores dedicados. Compatibilidad distingue la versión instalada de `lastKnownGoodExtensionVersion`.
 
 ## Diagnóstico y reporte para reparación
 
@@ -84,7 +85,7 @@ La sanitización es defensa en profundidad y se vuelve a aplicar al construir el
 
 ## Scheduler, tandas y Manifest V3
 
-La política tipada está centralizada en `campaign-policy.ts`. Después de un contacto completado, el motor persiste `wait.until` y usa un `chrome.alarms` con nombre ligado a la campaña. El timeout no vive solo en memoria, así que un Service Worker suspendido puede despertar y continuar desde la frontera persistida.
+La política tipada está centralizada en `campaign-policy.ts`. Después de un contacto completado, el motor persiste `wait.until` y usa un `chrome.alarms` ligado a `campaignId + runToken`; una alarma de una vida anterior se ignora. El timeout no vive solo en memoria, así que un Service Worker suspendido puede despertar y continuar desde la frontera persistida.
 
 La alarma no evita suspensión del equipo ni mantiene Chrome abierto. No se ejecuta un bucle infinito y no se inicia una campaña al rehidratarla. Solo una espera ya programada puede reprogramarse automáticamente; un contacto incierto queda pausado.
 
@@ -97,6 +98,8 @@ La fecha usa el calendario local. Cada acción y consulta refresca el contador. 
 ## Rehidratación y WhatsApp no disponible
 
 Al iniciar el Service Worker se cargan campaña, contador y checkpoint. Se reutiliza `markInterruptedCheckpointAmbiguous`: un step con envío intentado queda en verificación pendiente y uno anterior al click puede volver a `pending`.
+
+Un checkpoint `completed` permanece durable mientras se registra el contador idempotente y se persiste el recipient completado. Solo después se limpia; una recuperación termina esa aplicación sin volver a ejecutar el `ContactEngine`.
 
 Las causas recuperables se distinguen como `whatsapp_reloading`, `whatsapp_tab_closed`, `whatsapp_session_closed`, `contact_ambiguous` e `images_required`. Todas bloquean el siguiente contacto. Reanudar requiere preflight y conserva el índice real.
 
@@ -111,6 +114,8 @@ El preflight recibe `campaignRequirements` y un nivel:
 - `targeted`: modelo reservado para profundizar una capability concreta después de un fallo.
 
 Para un inicio real, `CampaignRuntime` ejecuta primero el chequeo base, abre mediante `/send` la conversación del destinatario explícito sin enviar y luego realiza el preflight completo en contexto. Si hay imágenes, reutiliza el primer blob compartido para preparar un preview técnico, detectar su acción de envío y cerrarlo sin hacer clic en enviar.
+
+El `ContactAdapter` vincula una única pestaña de WhatsApp para open/send/reconcile. Después de abrir y justo antes de cada click, `ConversationContextProof` exige una identidad estructurada del destinatario esperado dentro de `#main`; la falta o contradicción bloquea sin click.
 
 `src/whatsapp/selectors.ts` expone un registro por capability. Cada estrategia tiene ID estable, método, prioridad, cantidad de coincidencias, candidato elegido y resultado. El orden favorece accesibilidad y semántica antes de atributos/fallbacks técnicos. Los wrappers históricos (`findComposer`, `findAttachButton`, etc.) delegan al mismo resolver para preservar al `ContactEngine`.
 
@@ -130,6 +135,8 @@ Ver [`DIAGNOSTICS.md`](DIAGNOSTICS.md) para el modelo de evidencia y sus límite
 Canal `flor_mia_whatsapp_extension`, protocolo versión `1`, con `requestId`/`replyTo`, `campaignId` y `sequence` cuando aplica.
 
 Solicitudes: `FLORMIA_CAMPAIGN_PREPARE`, `FLORMIA_CAMPAIGN_START`, `FLORMIA_CAMPAIGN_PAUSE`, `FLORMIA_CAMPAIGN_RESUME`, `FLORMIA_CAMPAIGN_STOP` y `FLORMIA_CAMPAIGN_STATUS_REQUEST`.
+
+Prepare/Start/Pause/Resume/Stop conservan el `requestId` original hasta el Service Worker y se deduplican en un buffer persistente acotado. Los controles pueden incluir `sequence`; si no coincide con el snapshot actual, se rechazan como stale antes de mutar.
 
 Eventos/respuestas: accepted, started, progress, paused, resumed, completed, error y stopped. El bridge rechaza controles cuyo `campaignId` no coincide con la campaña activa y solo publica estado saneado, sin texto, teléfono completo ni claves idempotentes del límite diario. Solo se persiste el evento más reciente; Flor Mía recupera cualquier evento perdido mediante `STATUS_REQUEST`/PULL y descarta secuencias antiguas.
 

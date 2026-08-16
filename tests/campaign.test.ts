@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { validateCampaignInput } from "../src/shared/campaign";
+import {
+  MAX_CAMPAIGN_ID_LENGTH,
+  MAX_CLIENT_ID_LENGTH,
+  MAX_IMAGE_NAME_LENGTH,
+  MAX_RECIPIENT_NAME_LENGTH,
+  validateCampaignInput
+} from "../src/shared/campaign";
 import { deserializeCampaign, serializeCampaign } from "../src/shared/serialization";
 
 function campaign() {
@@ -39,5 +45,20 @@ describe("campaign contract", () => {
     const invalid = campaign();
     invalid.images[0]!.size = 99;
     expect(() => validateCampaignInput(invalid)).toThrow(/tamaño declarado/i);
+  });
+
+  it("rejects oversized identifiers, names and image metadata", () => {
+    expect(() => validateCampaignInput({ ...campaign(), campaignId: "x".repeat(MAX_CAMPAIGN_ID_LENGTH + 1) })).toThrow(/campaignId supera/i);
+    expect(() => validateCampaignInput({
+      ...campaign(),
+      recipients: [{ ...campaign().recipients[0], name: "x".repeat(MAX_RECIPIENT_NAME_LENGTH + 1) }]
+    })).toThrow(/name supera/i);
+    expect(() => validateCampaignInput({
+      ...campaign(),
+      recipients: [{ ...campaign().recipients[0], clientId: "x".repeat(MAX_CLIENT_ID_LENGTH + 1) }]
+    })).toThrow(/clientId supera/i);
+    const invalidImage = campaign();
+    invalidImage.images[0]!.name = "x".repeat(MAX_IMAGE_NAME_LENGTH + 1);
+    expect(() => validateCampaignInput(invalidImage)).toThrow(/images\[0\]\.name supera/i);
   });
 });

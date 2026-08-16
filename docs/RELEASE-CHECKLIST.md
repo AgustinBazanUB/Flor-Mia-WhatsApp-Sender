@@ -1,4 +1,4 @@
-# Checklist de release 0.6.0
+# Checklist de release 0.9.0 RC
 
 ## Automatizado
 
@@ -9,11 +9,13 @@
 - [x] finalización, historial y cleanup/retención testeados;
 - [x] `npm run verify` ejecutado localmente;
 - [x] workflow GitHub Actions ejecuta `npm ci` y `npm run verify`.
+- [x] contexto de destinatario, tab binding, crash completion, Stop ambiguo y alarmas stale cubiertos por tests;
+- [x] comandos mutantes serializados/deduplicados y campaña máxima de 5.000 destinatarios medida;
 
 ## Manual con Chrome/WhatsApp real
 
-- [ ] cargar `dist/` sin empaquetar y confirmar versión 0.6.0;
-- [ ] ejecutar matriz A–L de `ACCEPTANCE-TESTS.md` con números autorizados;
+- [ ] cargar `dist/` sin empaquetar y confirmar versión 0.9.0 RC;
+- [ ] ejecutar matriz A–P de `ACCEPTANCE-TESTS.md` con números autorizados;
 - [ ] confirmar recepción PUSH y reconexión PULL en Marketing de Flor Mía;
 - [ ] confirmar campaña completa y resumen final visible en ambas superficies;
 - [ ] probar cierre de popup y reinicio del Service Worker;

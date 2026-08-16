@@ -19,6 +19,7 @@ class TestDataTransfer {
 beforeEach(() => {
   document.body.innerHTML = `
     <div id="main">
+      <header data-jid="5491112345678@c.us"></header>
       <div class="message-out" data-id="true_old"><img src="data:image/png;base64,AA=="></div>
       <footer>
         <button type="button" data-testid="clip">Adjuntar</button>
@@ -41,6 +42,7 @@ beforeEach(() => {
 function imageInput() {
   return {
     operationId: "campaign:contact:image-1",
+    expectedPhoneDigits: "5491112345678",
     imageId: "image-1",
     name: "flor.png",
     type: "image/png",
@@ -93,5 +95,23 @@ describe("verified image send", () => {
       code: "SELECTOR_STRATEGY_EXHAUSTED",
       details: { compatibilityDiagnostic: { capability: "attachment_action", logicalStep: "image.attachment_action" } }
     });
+  });
+
+  it("does not click Image 2 after the user switches chat before the real click", async () => {
+    let clicks = 0;
+    document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => { clicks += 1; });
+    await expect(sendAndVerifyImage({ ...imageInput(), operationId: "campaign:contact:image-2", imageId: "image-2" }, {
+      beforeSend: async () => { document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us"); }
+    })).rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
+    expect(clicks).toBe(0);
+  });
+
+  it("never confirms outgoing media without a stable DOM id", async () => {
+    document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
+      document.getElementById("main")!.insertAdjacentHTML("beforeend", "<div class='message-out'><img src='blob:test'></div>");
+      document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
+    });
+    await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 5 }))
+      .rejects.toMatchObject({ code: "AMBIGUOUS_RESULT" });
   });
 });

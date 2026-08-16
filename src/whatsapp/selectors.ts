@@ -346,12 +346,14 @@ export const findConversationHeader = (root?: ParentNode): SelectorMatch | null 
 
 export interface OutgoingMessageSnapshot {
   identity: string;
+  stableIdentity: boolean;
   text: string;
   element: HTMLElement;
 }
 
 export interface OutgoingMediaSnapshot {
   identity: string;
+  stableIdentity: boolean;
   element: HTMLElement;
 }
 
@@ -372,8 +374,10 @@ export function outgoingMessages(root: ParentNode = document): OutgoingMessageSn
     if (!isOutgoing || seen.has(container)) continue;
     seen.add(container);
     const textElement = container.querySelector<HTMLElement>("[data-testid='msg-text'], .selectable-text") ?? container;
+    const stableIdentity = dataId || container.id;
     result.push({
-      identity: dataId || container.id || `outgoing-${result.length}-${normalizeMessageText(textElement.textContent ?? "").length}`,
+      identity: stableIdentity || `observation-outgoing-${result.length}-${normalizeMessageText(textElement.textContent ?? "").length}`,
+      stableIdentity: Boolean(stableIdentity),
       text: normalizeMessageText(textElement.textContent ?? ""),
       element: container
     });
@@ -397,8 +401,10 @@ export function outgoingMediaMessages(root: ParentNode = document): OutgoingMedi
     );
     if (!media) continue;
     seen.add(container);
+    const stableIdentity = dataId || container.id;
     result.push({
-      identity: dataId || container.id || `outgoing-media-${result.length}`,
+      identity: stableIdentity || `observation-outgoing-media-${result.length}`,
+      stableIdentity: Boolean(stableIdentity),
       element: container
     });
   }

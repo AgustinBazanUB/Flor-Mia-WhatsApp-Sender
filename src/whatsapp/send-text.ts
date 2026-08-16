@@ -11,6 +11,7 @@ import {
   resolveCapability
 } from "./selectors";
 import { waitForCondition } from "./wait";
+import { requireConversationContext } from "./conversation-context";
 
 async function contactIdForPhone(phoneDigits: string): Promise<string> {
   const data = new TextEncoder().encode(`flor-mia-test-contact:${phoneDigits}`);
@@ -64,6 +65,7 @@ export async function sendAndVerifyText(input: {
 }, lifecycle: { beforeSend?: (baselineOutgoingIds: string[]) => Promise<void> } = {}): Promise<TextTestResult> {
   const { operationId, phoneDigits, message, timeoutMs = 30_000 } = input;
   const startedAt = new Date().toISOString();
+  requireConversationContext(phoneDigits);
   const invalidDialog = findInvalidContactDialog();
   if (invalidDialog) {
     throw new ExtensionError(ERROR_CODES.contactUnavailable, "WhatsApp informó que el número no es válido o no está disponible.", {
@@ -85,7 +87,7 @@ export async function sendAndVerifyText(input: {
     );
   });
 
-  const beforeIds = new Set(outgoingMessages().map((item) => item.identity));
+  const beforeIds = new Set(outgoingMessages().filter((item) => item.stableIdentity).map((item) => item.identity));
   setComposerText(composerMatch.element, message);
   const sendButton = await waitForCondition(() => findSendButton(), {
     timeoutMs: Math.min(timeoutMs, 10_000),
@@ -104,11 +106,12 @@ export async function sendAndVerifyText(input: {
     );
   }
   await lifecycle.beforeSend?.([...beforeIds]);
+  requireConversationContext(phoneDigits);
   sendButton.element.click();
 
   const expected = canonicalMessageText(message);
   const verified = await waitForCondition(() => {
-    return outgoingMessages().find((item) => !beforeIds.has(item.identity) && item.text === expected) ?? null;
+    return outgoingMessages().find((item) => item.stableIdentity && !beforeIds.has(item.identity) && item.text === expected) ?? null;
   }, { timeoutMs, description: "un nuevo mensaje saliente que coincida con el texto enviado" }).catch((error: unknown) => {
     throw new ExtensionError(ERROR_CODES.verificationFailed, "No se pudo confirmar un nuevo mensaje saliente en WhatsApp.", {
       details: { expectedLength: expected.length, sendAttempted: true, baselineOutgoingIds: [...beforeIds] },

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CampaignEngine, type CampaignContactRunner } from "../src/campaign/campaign-engine";
+import {
+  CampaignEngine,
+  type CampaignCompletionFaultPoint,
+  type CampaignContactRunner
+} from "../src/campaign/campaign-engine";
 import { DEFAULT_CAMPAIGN_POLICY } from "../src/campaign/campaign-policy";
 import { createCampaignState } from "../src/campaign/campaign-store";
 import type {
@@ -65,6 +69,7 @@ class FakeContactRunner implements CampaignContactRunner {
   readonly calls: string[] = [];
   readonly outcomes = new Map<string, RunnerOutcome[]>();
   onRun?: (checkpoint: ContactProcessCheckpoint) => Promise<void>;
+  onAmbiguous?: () => Promise<void>;
   concurrent = 0;
   maxConcurrent = 0;
 
@@ -101,6 +106,7 @@ class FakeContactRunner implements CampaignContactRunner {
         };
       }
       if (outcome === "ambiguous") {
+        await this.onAmbiguous?.();
         return {
           ...checkpoint,
           status: "paused",
@@ -181,7 +187,11 @@ function initialCampaign(
   return createCampaignState(validated, { ...DEFAULT_CAMPAIGN_POLICY, delayBetweenContactsMs: 0, delayBetweenBatchesMs: 0, ...policy }, daily, NOW.toISOString());
 }
 
-function setup(total: number, policy: Partial<CampaignPolicyConfig> = {}) {
+function setup(
+  total: number,
+  policy: Partial<CampaignPolicyConfig> = {},
+  completionFault?: (point: CampaignCompletionFaultPoint) => Promise<void> | void
+) {
   const campaigns = new MemoryCampaignStore();
   const checkpoints = new MemoryCheckpointStore();
   const daily = new MemoryDailyLimit();
@@ -193,8 +203,15 @@ function setup(total: number, policy: Partial<CampaignPolicyConfig> = {}) {
     campaigns,
     dailyLimit: daily,
     contactCheckpoints: checkpoints,
-    contactRunner: runner,
-    now: () => new Date(NOW)
+    contactRunner: {
+      run: async (checkpoint, shouldPause) => {
+        const result = await runner.run(checkpoint, shouldPause);
+        await checkpoints.saveActive(result);
+        return result;
+      }
+    },
+    now: () => new Date(NOW),
+    completionFault
   });
   return { campaigns, checkpoints, daily, runner, engine, campaign };
 }
@@ -302,6 +319,43 @@ describe("multi-contact CampaignEngine", () => {
     expect(setupState.runner.calls).toEqual(["contact-1", "contact-2"]);
   });
 
+  it.each([
+    "after_contact_completed",
+    "after_daily_increment",
+    "before_campaign_save",
+    "after_campaign_save",
+    "before_checkpoint_clear"
+  ] as const)("recovers idempotently from completion crash point %s", async (faultPoint) => {
+    let crashed = false;
+    const state = setup(1, {}, (point) => {
+      if (!crashed && point === faultPoint) {
+        crashed = true;
+        throw new Error(`crash:${point}`);
+      }
+    });
+    await state.engine.start("campaign-1");
+    await expect(state.engine.advance("campaign-1")).rejects.toThrow(`crash:${faultPoint}`);
+    expect(state.checkpoints.active?.status).toBe("completed");
+
+    const recoveredEngine = new CampaignEngine({
+      campaigns: state.campaigns,
+      dailyLimit: state.daily,
+      contactCheckpoints: state.checkpoints,
+      contactRunner: state.runner,
+      now: () => new Date(NOW)
+    });
+    const recovered = await recoveredEngine.recoverAfterServiceWorkerRestart(
+      state.campaigns.active!,
+      state.checkpoints.active
+    );
+    expect(recovered.status).toBe("completed");
+    expect(recovered.completedRecipients).toBe(1);
+    expect(state.daily.state?.completedToday).toBe(1);
+    expect(state.daily.state?.countedContactKeys).toEqual(["campaign-1:contact-1"]);
+    expect(state.runner.calls).toEqual(["contact-1"]);
+    expect(state.checkpoints.active).toBeNull();
+  });
+
   it("recovers an interrupted active contact conservatively after a Service Worker restart", async () => {
     const setupState = setup(2);
     let running = await setupState.engine.start("campaign-1");
@@ -385,6 +439,18 @@ describe("multi-contact CampaignEngine", () => {
     expect(result.status).toBe("paused");
     expect(result.blockReason?.code).toBe("contact_ambiguous");
     expect(runner.calls).toEqual(["contact-1"]);
+  });
+
+  it("keeps Stop as intent while an ambiguous post-click result awaits reconciliation", async () => {
+    const { engine, runner, checkpoints } = setup(2);
+    runner.outcomes.set("contact-1", ["ambiguous"]);
+    runner.onAmbiguous = async () => { await engine.requestStop("campaign-1"); };
+    const result = await startAndAdvance(engine, 1);
+    expect(result.status).toBe("paused");
+    expect(result.stopRequested).toBe(true);
+    expect(result.blockReason?.code).toBe("contact_ambiguous");
+    expect(checkpoints.active?.steps[0]?.status).toBe("verification_pending");
+    expect(result.recipients[1]?.status).toBe("pending");
   });
 
   it("pauses on a capability break during a contact and never advances", async () => {

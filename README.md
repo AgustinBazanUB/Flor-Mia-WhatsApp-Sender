@@ -1,10 +1,18 @@
 # Flor Mía WhatsApp Sender
 
-Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.6.0` completa la sincronización PUSH/PULL con Marketing, secuencias monotónicas, finalización/cleanup verificables, historial mínimo, migraciones forward y CI, conservando el `ContactEngine` atómico.
+Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario. La versión `0.9.0 RC` agrega garantías de contexto, pestaña vinculada, consistencia ante crash, comandos serializados/idempotentes y alarmas no obsoletas, conservando el `ContactEngine` atómico.
 
 La extensión no inicia una campaña por recibirla: primero la valida y la deja en estado `received`. El usuario debe ejecutar **Iniciar**, con WhatsApp Web abierto, sesión activa y preflight operativo.
 
-## Alcance de la versión 0.6.0
+## Alcance de la versión 0.9.0 RC
+
+- prueba estructurada del destinatario activo inmediatamente antes de cada click y durante reconciliación;
+- pestaña de WhatsApp vinculada durante toda la unidad activa, sin fallback automático a otra pestaña;
+- completion durable: checkpoint completed → contador idempotente → campaña persistida → limpieza del checkpoint;
+- Stop conserva checkpoint y blobs mientras exista evidencia post-click ambigua;
+- cola única de mutaciones del Service Worker e idempotencia persistente/acotada de comandos Web-App;
+- campaña máxima de 5.000 destinatarios medida sin duplicar la queue completa en `extensionState`;
+- evidencia saliente concluyente solo con identidad DOM estable y alarmas ligadas a un token de ejecución;
 
 - snapshot público completo y tipado para reconexión de Flor Mía;
 - eventos accepted/started/progress/paused/resumed/error/stopped/completed con `sequence` monotónica;
@@ -15,7 +23,7 @@ La extensión no inicia una campaña por recibirla: primero la valida y la deja 
 - cleanup de imágenes después de completed/stopped; retención en paused/error/images_required;
 - payloads y orígenes validados en runtime; fault injection rechazada desde producción;
 - schemas migrables y `lastKnownGoodExtensionVersion` separado de la versión instalada;
-- matriz A–L, documentación del protocolo/privacidad/release y GitHub Actions;
+- matriz A–P, documentación del protocolo/privacidad/release y GitHub Actions;
 
 - ficha `DiagnosticIncident` en el popup para campañas pausadas, bloqueadas, detenidas o en error;
 - taxonomía central que mapea los `ERROR_CODES` existentes sin sustituirlos;
@@ -99,6 +107,8 @@ Cerrar el popup no modifica el motor. La campaña puede continuar mientras Chrom
 ## Recuperación segura
 
 - Un paso confirmado no vuelve a ejecutarse.
+- Antes de enviar, `ConversationContextProof` debe demostrar mediante identidad estructurada que `#main` pertenece al destinatario esperado; si no, se bloquea con `CONTACT_CONTEXT_UNVERIFIED`.
+- Cada contacto usa una única pestaña vinculada; si desaparece, se pausa aunque exista otra pestaña de WhatsApp.
 - Un clic sin confirmación queda en `verification_pending` y se reconcilia antes de cualquier reintento.
 - Una recarga de WhatsApp, pestaña cerrada o sesión cerrada pausa la campaña con una causa diferenciada.
 - Un selector primario que deja de funcionar pero conserva un fallback válido se registra como drift y permanece `GREEN`.
@@ -132,3 +142,4 @@ El proyecto usa SemVer. PATCH corrige sin cambiar el contrato; MINOR agrega comp
 - La inclusión del nombre de campaña es opt-in; el texto y la lista de destinatarios nunca forman parte del reporte.
 - La captura DOM avanzada y la auditoría end-to-end definitiva continúan fuera de esta etapa.
 - La validación real de una campaña requiere cargar `dist/` en Chrome y usar destinatarios autorizados.
+- WhatsApp no ofrece una transacción exactly-once. La semántica buscada es **at-most-once unless safely proven not sent**: nunca reintentar después de un posible click salvo prueba segura de que no se envió.

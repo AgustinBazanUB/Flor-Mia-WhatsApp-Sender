@@ -13,7 +13,7 @@ describe("state storage", () => {
     expect(state.status).toBe("idle");
     expect(state.currentCampaign).toBeNull();
     expect(state.lastCheckpoint).toBeNull();
-    expect(state.schemaVersion).toBe(6);
+    expect(state.schemaVersion).toBe(7);
     expect(state.extensionVersion).toBe("unknown");
     expect(state.config.retryPolicy.maxAttemptsPerStep).toBe(3);
     expect(state.config.campaignPolicy).toMatchObject({
@@ -48,7 +48,7 @@ describe("state storage", () => {
       }
     };
     const state = await new StateStore(storage).load();
-    expect(state.schemaVersion).toBe(6);
+    expect(state.schemaVersion).toBe(7);
     expect(state.config.diagnosticTimeoutMs).toBe(2_000);
     expect(state.config.retryPolicy.timeouts.previewMs).toBeGreaterThan(0);
     expect(state.config.campaignPolicy.whatsappLoadWaitMs).toBe(30_000);
@@ -72,5 +72,29 @@ describe("state storage", () => {
     expect(state.status).toBe("ready");
     expect(state.operations).toHaveLength(20);
     expect(state.operations[0]?.operationId).toBe("operation-5");
+  });
+
+  it("drops a legacy full campaign copy from extensionState", async () => {
+    const storage = new MemoryStorage();
+    storage.value = {
+      extensionState: {
+        ...createDefaultState(),
+        schemaVersion: 6,
+        activeCampaign: {
+          schemaVersion: 1,
+          campaignId: "legacy-campaign",
+          text: "private message",
+          recipients: [{ recipientId: "r-1", phoneDigits: "5491111111111" }],
+          images: [],
+          status: "paused"
+        }
+      }
+    };
+    const store = new StateStore(storage);
+    const migrated = await store.load();
+    expect(migrated.activeCampaign).toBeNull();
+    await store.save(migrated);
+    expect(JSON.stringify(storage.value.extensionState)).not.toContain("private message");
+    expect(JSON.stringify(storage.value.extensionState)).not.toContain("phoneDigits");
   });
 });

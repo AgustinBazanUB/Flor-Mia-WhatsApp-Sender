@@ -239,9 +239,9 @@ function renderCampaign(state: ExtensionState): void {
     campaignStop.disabled = true;
     return;
   }
-  const completed = campaign.completedRecipients;
-  const total = campaign.recipients.length;
-  const percentage = total ? Number(((completed / total) * 100).toFixed(2)) : 0;
+  const completed = campaign.sent;
+  const total = campaign.total;
+  const percentage = campaign.progressPercentage;
   campaignName.textContent = campaign.campaignName;
   campaignStatus.textContent = campaignStatusLabel(campaign.status);
   campaignStatus.className = `campaign-status is-${campaign.status}`;
@@ -250,9 +250,7 @@ function renderCampaign(state: ExtensionState): void {
   campaignProgressBar.style.width = `${percentage}%`;
   campaignProgressBar.parentElement?.setAttribute("aria-valuenow", String(percentage));
 
-  const active = campaign.activeContactId
-    ? campaign.recipients.find((recipient) => recipient.recipientId === campaign.activeContactId)
-    : campaign.recipients.find((recipient) => recipient.status === "pending");
+  const active = campaign.currentContact;
   campaignCurrentContact.textContent = active
     ? `Contacto ${active.position} / ${total}${active.name ? ` · ${active.name}` : ""} · ${active.maskedPhone}`
     : "Sin contacto pendiente";

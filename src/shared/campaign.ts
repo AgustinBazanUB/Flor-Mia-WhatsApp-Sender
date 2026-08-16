@@ -5,6 +5,15 @@ export const MAX_CAMPAIGN_IMAGES = 3;
 export const MAX_CAMPAIGN_RECIPIENTS = 5_000;
 export const MAX_CAMPAIGN_MESSAGE_LENGTH = 4_096;
 export const MAX_CAMPAIGN_IMAGE_BYTES = 16 * 1024 * 1024;
+export const MAX_CAMPAIGN_ID_LENGTH = 200;
+export const MAX_CAMPAIGN_NAME_LENGTH = 200;
+export const MAX_CREATED_BY_LENGTH = 120;
+export const MAX_RECIPIENT_ID_LENGTH = 200;
+export const MAX_CLIENT_ID_LENGTH = 200;
+export const MAX_RECIPIENT_NAME_LENGTH = 200;
+export const MAX_PHONE_INPUT_LENGTH = 32;
+export const MAX_IMAGE_NAME_LENGTH = 255;
+export const MAX_IMAGE_TYPE_LENGTH = 100;
 
 export interface CampaignRecipientInput {
   recipientId: string;
@@ -48,18 +57,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function requiredText(value: unknown, field: string): string {
+function requiredText(value: unknown, field: string, maxLength: number): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new ExtensionError(ERROR_CODES.invalidInput, `El campo ${field} es obligatorio.`);
   }
-  return value.trim();
+  const normalized = value.trim();
+  if (normalized.length > maxLength) {
+    throw new ExtensionError(ERROR_CODES.invalidInput, `El campo ${field} supera ${maxLength} caracteres.`);
+  }
+  return normalized;
+}
+
+function optionalText(value: unknown, field: string, maxLength: number): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw new ExtensionError(ERROR_CODES.invalidInput, `El campo ${field} no es válido.`);
+  const normalized = value.trim();
+  if (normalized.length > maxLength) {
+    throw new ExtensionError(ERROR_CODES.invalidInput, `El campo ${field} supera ${maxLength} caracteres.`);
+  }
+  return normalized;
 }
 
 export function validateCampaignInput(value: unknown): ValidatedCampaign {
   if (!isRecord(value)) throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña no tiene un formato válido.");
-  const campaignId = requiredText(value.campaignId, "campaignId");
-  const campaignName = requiredText(value.campaignName, "campaignName");
-  const createdBy = requiredText(value.createdBy, "createdBy");
+  const campaignId = requiredText(value.campaignId, "campaignId", MAX_CAMPAIGN_ID_LENGTH);
+  const campaignName = requiredText(value.campaignName, "campaignName", MAX_CAMPAIGN_NAME_LENGTH);
+  const createdBy = requiredText(value.createdBy, "createdBy", MAX_CREATED_BY_LENGTH);
   const message = typeof value.message === "string" ? value.message.trim() : "";
   if (!Array.isArray(value.recipients) || value.recipients.length === 0) {
     throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña necesita al menos un destinatario.");
@@ -71,15 +94,17 @@ export function validateCampaignInput(value: unknown): ValidatedCampaign {
     if (!isRecord(item)) throw new ExtensionError(ERROR_CODES.invalidInput, `El destinatario ${index + 1} no es válido.`);
     // La Web-App entrega `whatsappPhone` ya internacionalizado, sin prefijo `+`.
     // Aceptarlo aquí no implica asumir país: todos los dígitos deben venir explícitos.
-    const normalized = normalizePhone(requiredText(item.phone, `recipients[${index}].phone`), { allowDigitsOnly: true });
+    const normalized = normalizePhone(requiredText(item.phone, `recipients[${index}].phone`, MAX_PHONE_INPUT_LENGTH), { allowDigitsOnly: true });
     const source = item.source;
     if (source !== "flor_mia" && source !== "excel") {
       throw new ExtensionError(ERROR_CODES.invalidInput, `El origen del destinatario ${index + 1} no es válido.`);
     }
     return {
-      recipientId: requiredText(item.recipientId, `recipients[${index}].recipientId`),
-      clientId: typeof item.clientId === "string" ? item.clientId : null,
-      name: typeof item.name === "string" ? item.name.trim() : "",
+      recipientId: requiredText(item.recipientId, `recipients[${index}].recipientId`, MAX_RECIPIENT_ID_LENGTH),
+      clientId: item.clientId === undefined || item.clientId === null
+        ? null
+        : optionalText(item.clientId, `recipients[${index}].clientId`, MAX_CLIENT_ID_LENGTH),
+      name: optionalText(item.name, `recipients[${index}].name`, MAX_RECIPIENT_NAME_LENGTH),
       phone: normalized.e164,
       phoneDigits: normalized.digits,
       maskedPhone: normalized.masked,
@@ -111,12 +136,12 @@ export function validateCampaignInput(value: unknown): ValidatedCampaign {
     if (size !== item.data.byteLength) {
       throw new ExtensionError(ERROR_CODES.invalidInput, `El tamaño declarado de la imagen ${index + 1} no coincide con sus datos.`);
     }
-    if (typeof item.type !== "string" || !item.type.startsWith("image/")) {
+    if (typeof item.type !== "string" || item.type.length > MAX_IMAGE_TYPE_LENGTH || !item.type.startsWith("image/")) {
       throw new ExtensionError(ERROR_CODES.invalidInput, `El archivo ${index + 1} no es una imagen admitida.`);
     }
     return {
       order,
-      name: requiredText(item.name, `images[${index}].name`),
+      name: requiredText(item.name, `images[${index}].name`, MAX_IMAGE_NAME_LENGTH),
       type: item.type,
       size,
       data: item.data

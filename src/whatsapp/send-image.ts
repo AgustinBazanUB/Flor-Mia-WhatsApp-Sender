@@ -10,9 +10,11 @@ import {
   resolveCapability
 } from "./selectors";
 import { waitForCondition } from "./wait";
+import { requireConversationContext } from "./conversation-context";
 
 export interface ImageSendInput {
   operationId: string;
+  expectedPhoneDigits: string;
   imageId: string;
   name: string;
   type: string;
@@ -65,7 +67,8 @@ export async function sendAndVerifyImage(
   const imageLoadTimeoutMs = input.imageLoadTimeoutMs ?? 15_000;
   const previewTimeoutMs = input.previewTimeoutMs ?? 20_000;
   const confirmationTimeoutMs = input.confirmationTimeoutMs ?? 30_000;
-  const baselineOutgoingIds = outgoingMediaMessages().map((item) => item.identity);
+  requireConversationContext(input.expectedPhoneDigits);
+  const baselineOutgoingIds = outgoingMediaMessages().filter((item) => item.stableIdentity).map((item) => item.identity);
   const before = new Set(baselineOutgoingIds);
 
   const inputResolution = resolveCapability<HTMLInputElement>("image_file_input");
@@ -138,9 +141,10 @@ export async function sendAndVerifyImage(
   }
 
   await lifecycle.beforeSend?.(baselineOutgoingIds);
+  requireConversationContext(input.expectedPhoneDigits);
   sendButton.element.click();
   const verified = await waitForCondition(() => {
-    const outgoing = outgoingMediaMessages().find((item) => !before.has(item.identity));
+    const outgoing = outgoingMediaMessages().find((item) => item.stableIdentity && !before.has(item.identity));
     return outgoing && !elementVisible(preview.element) ? outgoing : null;
   }, {
     timeoutMs: confirmationTimeoutMs,

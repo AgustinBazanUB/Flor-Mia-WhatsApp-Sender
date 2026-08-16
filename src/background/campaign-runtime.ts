@@ -35,6 +35,7 @@ import type {
   PreflightProbeImage,
   WhatsAppPreflightRequest
 } from "../compatibility/types";
+import { hasUnresolvedSendEvidence } from "../engine/checkpoint-safety";
 
 const TERMINAL_CAMPAIGNS = new Set<CampaignState["status"]>(["completed", "stopped"]);
 
@@ -140,6 +141,9 @@ export class CampaignRuntime {
     checkpoint: ContactProcessCheckpoint | null
   ): Promise<void> {
     if (campaign.status !== "completed" && campaign.status !== "stopped") return;
+    if (campaign.status === "stopped" && hasUnresolvedSendEvidence(checkpoint)) {
+      throw new ExtensionError(ERROR_CODES.internal, "La campaña detenida conserva un envío ambiguo pendiente de reconciliación.", { recoverable: false });
+    }
     if (campaign.status === "completed") {
       const allRecipientsCompleted = campaign.recipients.length > 0
         && campaign.recipients.every((recipient) => recipient.status === "completed")
@@ -201,7 +205,7 @@ export class CampaignRuntime {
     await this.dependencies.stateStore.save({
       ...state,
       status: extensionStatus(campaign),
-      activeCampaign: campaign,
+      activeCampaign: publicStatus,
       dailyLimit: campaign.dailyLimit,
       currentCampaign: {
         campaignId: campaign.campaignId,
@@ -311,7 +315,7 @@ export class CampaignRuntime {
       throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña no está en un estado que admita pausa.");
     }
     const campaign = await this.engine.requestPause(campaignId);
-    if (campaign.status === "paused") await this.scheduler.cancel(campaignId);
+    if (campaign.status === "paused") await this.scheduler.cancel(campaign);
     else await this.scheduler.schedule(campaign, true);
     return this.syncCampaign(campaign);
   }
@@ -336,7 +340,7 @@ export class CampaignRuntime {
   async stop(campaignId: string): Promise<CampaignPublicStatus> {
     const campaign = await this.engine.requestStop(campaignId);
     if (campaign.status === "stopped") {
-      await this.scheduler.cancel(campaignId);
+      await this.scheduler.cancel(campaign);
     } else {
       await this.scheduler.schedule(campaign, true);
     }
@@ -372,9 +376,9 @@ export class CampaignRuntime {
     });
   }
 
-  async handleAlarm(campaignId: string): Promise<CampaignState | null> {
+  async handleAlarm(campaignId: string, runToken: string): Promise<CampaignState | null> {
     const campaign = await this.campaignStore.loadActive();
-    if (!campaign || campaign.campaignId !== campaignId) return null;
+    if (!campaign || campaign.campaignId !== campaignId || campaign.runToken !== runToken) return null;
     return this.scheduler.run(campaignId);
   }
 

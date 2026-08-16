@@ -1,4 +1,4 @@
-# Matriz de aceptación A–L
+# Matriz de aceptación A–P
 
 Los casos automatizados usan adaptadores, clock, scheduler/alarmas y storage falsos; nunca envían mensajes. Los casos reales requieren números propios o autorización expresa. “Automatizado” significa que el comportamiento interno pasó en el arnés, no que WhatsApp Web real haya sido validado.
 
@@ -122,6 +122,22 @@ Los casos automatizados usan adaptadores, clock, scheduler/alarmas y storage fal
 - PASS/FAIL: PASS si el reporte es útil, local y saneado sin mutar campaña; FAIL ante datos sensibles, transmisión o cambio de estado.
 - Estado: generación/sanitización automatizadas; flujo UI manual pendiente.
 
+## M. Múltiples pestañas de WhatsApp
+
+- Abrir dos pestañas, iniciar un contacto en A, cambiar orden/foco y confirmar que todos los steps/reconcile siguen en A. Cerrar A debe pausar sin usar B.
+
+## N. Cambio manual de chat
+
+- Cambiar a otro chat después de abrir o antes de Imagen 2. Esperado: `CONTACT_CONTEXT_UNVERIFIED`, ningún click y checkpoint conservado.
+
+## O. Recarga durante un contacto
+
+- Recargar la pestaña vinculada antes y después del marker pre-click. Esperado: mismo tab ID; pre-click puede reanudarse, post-click exige reconciliación y nunca repite a ciegas.
+
+## P. Stop después de un posible click
+
+- Pulsar Detener con `sendAttempted=true`. Esperado: `stopRequested`, estado no terminal, blobs/checkpoint retenidos y `stopped` solo tras reconciliación segura.
+
 ## Casos transversales adicionales
 
 - Flor Mía cerrada/reconectada: el motor continúa y `STATUS_REQUEST` devuelve snapshot idempotente con sequence actual.
@@ -132,4 +148,4 @@ Los casos automatizados usan adaptadores, clock, scheduler/alarmas y storage fal
 
 ## Criterio de aprobación
 
-Cada caso manual debe registrar fecha, versión 0.6.0, Chrome, condición de WhatsApp, campaña/contactos autorizados (solo IDs en evidencia), resultado PASS/FAIL y observación. Un FAIL de atomicidad, duplicación, origen, privacidad, cleanup o recuperación bloquea la release.
+Cada caso manual debe registrar fecha, versión 0.9.0 RC, Chrome, condición de WhatsApp, campaña/contactos autorizados (solo IDs en evidencia), resultado PASS/FAIL y observación. Un FAIL de atomicidad, duplicación, origen, privacidad, cleanup o recuperación bloquea la release.

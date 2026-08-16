@@ -1,5 +1,6 @@
 import type { ValidatedCampaign } from "../shared/campaign";
 import { ERROR_CODES, ExtensionError } from "../shared/errors";
+import { createId } from "../shared/ids";
 import { ChromeLocalStorageAdapter, type KeyValueStorage } from "../storage/state-store";
 import type { CampaignPolicyConfig, CampaignRepository, CampaignState, DailyLimitState } from "./campaign-types";
 
@@ -23,6 +24,7 @@ export function createCampaignState(
 ): CampaignState {
   return {
     schemaVersion: 1,
+    runToken: createId("campaign-run"),
     campaignId: campaign.campaignId,
     campaignName: campaign.campaignName,
     createdBy: campaign.createdBy,
@@ -73,6 +75,11 @@ export class CampaignStore implements CampaignRepository {
     if (campaign === null || campaign === undefined) return null;
     if (!isCampaignState(campaign)) {
       throw new ExtensionError(ERROR_CODES.storageError, "La campaña persistida no tiene un formato válido.", { recoverable: false });
+    }
+    if (!campaign.runToken) {
+      const migrated = { ...campaign, runToken: createId("campaign-run"), updatedAt: new Date().toISOString() };
+      await this.storage.set({ [ACTIVE_CAMPAIGN_KEY]: migrated });
+      return migrated;
     }
     return campaign;
   }

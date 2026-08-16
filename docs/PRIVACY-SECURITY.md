@@ -10,11 +10,13 @@ El bridge publica estado operacional, progreso agregado, ID interno del destinat
 
 ## Retención
 
-- `completed` y `stopped`: primero se valida/persiste el resultado e historial mínimo; después se eliminan los blobs temporales de la campaña.
+- `completed` y `stopped` seguro: primero se valida/persiste el resultado e historial mínimo; después se eliminan los blobs temporales. Stop nunca limpia un checkpoint post-click ambiguo.
 - `paused`, `images_required` y `error`: campaña, checkpoint y blobs se conservan para una recuperación segura.
 - historial: máximo 50 resúmenes, sin destinatarios ni contenido de mensajes;
 - evento público: solo el último snapshot/evento y metadata monotónica;
 - trazas: buffers acotados según `DIAGNOSTICS.md`.
+- idempotencia Web-App: hasta 100 metadatos `{requestId, type, campaignId, sequence, timestamp}`, sin payload, texto ni destinatarios;
+- `extensionState`: snapshot público resumido; la queue, teléfonos normalizados y texto viven solamente en `CampaignStore`, sin copia duplicada.
 
 ## Controles de frontera
 
@@ -22,6 +24,8 @@ El bridge publica estado operacional, progreso agregado, ID interno del destinat
 - `sender.id` y URL del Content Script validados en el Service Worker;
 - envelope/payload validado en runtime;
 - `campaignId` activo verificado para controles;
+- `requestId` mutante deduplicado y `sequence` opcional validada contra estado actual;
+- contexto del chat demostrado estructuralmente antes de cada click y pestaña vinculada durante el contacto;
 - inyección de fallos disponible solo por mensajes internos del popup/desarrollo y rechazada desde la Web-App;
 - permisos mínimos: `storage`, `alarms` y host de WhatsApp Web.
 

@@ -25,8 +25,8 @@ export class FakeCampaignClock {
 
 export class FakeCampaignAlarms implements CampaignWakeupScheduler {
   scheduled = new Map<string, number>();
-  async schedule(campaignId: string, when: number): Promise<void> { this.scheduled.set(campaignId, when); }
-  async cancel(campaignId: string): Promise<void> { this.scheduled.delete(campaignId); }
+  async schedule(campaignId: string, runToken: string, when: number): Promise<void> { this.scheduled.set(`${campaignId}:${runToken}`, when); }
+  async cancel(campaignId: string, runToken: string): Promise<void> { this.scheduled.delete(`${campaignId}:${runToken}`); }
 }
 
 interface CheckpointSlot { active: ContactProcessCheckpoint | null }

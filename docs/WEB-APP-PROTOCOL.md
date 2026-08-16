@@ -4,7 +4,9 @@
 
 El Content Script `web-app-bridge` es la única frontera con Flor Mía. Usa `window.postMessage` solamente en los orígenes exactos de `config/allowed-origins.json` y traduce solicitudes válidas al protocolo interno de Chrome. Canal: `flor_mia_whatsapp_extension`; `protocolVersion`: `1`.
 
-Toda solicitud incluye `channel`, `protocolVersion`, `type`, `requestId` no vacío y `payload`. Los controles incluyen además `campaignId`. Las respuestas directas usan `replyTo`; los eventos PUSH no lo usan. `sequence` es entero monotónico por campaña.
+Toda solicitud incluye `channel`, `protocolVersion`, `type`, `requestId` no vacío y `payload`. Los controles incluyen además `campaignId` y pueden enviar la `sequence` del último snapshot como precondición. Las respuestas directas usan `replyTo`; los eventos PUSH no lo usan. `sequence` es entero monotónico por campaña.
+
+Prepare/Start/Pause/Resume/Stop conservan el `requestId` original hasta el Service Worker. Un registro local de hasta 100 entradas deduplica reintentos incluso después de reiniciar el bridge; no guarda payloads. El mismo ID devuelve el snapshot actual equivalente sin repetir el efecto. Si una `sequence` provista ya no coincide, el comando se rechaza como stale y Flor Mía debe consultar estado.
 
 La extensión valida el envelope y la forma del payload en runtime. Rechaza tipos salientes usados como comandos, IDs ausentes, versiones distintas, campañas mal formadas y cualquier clave de inyección de fallos de desarrollo, incluso anidada.
 
@@ -88,4 +90,4 @@ SemVer gobierna `extensionVersion`; `protocolVersion` solo cambia ante una incom
 
 ## Errores
 
-Una solicitud rechazada responde con `FLORMIA_CAMPAIGN_ERROR`, `replyTo` y un error saneado `{ code, message, recoverable }`. No inventa una secuencia de campaña. Un error de transporte/bridge no marca la campaña como fallida; Flor Mía puede repetir una consulta PULL con un `requestId` nuevo. Un comando mutador solo se reintenta después de consultar el snapshot y comparar estado/sequence.
+Una solicitud rechazada responde con `FLORMIA_CAMPAIGN_ERROR`, `replyTo` y un error saneado `{ code, message, recoverable }`. No inventa una secuencia de campaña. Un error de transporte/bridge no marca la campaña como fallida; Flor Mía puede repetir una consulta PULL con un `requestId` nuevo. Un comando mutador puede repetir el mismo `requestId` para recuperar el resultado sin repetir el efecto. Para una intención nueva debe usar un ID nuevo y la `sequence` del snapshot PULL más reciente.

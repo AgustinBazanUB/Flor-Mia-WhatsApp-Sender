@@ -1,7 +1,7 @@
 import type { SerializedExtensionError } from "./errors";
 import type { ContactProcessCheckpoint } from "../engine/types";
 import type { RetryPolicyConfig } from "../engine/retry-policy";
-import type { CampaignPolicyConfig, CampaignState, CampaignStatus, DailyLimitState } from "../campaign/campaign-types";
+import type { CampaignPolicyConfig, CampaignPublicStatus, CampaignStatus, DailyLimitState } from "../campaign/campaign-types";
 import type {
   CampaignRequirements,
   CapabilityDiscovery,
@@ -99,7 +99,7 @@ export interface ExtensionConfig {
 }
 
 export interface ExtensionState {
-  schemaVersion: 6;
+  schemaVersion: 7;
   extensionVersion: string;
   status: ExtensionStatus;
   currentCampaign: CampaignSnapshot | null;
@@ -114,7 +114,7 @@ export interface ExtensionState {
   whatsapp: WhatsAppPreflightResult | null;
   lastTestResult: TextTestResult | null;
   activeContactProcess: ContactProcessCheckpoint | null;
-  activeCampaign: CampaignState | null;
+  activeCampaign: CampaignPublicStatus | null;
   dailyLimit: DailyLimitState;
   compatibility: CompatibilityState;
   diagnosticIncident: DiagnosticIncident | null;

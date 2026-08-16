@@ -4,17 +4,17 @@ import type { CampaignState } from "./campaign-types";
 export const CAMPAIGN_ALARM_PREFIX = "flor-mia-campaign:";
 
 export interface CampaignWakeupScheduler {
-  schedule(campaignId: string, when: number): Promise<void>;
-  cancel(campaignId: string): Promise<void>;
+  schedule(campaignId: string, runToken: string, when: number): Promise<void>;
+  cancel(campaignId: string, runToken: string): Promise<void>;
 }
 
 export class ChromeCampaignWakeupScheduler implements CampaignWakeupScheduler {
-  async schedule(campaignId: string, when: number): Promise<void> {
-    await chrome.alarms.create(`${CAMPAIGN_ALARM_PREFIX}${campaignId}`, { when: Math.max(Date.now() + 50, when) });
+  async schedule(campaignId: string, runToken: string, when: number): Promise<void> {
+    await chrome.alarms.create(campaignAlarmName(campaignId, runToken), { when: Math.max(Date.now() + 50, when) });
   }
 
-  async cancel(campaignId: string): Promise<void> {
-    await chrome.alarms.clear(`${CAMPAIGN_ALARM_PREFIX}${campaignId}`);
+  async cancel(campaignId: string, runToken: string): Promise<void> {
+    await chrome.alarms.clear(campaignAlarmName(campaignId, runToken));
   }
 }
 
@@ -34,8 +34,9 @@ export class CampaignScheduler {
   }
 
   async schedule(campaign: CampaignState, immediate = false): Promise<void> {
+    if (!campaign.runToken) throw new Error("La campaña no tiene token de ejecución persistente.");
     if (["completed", "stopped", "paused", "images_required", "error", "daily_limit_reached"].includes(campaign.status)) {
-      await this.dependencies.wakeups.cancel(campaign.campaignId);
+      await this.dependencies.wakeups.cancel(campaign.campaignId, campaign.runToken);
       return;
     }
     const when = immediate
@@ -43,7 +44,7 @@ export class CampaignScheduler {
       : campaign.wait
         ? Date.parse(campaign.wait.until)
         : this.now() + 50;
-    await this.dependencies.wakeups.schedule(campaign.campaignId, when);
+    await this.dependencies.wakeups.schedule(campaign.campaignId, campaign.runToken, when);
   }
 
   run(campaignId: string): Promise<CampaignState> {
@@ -58,11 +59,32 @@ export class CampaignScheduler {
     return this.inFlight;
   }
 
-  async cancel(campaignId: string): Promise<void> {
-    await this.dependencies.wakeups.cancel(campaignId);
+  async cancel(campaign: CampaignState): Promise<void> {
+    if (!campaign.runToken) return;
+    await this.dependencies.wakeups.cancel(campaign.campaignId, campaign.runToken);
   }
 }
 
-export function campaignIdFromAlarm(name: string): string | null {
-  return name.startsWith(CAMPAIGN_ALARM_PREFIX) ? name.slice(CAMPAIGN_ALARM_PREFIX.length) || null : null;
+export interface CampaignAlarmIdentity {
+  campaignId: string;
+  runToken: string;
+}
+
+export function campaignAlarmName(campaignId: string, runToken: string): string {
+  return `${CAMPAIGN_ALARM_PREFIX}${encodeURIComponent(campaignId)}:${encodeURIComponent(runToken)}`;
+}
+
+export function campaignAlarmFromName(name: string): CampaignAlarmIdentity | null {
+  if (!name.startsWith(CAMPAIGN_ALARM_PREFIX)) return null;
+  const encoded = name.slice(CAMPAIGN_ALARM_PREFIX.length);
+  const separator = encoded.indexOf(":");
+  if (separator <= 0 || separator === encoded.length - 1) return null;
+  try {
+    return {
+      campaignId: decodeURIComponent(encoded.slice(0, separator)),
+      runToken: decodeURIComponent(encoded.slice(separator + 1))
+    };
+  } catch {
+    return null;
+  }
 }

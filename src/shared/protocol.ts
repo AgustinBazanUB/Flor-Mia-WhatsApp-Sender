@@ -13,6 +13,7 @@ import type {
 } from "../compatibility/types";
 import type { DiagnosticReportBundle } from "../diagnostics/types";
 import type { CompatibilityOverallStatus } from "../compatibility/types";
+import type { ConversationContextProof } from "../whatsapp/conversation-context";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -35,6 +36,7 @@ export const INTERNAL_MESSAGE_TYPES = {
   campaignRestoreImages: "CAMPAIGN_RESTORE_IMAGES",
   whatsappPreflight: "WA_PREFLIGHT",
   whatsappOpenConversation: "WA_OPEN_CONVERSATION",
+  whatsappProveConversation: "WA_PROVE_CONVERSATION",
   whatsappSendText: "WA_SEND_TEXT",
   whatsappSendImage: "WA_SEND_IMAGE",
   whatsappReconcileStep: "WA_RECONCILE_STEP",
@@ -56,14 +58,15 @@ export interface InternalRequestMap {
   PROCESS_TEST_CONTACT: { phone: string; message: string; images: SerializedCampaignImage[]; faultInjection?: DevelopmentFault };
   RESUME_CONTACT_PROCESS: Record<string, never>;
   RESELECT_CONTACT_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
-  CAMPAIGN_START: { campaignId: string };
-  CAMPAIGN_PAUSE: { campaignId: string };
-  CAMPAIGN_RESUME: { campaignId: string };
-  CAMPAIGN_STOP: { campaignId: string };
+  CAMPAIGN_START: { campaignId: string; expectedSequence?: number };
+  CAMPAIGN_PAUSE: { campaignId: string; expectedSequence?: number };
+  CAMPAIGN_RESUME: { campaignId: string; expectedSequence?: number };
+  CAMPAIGN_STOP: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_STATUS: { campaignId?: string };
   CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
   WA_PREFLIGHT: WhatsAppPreflightRequest;
   WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string };
+  WA_PROVE_CONVERSATION: { phoneDigits: string };
   WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string; timeoutMs?: number; checkpointRequired?: boolean };
   WA_SEND_IMAGE: ImageSendInput;
   WA_RECONCILE_STEP: ReconcileStepInput;
@@ -90,6 +93,7 @@ export interface InternalResponseMap {
   CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
   WA_PREFLIGHT: WhatsAppPreflightResult;
   WA_OPEN_CONVERSATION: { navigationStarted: true };
+  WA_PROVE_CONVERSATION: ConversationContextProof;
   WA_SEND_TEXT: TextTestResult;
   WA_SEND_IMAGE: ImageSendResult;
   WA_RECONCILE_STEP: StepReconciliationResult;
@@ -144,9 +148,10 @@ export function isInternalEnvelope(value: unknown): value is InternalEnvelope {
 export async function sendRuntimeRequest<T extends InternalMessageType>(
   source: InternalSource,
   type: T,
-  payload: InternalRequestMap[T]
+  payload: InternalRequestMap[T],
+  requestId?: string
 ): Promise<InternalResponseMap[T]> {
-  const request = createInternalRequest(source, type, payload);
+  const request = createInternalRequest(source, type, payload, requestId);
   const response = await chrome.runtime.sendMessage(request) as InternalResponse<InternalResponseMap[T]> | undefined;
   if (!response) throw new Error("La extensión no respondió.");
   if (!response.ok || response.data === undefined) {

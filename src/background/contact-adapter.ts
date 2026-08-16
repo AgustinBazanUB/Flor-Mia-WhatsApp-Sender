@@ -41,13 +41,18 @@ function executionError(error: unknown): StepExecutionResult {
 }
 
 export class ChromeWhatsAppContactAdapter implements ContactAdapter {
+  private whatsappTabId: number | null = null;
+
   constructor(
     private readonly blobs: Pick<CampaignBlobStore, "getImage">,
     private readonly transport: WhatsAppTransport = new WhatsAppTransport()
   ) {}
 
   async openConversation(contact: Parameters<ContactAdapter["openConversation"]>[0], timeoutMs: number): Promise<void> {
-    const tab = await this.transport.requireTab();
+    const tab = this.whatsappTabId === null
+      ? await this.transport.requireTab()
+      : await this.transport.requireTabId(this.whatsappTabId);
+    this.whatsappTabId = tab.id;
     await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
       operationId: `open:${contact.contactId}`,
       phoneDigits: contact.phoneDigits
@@ -77,6 +82,16 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
       }
       throw new ExtensionError(ERROR_CODES.interfaceLoading, result.message);
     }
+    await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
+      phoneDigits: contact.phoneDigits
+    }, this.requireBoundTabId());
+  }
+
+  private requireBoundTabId(): number {
+    if (this.whatsappTabId === null) {
+      throw new ExtensionError(ERROR_CODES.whatsappNotOpen, "El contacto activo no tiene una pestaña de WhatsApp vinculada.");
+    }
+    return this.whatsappTabId;
   }
 
   async sendImage(step: ImageContactStep, context: StepExecutionContext): Promise<StepExecutionResult> {
@@ -91,6 +106,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
       const data = await stored.blob.arrayBuffer();
       const result = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappSendImage, {
         operationId: step.operationId,
+        expectedPhoneDigits: context.checkpoint.contact.phoneDigits,
         imageId: step.image.imageId,
         name: step.image.name,
         type: step.image.type,
@@ -100,7 +116,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         previewTimeoutMs: context.previewTimeoutMs,
         confirmationTimeoutMs: context.timeoutMs,
         checkpointRequired: true
-      });
+      }, this.requireBoundTabId());
       return { outcome: "confirmed", verification: result.verification };
     } catch (error) {
       return executionError(error);
@@ -115,7 +131,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         message: step.text,
         timeoutMs: context.timeoutMs,
         checkpointRequired: true
-      });
+      }, this.requireBoundTabId());
       if (!result.success || !result.verification.confirmed) {
         throw new ExtensionError(ERROR_CODES.verificationFailed, "WhatsApp no confirmó el texto saliente.");
       }
@@ -138,9 +154,10 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
     return this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappReconcileStep, {
       kind: step.kind,
       operationId: step.operationId,
+      expectedPhoneDigits: context.checkpoint.contact.phoneDigits,
       baselineOutgoingIds: step.verification?.baselineOutgoingIds ?? [],
       ...(step.kind === "text" ? { message: step.text } : {}),
       timeoutMs: context.timeoutMs
-    });
+    }, this.requireBoundTabId());
   }
 }

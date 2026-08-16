@@ -85,7 +85,8 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
     const accepted = await sendRuntimeRequest(
       "web-app-bridge",
       INTERNAL_MESSAGE_TYPES.webAppPrepareCampaign,
-      serializeCampaign(campaign)
+      serializeCampaign(campaign),
+      request.requestId
     );
     post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.accepted, accepted as unknown as Record<string, unknown>, {
       campaignId: accepted.campaignId,
@@ -104,7 +105,12 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
   } as const;
   if (request.type in controls) {
     const type = controls[request.type as keyof typeof controls];
-    const status = await sendRuntimeRequest("web-app-bridge", type, { campaignId });
+    const status = await sendRuntimeRequest(
+      "web-app-bridge",
+      type,
+      { campaignId, ...(request.sequence === undefined ? {} : { expectedSequence: request.sequence }) },
+      request.requestId
+    );
     post(responseEnvelope(
       request,
       messageTypeForStatus(status, request.type),

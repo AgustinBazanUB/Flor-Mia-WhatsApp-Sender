@@ -23,21 +23,37 @@ export class WhatsAppTransport {
     return tab as chrome.tabs.Tab & { id: number };
   }
 
+  async requireTabId(tabId: number): Promise<chrome.tabs.Tab & { id: number }> {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (typeof tab.id !== "number" || !tab.url?.startsWith("https://web.whatsapp.com/")) throw new Error("invalid whatsapp tab");
+      return tab as chrome.tabs.Tab & { id: number };
+    } catch (error) {
+      throw new ExtensionError(ERROR_CODES.whatsappNotOpen, "La pestaña de WhatsApp vinculada al contacto fue cerrada.", { cause: error });
+    }
+  }
+
   async send<T extends InternalMessageType>(
     type: T,
     payload: InternalRequestMap[T],
     tabId?: number
   ): Promise<InternalResponseMap[T]> {
     const targetTabId = tabId ?? (await this.requireTab()).id;
+    if (tabId !== undefined) await this.requireTabId(targetTabId);
     const request = createInternalRequest("service-worker", type, payload);
     let response: InternalResponse<InternalResponseMap[T]> | undefined;
     try {
       response = await chrome.tabs.sendMessage(targetTabId, request) as InternalResponse<InternalResponseMap[T]> | undefined;
     } catch (error) {
-      const tab = await this.findTab();
+      let boundTabExists = false;
+      if (tabId !== undefined) {
+        try { await this.requireTabId(targetTabId); boundTabExists = true; } catch { boundTabExists = false; }
+      } else {
+        boundTabExists = Boolean(await this.findTab());
+      }
       throw new ExtensionError(
-        tab ? ERROR_CODES.interfaceLoading : ERROR_CODES.whatsappNotOpen,
-        tab ? "WhatsApp Web se está recargando o su Content Script todavía no responde." : "La pestaña de WhatsApp Web fue cerrada.",
+        boundTabExists ? ERROR_CODES.interfaceLoading : ERROR_CODES.whatsappNotOpen,
+        boundTabExists ? "WhatsApp Web se está recargando o su Content Script todavía no responde." : "La pestaña de WhatsApp Web vinculada fue cerrada.",
         { cause: error }
       );
     }

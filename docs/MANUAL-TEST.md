@@ -2,7 +2,7 @@
 
 Estas pruebas pueden enviar mensajes reales. Usar únicamente números propios o contactos que hayan autorizado expresamente la prueba. Los tests automatizados no reemplazan esta validación.
 
-La matriz de aceptación formal de la versión 0.6.0 está en [`ACCEPTANCE-TESTS.md`](ACCEPTANCE-TESTS.md). Registrar allí evidencia PASS/FAIL; ninguno de esos casos se considera ejecutado contra WhatsApp real por el solo hecho de pasar los tests automatizados.
+La matriz de aceptación formal de la versión 0.9.0 RC está en [`ACCEPTANCE-TESTS.md`](ACCEPTANCE-TESTS.md). Registrar allí evidencia PASS/FAIL; ninguno de esos casos se considera ejecutado contra WhatsApp real por el solo hecho de pasar los tests automatizados.
 
 ## Preparación
 
@@ -63,7 +63,7 @@ La matriz de aceptación formal de la versión 0.6.0 está en [`ACCEPTANCE-TESTS
 3. Pulsar **Generar reporte para Codex**. Debe abrirse `diagnostics/report.html` dentro de la extensión, nunca una página externa.
 4. En **Texto**, comprobar el resumen en español y la frase: “Preservar atomicidad, verificación y checkpoints. No reemplazar por clicks ciegos.”
 5. Pulsar **Copiar texto**, pegarlo en un editor local y verificar que el contenido coincide.
-6. Cambiar a **JSON**, pulsar **Copiar JSON** y confirmar `reportSchemaVersion: 1`, versión `0.6.0`, incidente, checkpoint, compatibilidad, Last Known Good, candidates y trace.
+6. Cambiar a **JSON**, pulsar **Copiar JSON** y confirmar `reportSchemaVersion: 1`, versión `0.9.0`, incidente, checkpoint, compatibilidad, Last Known Good, candidates y trace.
 7. Buscar manualmente el teléfono completo, el texto exacto de campaña, nombres de chats, `phone=`, `token`, `cookie`, `base64` y fragmentos de imagen. Ninguno debe aparecer.
 8. Confirmar que el nombre de campaña no aparece por defecto. Activar **Incluir el nombre de la campaña** y comprobar que solo ese campo opcional se agrega.
 9. Entregar el texto y, si hace falta, el JSON a Codex manualmente. La extensión no debe enviar nada por sí sola.
