@@ -1,5 +1,5 @@
 import type { CapabilityResult, WhatsAppPreflightResult } from "../shared/state";
-import { findComposer, findMainInterface, findQrCode, findSendButton } from "./selectors";
+import { findAttachButton, findComposer, findImageFileInput, findMainInterface, findQrCode, findSendButton } from "./selectors";
 import { waitForCondition, waitForDocumentReady } from "./wait";
 
 const available = (message: string, selector?: string): CapabilityResult => ({ state: "available", message, ...(selector ? { selector } : {}) });
@@ -17,7 +17,7 @@ export async function runWhatsAppPreflight(timeoutMs = 8_000): Promise<WhatsAppP
         openConversation: unavailable("WhatsApp Web no está abierto."),
         composer: unavailable("WhatsApp Web no está abierto."),
         sendText: unavailable("WhatsApp Web no está abierto."),
-        multimedia: { state: "notImplemented", message: "El envío multimedia se implementará en el Prompt 2." }
+        multimedia: unavailable("WhatsApp Web no está abierto.")
       }
     };
   }
@@ -43,6 +43,8 @@ export async function runWhatsAppPreflight(timeoutMs = 8_000): Promise<WhatsAppP
   const main = findMainInterface();
   const composer = findComposer();
   const sendButton = findSendButton();
+  const attachButton = findAttachButton();
+  const imageInput = findImageFileInput();
   const qrDetected = Boolean(qr);
   const mainInterfaceReady = Boolean(main || composer);
   const sessionReady = mainInterfaceReady && !qrDetected;
@@ -77,7 +79,9 @@ export async function runWhatsAppPreflight(timeoutMs = 8_000): Promise<WhatsAppP
       openConversation: sessionReady ? available("La navegación a un número está disponible.") : unavailable("Se necesita una sesión iniciada."),
       composer: composer ? available("El campo de escritura fue localizado.", composer.strategy) : requiresContext("Se comprobará al abrir la conversación de prueba."),
       sendText: sendButton ? available("La acción de envío fue localizada.", sendButton.strategy) : requiresContext("El botón aparece cuando el composer contiene texto."),
-      multimedia: { state: "notImplemented", message: "El envío multimedia se implementará en el Prompt 2." }
+      multimedia: attachButton || imageInput
+        ? available("El mecanismo local de adjuntos fue localizado.", attachButton?.strategy ?? imageInput?.strategy)
+        : requiresContext("Se comprobará al abrir una conversación antes de enviar imágenes.")
     }
   };
 }

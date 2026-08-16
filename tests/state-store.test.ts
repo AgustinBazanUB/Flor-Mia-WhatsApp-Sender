@@ -13,7 +13,24 @@ describe("state storage", () => {
     expect(state.status).toBe("idle");
     expect(state.currentCampaign).toBeNull();
     expect(state.lastCheckpoint).toBeNull();
+    expect(state.schemaVersion).toBe(2);
+    expect(state.config.retryPolicy.maxAttemptsPerStep).toBe(3);
     expect(state.config.webAppOrigins).toContain("https://app-integral-fm.netlify.app");
+  });
+
+  it("migrates older stored configuration with all retry defaults", async () => {
+    const storage = new MemoryStorage();
+    storage.value = {
+      extensionState: {
+        ...createDefaultState(),
+        schemaVersion: 1,
+        config: { diagnosticTimeoutMs: 2_000 }
+      }
+    };
+    const state = await new StateStore(storage).load();
+    expect(state.schemaVersion).toBe(2);
+    expect(state.config.diagnosticTimeoutMs).toBe(2_000);
+    expect(state.config.retryPolicy.timeouts.previewMs).toBeGreaterThan(0);
   });
 
   it("persists transitions and limits operation history", async () => {

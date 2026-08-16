@@ -2,15 +2,32 @@ import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
 import {
   INTERNAL_MESSAGE_TYPES,
   isInternalEnvelope,
+  sendRuntimeRequest,
+  type InternalRequestMap,
   type InternalResponse,
   type InternalResponseMap
 } from "../shared/protocol";
 import { logger } from "../shared/logger";
 import { runWhatsAppPreflight } from "../whatsapp/preflight";
 import { scheduleConversationNavigation, sendAndVerifyText } from "../whatsapp/send-text";
+import { sendAndVerifyImage } from "../whatsapp/send-image";
+import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
   return { ok: true, requestId, data };
+}
+
+function beforeSendCheckpoint(operationId: string, required: boolean) {
+  return async (baselineOutgoingIds: string[]): Promise<void> => {
+    const result = await sendRuntimeRequest("whatsapp-content", INTERNAL_MESSAGE_TYPES.whatsappOperationStage, {
+      operationId,
+      stage: "send_attempted",
+      baselineOutgoingIds
+    });
+    if (required && !result.recorded) {
+      throw new ExtensionError(ERROR_CODES.storageError, "No se pudo guardar el checkpoint previo al envío.");
+    }
+  };
 }
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
@@ -36,8 +53,23 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendText) {
-        const payload = message.payload as { operationId: string; phoneDigits: string; message: string };
-        const data = await sendAndVerifyText(payload);
+        const payload = message.payload as InternalRequestMap["WA_SEND_TEXT"];
+        const data = await sendAndVerifyText(payload, {
+          beforeSend: beforeSendCheckpoint(payload.operationId, payload.checkpointRequired === true)
+        });
+        sendResponse(success(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendImage) {
+        const payload = message.payload as InternalRequestMap["WA_SEND_IMAGE"];
+        const data = await sendAndVerifyImage(payload, {
+          beforeSend: beforeSendCheckpoint(payload.operationId, payload.checkpointRequired === true)
+        });
+        sendResponse(success(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappReconcileStep) {
+        const data = await reconcileWhatsAppStep(message.payload as Parameters<typeof reconcileWhatsAppStep>[0]);
         sendResponse(success(message.requestId, data));
         return;
       }

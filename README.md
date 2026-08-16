@@ -1,8 +1,22 @@
 # Flor Mía WhatsApp Sender
 
-Extensión privada de Google Chrome, Manifest V3, que recibe órdenes de la Web-App Integral Flor Mía y opera sobre la sesión que el usuario ya abrió manualmente en WhatsApp Web.
+Extensión privada de Google Chrome, Manifest V3, que opera sobre la sesión que el usuario inició manualmente en WhatsApp Web. La versión `0.2.0` implementa el motor atómico de **un contacto**: abre la conversación, envía de cero a tres imágenes individualmente y, si existe, envía el texto al final.
 
-Esta primera versión implementa una vertical técnica deliberadamente acotada: diagnóstico de WhatsApp Web y envío manual de **un contacto + un texto**, con confirmación DOM de un nuevo mensaje saliente. No ejecuta campañas masivas ni envía imágenes.
+Cada paso se considera completo solo cuando existe evidencia nueva en el DOM de WhatsApp. Un paso no confirmado bloquea todos los posteriores.
+
+## Alcance de esta versión
+
+- solo texto;
+- una, dos o tres imágenes en orden y texto opcional al final;
+- checkpoint persistente antes y después de cada intento;
+- máximo configurable de tres intentos por paso, con backoff;
+- pausa automática ante agotamiento, archivo faltante o resultado ambiguo;
+- reanudación sin repetir pasos confirmados;
+- reconciliación del DOM antes de decidir si un envío ambiguo debe repetirse;
+- recuperación del estado cuando Manifest V3 reinicia el Service Worker;
+- inyección explícita de fallos desde el popup, aislada del puente de la Web-App.
+
+Todavía no ejecuta listas completas de destinatarios, tandas, límites diarios ni automatizaciones masivas. El puente acepta y guarda una campaña de la Web-App, pero la ejecución multi-contacto queda reservada al Prompt 3.
 
 ## Requisitos
 
@@ -19,9 +33,7 @@ npm install
 npm run verify
 ```
 
-El build cargable queda en `dist/`.
-
-Para desarrollo continuo:
+El build cargable queda en `dist/`. Para desarrollo continuo:
 
 ```bash
 npm run dev
@@ -33,18 +45,32 @@ npm run dev
 2. Activar **Modo desarrollador**.
 3. Elegir **Cargar extensión sin empaquetar**.
 4. Seleccionar la carpeta `dist/` de este repositorio.
-5. Abrir <https://web.whatsapp.com/> e iniciar la sesión manualmente si aparece el QR.
+5. Después de cada build, pulsar **Recargar** en la tarjeta de la extensión.
+6. Abrir <https://web.whatsapp.com/> y completar manualmente el QR si corresponde.
 
-## Diagnóstico y primera prueba
+## Probar un contacto
 
 1. Abrir WhatsApp Web y esperar a ver la lista de chats.
 2. Abrir el popup **Flor Mía WhatsApp Sender**.
 3. Pulsar **Ejecutar diagnóstico**.
-4. Introducir un teléfono en formato internacional explícito, por ejemplo `+549...`. No se asume ningún país.
-5. Escribir un texto de prueba y pulsar **Enviar mensaje de prueba**.
-6. La extensión informa éxito únicamente si encuentra un mensaje saliente nuevo cuyo texto coincide con la operación.
+4. Introducir un teléfono propio/de prueba en formato internacional explícito, por ejemplo `+549...`.
+5. Escribir texto, seleccionar hasta tres imágenes en el orden deseado, o ambas cosas.
+6. Pulsar una sola vez **Procesar contacto de prueba**.
+7. Revisar en el popup el estado, el número de intentos y el checkpoint de cada paso.
 
-Si la conversación tiene un borrador, la prueba se detiene para no sobrescribirlo. Si WhatsApp cambia su DOM, el popup mostrará el paso y el error; los logs técnicos están en el Service Worker y en la consola de WhatsApp Web, sin el texto privado ni el teléfono completo.
+El flujo es `Imagen 1 → Imagen 2 → Imagen 3 → Texto`, omitiendo los pasos que no existan. Si una conversación tiene un borrador, el texto se detiene para no sobrescribirlo.
+
+## Recuperación segura
+
+- **Error antes de enviar:** el mismo paso se reintenta; nunca avanza al siguiente.
+- **Tres fallos recuperables:** el contacto queda pausado y requiere reanudación manual.
+- **Clic realizado sin confirmación:** queda en `verification_pending`. Al reanudar se inspecciona el DOM; no se vuelve a enviar mientras el resultado siga ambiguo.
+- **Imagen temporal ausente:** el popup solicita el archivo faltante. Debe coincidir en nombre, tipo y tamaño con el original.
+- **Service Worker terminado:** el checkpoint se rehidrata desde `chrome.storage.local`. Un paso que estaba en curso pasa a verificación pendiente para evitar duplicados.
+
+## Inyección de fallos
+
+El selector **Inyección de fallos (solo desarrollo)** permite simular timeout, mecanismo de adjuntos, preview, fallo único, tres fallos, verificación ambigua o una imagen faltante. Solo se aplica al proceso iniciado manualmente desde el popup. Nunca se activa en campañas recibidas desde la Web-App.
 
 ## Orígenes de Flor Mía
 
@@ -53,22 +79,9 @@ Los orígenes autorizados se centralizan en [`config/allowed-origins.json`](conf
 - producción: `https://app-integral-fm.netlify.app/*`;
 - desarrollo: `http://localhost:5173/*`.
 
-Para agregar temporalmente un Deploy Preview explícito durante el build:
-
-```bash
-FLORMIA_EXTRA_WEB_APP_ORIGINS=https://deploy-preview.example.netlify.app/* npm run build
-```
-
-En PowerShell:
-
-```powershell
-$env:FLORMIA_EXTRA_WEB_APP_ORIGINS='https://deploy-preview.example.netlify.app/*'
-npm.cmd run build
-```
-
 No se utiliza `<all_urls>`.
 
-## Comandos de verificación
+## Verificación
 
 ```bash
 npm run typecheck
@@ -78,21 +91,12 @@ npm run build
 npm run validate:build
 ```
 
-## Límites actuales
-
-- La sesión y el QR siempre se manejan manualmente en WhatsApp Web.
-- Los selectores usan roles, atributos semánticos y fallbacks centralizados, pero un cambio profundo del DOM de WhatsApp puede exigir una actualización.
-- La verificación confirma un nuevo mensaje saliente correspondiente al texto. No afirma lectura ni entrega al teléfono.
-- El puente de campaña valida y guarda localmente hasta tres imágenes, pero todavía no ejecuta campañas.
-- No hay envíos masivos, tandas, límites diarios, reintentos completos ni técnicas anti-detección.
-
-## Reservado para el Prompt 2
-
-La arquitectura ya separa coordinación, DOM, protocolo, estado y blobs para incorporar después:
-
-- envío real de imágenes;
-- operación atómica Imagen 1 → Imagen 2 → Imagen 3 → Texto;
-- checkpoints por destinatario;
-- reintentos controlados y recuperación tras reinicio del Service Worker.
-
 Consultar también [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) y [`docs/MANUAL-TEST.md`](docs/MANUAL-TEST.md).
+
+## Limitaciones actuales
+
+- La sesión y el QR siempre se manejan manualmente.
+- La confirmación prueba que apareció un mensaje saliente nuevo; no afirma entrega ni lectura en el teléfono.
+- WhatsApp Web no ofrece una API pública de DOM estable. Un cambio profundo de su interfaz puede exigir actualizar selectores.
+- No hay envío masivo, tandas, límites diarios ni técnicas anti-detección.
+- La prueba real con una sesión iniciada debe realizarse manualmente después de cargar el build; los tests automatizados usan DOM controlado y no envían mensajes reales.

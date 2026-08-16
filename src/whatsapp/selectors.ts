@@ -51,6 +51,45 @@ const groups = {
       "#main footer [data-icon='send']"
     ]
   },
+  attachButton: {
+    strategy: "attachment-action",
+    selectors: [
+      "#main footer button[data-testid='clip']",
+      "#main footer button[aria-label='Attach']",
+      "#main footer button[aria-label='Adjuntar']",
+      "#main footer [data-icon='plus-rounded']",
+      "#main footer [data-icon='clip']"
+    ]
+  },
+  imageFileInput: {
+    strategy: "image-file-input",
+    selectors: [
+      "#main input[type='file'][accept*='image']",
+      "[role='dialog'] input[type='file'][accept*='image']",
+      "input[type='file'][accept^='image/']",
+      "input[type='file'][accept*='image/*']"
+    ]
+  },
+  mediaPreview: {
+    strategy: "media-preview",
+    selectors: [
+      "[data-testid='media-editor']",
+      "[data-testid='media-preview']",
+      "[role='dialog'][aria-label*='preview' i]",
+      "[role='dialog'] [data-testid*='media' i]",
+      "[data-animate-media-viewer='true']"
+    ]
+  },
+  mediaSendButton: {
+    strategy: "media-send-action",
+    selectors: [
+      "button[data-testid='compose-btn-send']",
+      "button[data-testid='media-editor-send']",
+      "button[aria-label='Send']",
+      "button[aria-label='Enviar']",
+      "[data-icon='send']"
+    ]
+  },
   invalidContact: {
     strategy: "invalid-contact-dialog",
     selectors: [
@@ -73,7 +112,9 @@ function findFromGroup<T extends HTMLElement>(group: SelectorGroup, root: Parent
   for (const selector of group.selectors) {
     const raw = root.querySelector(selector);
     if (!raw) continue;
-    const element = raw instanceof HTMLElement && raw.matches("[data-icon='send']") ? raw.closest("button") ?? raw : raw;
+    const element = raw instanceof HTMLElement && raw.matches("[data-icon]")
+      ? raw.closest("button, [role='button']") ?? raw
+      : raw;
     if (element instanceof HTMLElement) return { element: element as T, strategy: group.strategy, selector };
   }
   return null;
@@ -84,12 +125,21 @@ export const findQrCode = (root?: ParentNode): SelectorMatch | null => findFromG
 export const findMainInterface = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.mainInterface, root);
 export const findComposer = (root?: ParentNode): SelectorMatch<HTMLElement> | null => findFromGroup(groups.composer, root);
 export const findSendButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => findFromGroup(groups.sendButton, root);
+export const findAttachButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => findFromGroup(groups.attachButton, root);
+export const findImageFileInput = (root?: ParentNode): SelectorMatch<HTMLInputElement> | null => findFromGroup(groups.imageFileInput, root);
+export const findMediaPreview = (root?: ParentNode): SelectorMatch<HTMLElement> | null => findFromGroup(groups.mediaPreview, root);
+export const findMediaSendButton = (root?: ParentNode): SelectorMatch<HTMLButtonElement> | null => findFromGroup(groups.mediaSendButton, root);
 export const findInvalidContactDialog = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.invalidContact, root);
 export const findConversationHeader = (root?: ParentNode): SelectorMatch | null => findFromGroup(groups.conversationHeader, root);
 
 export interface OutgoingMessageSnapshot {
   identity: string;
   text: string;
+  element: HTMLElement;
+}
+
+export interface OutgoingMediaSnapshot {
+  identity: string;
   element: HTMLElement;
 }
 
@@ -117,6 +167,36 @@ export function outgoingMessages(root: ParentNode = document): OutgoingMessageSn
     });
   }
   return result;
+}
+
+export function outgoingMediaMessages(root: ParentNode = document): OutgoingMediaSnapshot[] {
+  const candidates = root.querySelectorAll<HTMLElement>(
+    "#main .message-out, #main [data-id^='true_'], #main [data-testid='msg-container']"
+  );
+  const seen = new Set<HTMLElement>();
+  const result: OutgoingMediaSnapshot[] = [];
+  for (const candidate of candidates) {
+    const container = candidate.closest<HTMLElement>(".message-out, [data-id^='true_']") ?? candidate;
+    const dataId = container.getAttribute("data-id") ?? "";
+    const isOutgoing = container.classList.contains("message-out") || dataId.startsWith("true_");
+    if (!isOutgoing || seen.has(container)) continue;
+    const media = container.querySelector(
+      "[data-testid='image-thumb'], [data-testid='video-thumb'], [data-testid*='media' i], img[src^='blob:'], img[src^='data:'], video, canvas"
+    );
+    if (!media) continue;
+    seen.add(container);
+    result.push({
+      identity: dataId || container.id || `outgoing-media-${result.length}`,
+      element: container
+    });
+  }
+  return result;
+}
+
+export function elementVisible(element: HTMLElement): boolean {
+  if (!element.isConnected || element.hidden || element.getAttribute("aria-hidden") === "true") return false;
+  const style = globalThis.getComputedStyle?.(element);
+  return !style || (style.display !== "none" && style.visibility !== "hidden");
 }
 
 export function canonicalMessageText(value: string): string {

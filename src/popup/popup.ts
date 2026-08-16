@@ -1,4 +1,7 @@
+import type { DevelopmentFault } from "../engine/fault-injection";
+import type { ContactProcessCheckpoint, ContactStep } from "../engine/types";
 import { INTERNAL_MESSAGE_TYPES, sendRuntimeRequest } from "../shared/protocol";
+import { arrayBufferToBase64, type SerializedCampaignImage } from "../shared/serialization";
 import type { ExtensionState, TextTestResult, WhatsAppPreflightResult } from "../shared/state";
 
 function element<T extends HTMLElement>(id: string): T {
@@ -12,14 +15,27 @@ const statusMessage = element("status-message");
 const whatsappPage = element("whatsapp-page");
 const whatsappSession = element("whatsapp-session");
 const whatsappInterface = element("whatsapp-interface");
+const whatsappMultimedia = element("whatsapp-multimedia");
 const diagnosticButton = element<HTMLButtonElement>("diagnostic-button");
 const form = element<HTMLFormElement>("test-form");
 const phoneInput = element<HTMLInputElement>("phone");
 const messageInput = element<HTMLTextAreaElement>("message");
+const imagesInput = element<HTMLInputElement>("images");
+const imageCount = element("image-count");
+const faultInjection = element<HTMLSelectElement>("fault-injection");
 const sendButton = element<HTMLButtonElement>("send-button");
 const lastResult = element("last-result");
 const characterCount = element("character-count");
 const uiError = element("ui-error");
+const processSummary = element("process-summary");
+const processSteps = element<HTMLUListElement>("process-steps");
+const processAlert = element("process-alert");
+const resumeButton = element<HTMLButtonElement>("resume-button");
+const reselectForm = element<HTMLFormElement>("reselect-form");
+const reselectImages = element<HTMLInputElement>("reselect-images");
+const reselectButton = element<HTMLButtonElement>("reselect-button");
+
+let currentState: ExtensionState | null = null;
 
 function setBusy(button: HTMLButtonElement, busy: boolean, busyText: string, normalText: string): void {
   button.disabled = busy;
@@ -33,12 +49,15 @@ function renderPreflight(preflight: WhatsAppPreflightResult | null, operational:
   whatsappPage.textContent = preflight ? (preflight.pageDetected ? "Abierto" : "No abierto") : "Sin comprobar";
   whatsappSession.textContent = preflight ? (preflight.sessionReady ? "Iniciada" : preflight.qrDetected ? "Requiere QR" : "No preparada") : "Sin comprobar";
   whatsappInterface.textContent = preflight ? (preflight.mainInterfaceReady ? "Disponible" : "Cargando") : "Sin comprobar";
+  whatsappMultimedia.textContent = preflight
+    ? preflight.capabilities.multimedia.state === "available" ? "Disponible" : "Al abrir chat"
+    : "Sin comprobar";
 }
 
 function renderResult(result: TextTestResult | null): void {
   if (!result) {
     lastResult.className = "empty-result";
-    lastResult.textContent = "Todavía no se ejecutó ninguna prueba.";
+    lastResult.textContent = "Todavía no se ejecutó la prueba heredada de texto.";
     return;
   }
   const completed = new Intl.DateTimeFormat("es-AR", { dateStyle: "short", timeStyle: "medium" }).format(new Date(result.completedAt));
@@ -50,15 +69,78 @@ function renderResult(result: TextTestResult | null): void {
   const metadata = document.createElement("span");
   metadata.textContent = `${result.maskedPhone || "Número no registrado"} · ${completed}`;
   const detail = document.createElement("span");
-  detail.textContent = result.success
-    ? `Método: ${result.verification.method}`
-    : result.error?.message || "No se obtuvo una confirmación verificable.";
+  detail.textContent = result.success ? `Método: ${result.verification.method}` : result.error?.message || "Sin confirmación verificable.";
   lastResult.append(title, metadata, detail);
 }
 
+function stepLabel(step: ContactStep): string {
+  return step.kind === "image" ? `Imagen ${step.image.order}` : "Texto";
+}
+
+function stepStatus(step: ContactStep): string {
+  const labels: Record<ContactStep["status"], string> = {
+    pending: "Pendiente",
+    in_progress: "En curso",
+    verification_pending: "Verificación pendiente",
+    confirmed: "Confirmado",
+    failed: "Falló",
+    images_required: "Requiere archivo"
+  };
+  return labels[step.status];
+}
+
+function renderProcess(checkpoint: ContactProcessCheckpoint | null): void {
+  processSteps.replaceChildren();
+  processAlert.hidden = true;
+  processAlert.textContent = "";
+  resumeButton.hidden = true;
+  reselectForm.hidden = true;
+  if (!checkpoint) {
+    processSummary.textContent = "Todavía no hay un contacto procesado por el motor del Prompt 2.";
+    return;
+  }
+  processSummary.textContent = `${checkpoint.contact.maskedPhone} · ${checkpoint.status.replaceAll("_", " ")} · checkpoint ${checkpoint.lastConfirmedStepId ?? "inicial"}`;
+  for (const step of checkpoint.steps) {
+    const item = document.createElement("li");
+    item.className = `process-step is-${step.status}`;
+    const title = document.createElement("strong");
+    title.textContent = stepLabel(step);
+    const status = document.createElement("span");
+    status.textContent = `${stepStatus(step)} · ${step.attempts} intento${step.attempts === 1 ? "" : "s"}`;
+    item.append(title, status);
+    if (step.error?.message) {
+      const error = document.createElement("small");
+      error.textContent = step.error.message;
+      item.append(error);
+    }
+    processSteps.append(item);
+  }
+  if (checkpoint.status === "paused") {
+    resumeButton.hidden = false;
+    resumeButton.textContent = checkpoint.pauseReason === "verification_pending"
+      ? "Reconciliar y reanudar"
+      : "Reanudar desde checkpoint";
+    processAlert.hidden = false;
+    processAlert.textContent = checkpoint.pauseReason === "verification_pending"
+      ? "Resultado ambiguo: la próxima reanudación reconciliará el DOM antes de repetir."
+      : "Campaña pausada automáticamente. Revisá el paso y reanudá cuando corresponda.";
+  }
+  if (checkpoint.status === "images_required") {
+    processAlert.hidden = false;
+    processAlert.textContent = "Volvé a seleccionar las imágenes originales de la campaña.";
+    reselectForm.hidden = false;
+  }
+  if (checkpoint.status === "failed") {
+    processAlert.hidden = false;
+    processAlert.textContent = "El contacto se detuvo por un error no recuperable. Revisá el paso y el error técnico antes de iniciar otra prueba.";
+  }
+}
+
 function renderState(state: ExtensionState): void {
+  currentState = state;
   renderPreflight(state.whatsapp, state.operational, state.statusMessage);
   renderResult(state.lastTestResult);
+  renderProcess(state.activeContactProcess);
 }
 
 function showError(error: unknown): void {
@@ -72,16 +154,47 @@ function clearError(): void {
 }
 
 async function refreshState(): Promise<void> {
-  const state = await sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.getState, {});
-  renderState(state);
+  renderState(await sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.getState, {}));
+}
+
+async function serializeFiles(files: File[]): Promise<SerializedCampaignImage[]> {
+  if (files.length > 3) throw new Error("Seleccioná como máximo tres imágenes.");
+  return Promise.all(files.map(async (file, index) => {
+    if (!file.type.startsWith("image/")) throw new Error(`${file.name} no es una imagen.`);
+    const data = await file.arrayBuffer();
+    return { order: index + 1, name: file.name, type: file.type, size: file.size, dataBase64: arrayBufferToBase64(data) };
+  }));
+}
+
+async function serializeReselectedFiles(
+  files: File[],
+  checkpoint: ContactProcessCheckpoint
+): Promise<SerializedCampaignImage[]> {
+  if (files.length === 0) throw new Error("Seleccioná al menos una imagen faltante.");
+  const availableSteps = checkpoint.steps.filter((step) => step.kind === "image");
+  const usedOrders = new Set<number>();
+  return Promise.all(files.map(async (file) => {
+    const matchingStep = availableSteps.find((step) => !usedOrders.has(step.image.order)
+      && step.image.name === file.name
+      && step.image.type === file.type
+      && step.image.size === file.size);
+    if (!matchingStep) throw new Error(`${file.name} no coincide con una imagen original de esta campaña.`);
+    usedOrders.add(matchingStep.image.order);
+    return {
+      order: matchingStep.image.order,
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      dataBase64: arrayBufferToBase64(await file.arrayBuffer())
+    };
+  }));
 }
 
 diagnosticButton.addEventListener("click", () => {
   clearError();
   setBusy(diagnosticButton, true, "Diagnosticando…", "Ejecutar diagnóstico");
   void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.runPreflight, {})
-    .then((result) => renderPreflight(result, result.operational, result.message))
-    .catch(showError)
+    .then(() => refreshState()).catch(showError)
     .finally(() => setBusy(diagnosticButton, false, "Diagnosticando…", "Ejecutar diagnóstico"));
 });
 
@@ -89,19 +202,56 @@ messageInput.addEventListener("input", () => {
   characterCount.textContent = `${messageInput.value.length} / 4096`;
 });
 
+imagesInput.addEventListener("change", () => {
+  const count = imagesInput.files?.length ?? 0;
+  imageCount.textContent = `${count} / 3 imágenes`;
+});
+
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   clearError();
   if (!form.reportValidity()) return;
-  setBusy(sendButton, true, "Enviando y verificando…", "Enviar mensaje de prueba");
-  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.sendTestText, {
-    phone: phoneInput.value,
-    message: messageInput.value
-  }).then((result) => {
-    renderResult(result);
-    if (!result.success) showError(new Error(result.error?.message || "La prueba no pudo verificarse."));
-    return refreshState();
-  }).catch(showError).finally(() => setBusy(sendButton, false, "Enviando y verificando…", "Enviar mensaje de prueba"));
+  const files = [...(imagesInput.files ?? [])];
+  if (!messageInput.value.trim() && files.length === 0) {
+    showError(new Error("Ingresá texto o seleccioná al menos una imagen."));
+    return;
+  }
+  setBusy(sendButton, true, "Procesando y verificando…", "Procesar contacto de prueba");
+  void serializeFiles(files)
+    .then((images) => sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.processTestContact, {
+      phone: phoneInput.value,
+      message: messageInput.value,
+      images,
+      faultInjection: faultInjection.value as DevelopmentFault
+    }))
+    .then((checkpoint) => { renderProcess(checkpoint); return refreshState(); })
+    .catch(showError)
+    .finally(() => setBusy(sendButton, false, "Procesando y verificando…", "Procesar contacto de prueba"));
+});
+
+resumeButton.addEventListener("click", () => {
+  clearError();
+  const normalText = currentState?.activeContactProcess?.pauseReason === "verification_pending"
+    ? "Reconciliar y reanudar"
+    : "Reanudar desde checkpoint";
+  setBusy(resumeButton, true, "Reanudando…", normalText);
+  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.resumeContactProcess, {})
+    .then((checkpoint) => { renderProcess(checkpoint); return refreshState(); })
+    .catch(showError)
+    .finally(() => setBusy(resumeButton, false, "Reanudando…", normalText));
+});
+
+reselectForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  clearError();
+  const checkpoint = currentState?.activeContactProcess;
+  if (!checkpoint) return showError(new Error("No hay una campaña activa."));
+  setBusy(reselectButton, true, "Restaurando…", "Restaurar imágenes");
+  void serializeReselectedFiles([...(reselectImages.files ?? [])], checkpoint)
+    .then((images) => sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.reselectContactImages, { campaignId: checkpoint.campaignId, images }))
+    .then((next) => { renderProcess(next); return refreshState(); })
+    .catch(showError)
+    .finally(() => setBusy(reselectButton, false, "Restaurando…", "Restaurar imágenes"));
 });
 
 void refreshState().catch(showError);

@@ -1,6 +1,7 @@
 import { WEB_APP_ORIGINS } from "../config/origins";
 import { assertTransition } from "../shared/state-machine";
 import type { ExtensionState, ExtensionStatus, OperationRecord } from "../shared/state";
+import { DEFAULT_RETRY_POLICY } from "../engine/retry-policy";
 
 const STATE_KEY = "extensionState";
 const MAX_ERRORS = 20;
@@ -23,7 +24,7 @@ export class ChromeLocalStorageAdapter implements KeyValueStorage {
 
 export function createDefaultState(now = new Date().toISOString()): ExtensionState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "idle",
     currentCampaign: null,
     progress: { total: 0, sent: 0, failed: 0 },
@@ -32,7 +33,8 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
     config: {
       webAppOrigins: [...WEB_APP_ORIGINS],
       diagnosticTimeoutMs: 8_000,
-      operationTimeoutMs: 30_000
+      operationTimeoutMs: 30_000,
+      retryPolicy: DEFAULT_RETRY_POLICY
     },
     errors: [],
     lastCheckpoint: null,
@@ -40,6 +42,7 @@ export function createDefaultState(now = new Date().toISOString()): ExtensionSta
     statusMessage: "Todavía no se ejecutó el diagnóstico.",
     whatsapp: null,
     lastTestResult: null,
+    activeContactProcess: null,
     operations: [],
     updatedAt: now
   };
@@ -56,7 +59,23 @@ export class StateStore {
     return {
       ...defaults,
       ...stored as Partial<ExtensionState>,
-      config: { ...defaults.config, ...(stored as Partial<ExtensionState>).config },
+      schemaVersion: defaults.schemaVersion,
+      config: {
+        ...defaults.config,
+        ...(stored as Partial<ExtensionState>).config,
+        retryPolicy: {
+          ...defaults.config.retryPolicy,
+          ...(stored as Partial<ExtensionState>).config?.retryPolicy,
+          backoff: {
+            ...defaults.config.retryPolicy.backoff,
+            ...(stored as Partial<ExtensionState>).config?.retryPolicy?.backoff
+          },
+          timeouts: {
+            ...defaults.config.retryPolicy.timeouts,
+            ...(stored as Partial<ExtensionState>).config?.retryPolicy?.timeouts
+          }
+        }
+      },
       progress: { ...defaults.progress, ...(stored as Partial<ExtensionState>).progress }
     };
   }

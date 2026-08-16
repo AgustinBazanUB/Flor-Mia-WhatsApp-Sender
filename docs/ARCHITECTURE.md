@@ -2,42 +2,74 @@
 
 ## Componentes
 
-- `src/popup/`: interfaz técnica. Solo consulta estado, dispara diagnóstico y solicita una prueba manual.
-- `src/background/service-worker.ts`: coordinador central. Valida remitentes, mantiene estado, dirige pasos y registra resultados.
-- `src/content/whatsapp.ts`: adaptador de alto nivel para WhatsApp Web.
+- `src/engine/`: modelo de pasos, motor atómico por contacto, checkpoints, política de reintentos, reconciliación e inyección de fallos de desarrollo.
+- `src/background/service-worker.ts`: coordinador Manifest V3; crea/reanuda el proceso, sincroniza estado y rehidrata checkpoints.
+- `src/background/contact-adapter.ts`: adapta el motor a IndexedDB y al Content Script de WhatsApp.
+- `src/content/whatsapp.ts`: frontera de mensajes internos para diagnóstico, navegación, envío y reconciliación.
 - `src/content/web-app-bridge.ts`: frontera segura `window.postMessage` ↔ runtime de Chrome, restringida a orígenes autorizados.
-- `src/whatsapp/`: selectores, esperas con `MutationObserver`, preflight, escritura, envío y verificación.
-- `src/shared/`: protocolo, contrato de campaña, estado, errores, teléfonos y logging.
-- `src/storage/`: `chrome.storage.local` para estado JSON e IndexedDB para `Blob` temporales.
+- `src/whatsapp/`: selectores, esperas, preflight, envío de texto, envío de imagen y evidencia DOM.
+- `src/storage/`: estado/checkpoint JSON en `chrome.storage.local` y `Blob` temporales en IndexedDB.
+- `src/popup/`: arnés técnico para un contacto, reanudación, re-selección de archivos y fallos simulados.
 
-## Flujo de prueba
+## Máquina de pasos por contacto
 
-1. Popup envía `SEND_TEST_TEXT` con una acción explícita del usuario.
-2. Service Worker valida teléfono internacional y texto.
-3. Ejecuta preflight contra el Content Script de WhatsApp.
-4. Ordena abrir `https://web.whatsapp.com/send?phone=…` en la misma pestaña.
-5. Espera la reinyección del Content Script y la conversación.
-6. Content Script localiza el composer por estrategias centralizadas, rechaza sobrescribir borradores y escribe el texto por DOM.
-7. Localiza y activa el botón semántico de envío.
-8. Compara el snapshot anterior con los mensajes salientes posteriores.
-9. Solo confirma cuando aparece un elemento saliente nuevo con texto coincidente.
-10. Service Worker persiste checkpoint, resultado y error estructurado si corresponde.
+Los pasos se construyen dinámicamente y conservan un `operationId` estable:
+
+```text
+campaignId:contactId:image-1
+campaignId:contactId:image-2
+campaignId:contactId:image-3
+campaignId:contactId:text
+```
+
+Para cada contacto se ejecutan únicamente los pasos existentes, ordenados como imágenes individuales y texto al final. Los estados de paso son `pending`, `in_progress`, `verification_pending`, `confirmed`, `failed` e `images_required`.
+
+El motor persiste antes del intento, después del resultado y después de cada reconciliación. `lastConfirmedStepId` es la frontera segura de reanudación. Los pasos `confirmed` nunca se ejecutan otra vez.
+
+## Envío y verificación de imágenes
+
+1. Captura las identidades de mensajes multimedia salientes existentes.
+2. Localiza el control de adjuntos mediante estrategias centralizadas.
+3. Reconstruye un `File` desde el `Blob` local y verifica nombre, tipo y tamaño en el input.
+4. Espera el preview y comprueba nuevamente sus metadatos.
+5. Acciona el botón semántico de envío.
+6. Confirma únicamente si aparece un mensaje multimedia saliente nuevo y el preview deja de estar visible.
+
+El cierre del preview por sí solo no confirma éxito. Si el clic ocurrió pero falta evidencia concluyente, el resultado es ambiguo.
+
+## Envío y verificación de texto
+
+El motor rechaza sobrescribir borradores, escribe el texto, toma un snapshot de mensajes salientes y confirma únicamente un nodo nuevo con contenido canónicamente coincidente. El texto nunca se ejecuta si una imagen anterior no quedó confirmada.
+
+## Reintentos y atomicidad
+
+La política centralizada configura máximo de intentos, backoff y timeouts para conversación, carga de imagen, preview, composer, confirmación y reconciliación. Los fallos previos al envío pueden reintentarse hasta tres veces. Un fallo no recuperable detiene el contacto inmediatamente.
+
+Cuando se agotan los intentos, el proceso se pausa. Ningún paso posterior puede adelantarse a uno pendiente o fallido.
+
+## Resultados ambiguos
+
+Si se accionó enviar pero la verificación no concluyó, el paso pasa a `verification_pending`. La próxima reanudación ejecuta primero una reconciliación DOM:
+
+- nuevo saliente coincidente: confirma y continúa;
+- composer o preview todavía preparado: clasifica `not_sent` y permite un nuevo intento;
+- evidencia insuficiente: mantiene la pausa sin duplicar.
+
+## Persistencia y terminación de Manifest V3
+
+El checkpoint guarda campaña, contacto, pasos, intentos, verificaciones, error, paso actual e historial técnico acotado. Al iniciar, el Service Worker lo rehidrata. Cualquier paso encontrado `in_progress` se transforma en `verification_pending`; así una terminación entre clic y confirmación no provoca un reenvío ciego.
+
+Las imágenes permanecen en IndexedDB mientras exista la campaña. Si falta un `Blob`, el paso pasa a `images_required` y el usuario puede re-seleccionar el archivo original sin perder el checkpoint.
 
 ## Contrato Web-App
 
-Canal `flor_mia_whatsapp_extension`, versión `1`. El puente implementa `PING`, `CAMPAIGN_PREPARE` y `CAMPAIGN_CANCEL_REQUEST`, con `replyTo`, validación de origen y schemas. Los binarios entran por `ArrayBuffer`, se serializan únicamente para cruzar el runtime de Chrome y quedan como `Blob` en IndexedDB de la extensión. No se persisten en Firebase.
+El canal `flor_mia_whatsapp_extension`, versión `1`, valida origen, remitente, tipo y payload. En esta etapa `CAMPAIGN_PREPARE` valida y guarda texto, destinatarios e imágenes, pero no recorre la lista. El motor probado de un contacto es la base reutilizable que el Prompt 3 conectará al scheduler multi-contacto.
 
-La campaña se acepta y almacena, pero su ejecución masiva está deliberadamente fuera del Prompt 1.
+## Seguridad y privacidad
 
-## Persistencia y tolerancia a terminación
-
-Manifest V3 puede detener el Service Worker. Por eso el estado operativo, la campaña recibida, el progreso, el paso actual, el contacto actual, errores, último checkpoint y resultados se guardan fuera de variables globales. El historial está acotado a 20 operaciones y 20 errores.
-
-## Seguridad
-
-- Sin cookies, credenciales, QR ni tokens.
-- Sin automatización del sistema operativo, coordenadas, Selenium o Playwright en el producto.
-- Sin `<all_urls>`.
-- Validación de `sender.id`, URL del remitente, origen de página, canal, versión, tipo y payload.
-- Teléfonos enmascarados y textos redactados en logs.
-- No inicia envíos automáticamente.
+- sin cookies, credenciales, QR ni tokens;
+- sin coordenadas, Selenium, Playwright o automatización del sistema operativo en el producto;
+- sin `<all_urls>`;
+- teléfonos enmascarados y textos omitidos de logs técnicos;
+- identificadores estables para correlación, sin contenido privado;
+- ninguna ejecución automática al cargar una página.

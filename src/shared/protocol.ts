@@ -1,5 +1,10 @@
 import type { SerializedCampaignPayload } from "./serialization";
+import type { SerializedCampaignImage } from "./serialization";
 import type { ExtensionState, TextTestResult, WhatsAppPreflightResult } from "./state";
+import type { ContactProcessCheckpoint, StepReconciliationResult } from "../engine/types";
+import type { DevelopmentFault } from "../engine/fault-injection";
+import type { ImageSendInput, ImageSendResult } from "../whatsapp/send-image";
+import type { ReconcileStepInput } from "../whatsapp/reconcile";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -9,9 +14,15 @@ export const INTERNAL_MESSAGE_TYPES = {
   getState: "GET_EXTENSION_STATE",
   runPreflight: "RUN_WHATSAPP_PREFLIGHT",
   sendTestText: "SEND_TEST_TEXT",
+  processTestContact: "PROCESS_TEST_CONTACT",
+  resumeContactProcess: "RESUME_CONTACT_PROCESS",
+  reselectContactImages: "RESELECT_CONTACT_IMAGES",
   whatsappPreflight: "WA_PREFLIGHT",
   whatsappOpenConversation: "WA_OPEN_CONVERSATION",
   whatsappSendText: "WA_SEND_TEXT",
+  whatsappSendImage: "WA_SEND_IMAGE",
+  whatsappReconcileStep: "WA_RECONCILE_STEP",
+  whatsappOperationStage: "WA_OPERATION_STAGE",
   webAppPing: "WEB_APP_PING",
   webAppPrepareCampaign: "WEB_APP_PREPARE_CAMPAIGN",
   webAppCancelCampaign: "WEB_APP_CANCEL_CAMPAIGN"
@@ -24,9 +35,15 @@ export interface InternalRequestMap {
   GET_EXTENSION_STATE: Record<string, never>;
   RUN_WHATSAPP_PREFLIGHT: Record<string, never>;
   SEND_TEST_TEXT: { phone: string; message: string };
+  PROCESS_TEST_CONTACT: { phone: string; message: string; images: SerializedCampaignImage[]; faultInjection?: DevelopmentFault };
+  RESUME_CONTACT_PROCESS: Record<string, never>;
+  RESELECT_CONTACT_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
   WA_PREFLIGHT: { timeoutMs?: number };
   WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string };
-  WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string };
+  WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string; timeoutMs?: number; checkpointRequired?: boolean };
+  WA_SEND_IMAGE: ImageSendInput;
+  WA_RECONCILE_STEP: ReconcileStepInput;
+  WA_OPERATION_STAGE: { operationId: string; stage: "send_attempted"; baselineOutgoingIds: string[] };
   WEB_APP_PING: Record<string, never>;
   WEB_APP_PREPARE_CAMPAIGN: SerializedCampaignPayload;
   WEB_APP_CANCEL_CAMPAIGN: { campaignId: string };
@@ -36,9 +53,15 @@ export interface InternalResponseMap {
   GET_EXTENSION_STATE: ExtensionState;
   RUN_WHATSAPP_PREFLIGHT: WhatsAppPreflightResult;
   SEND_TEST_TEXT: TextTestResult;
+  PROCESS_TEST_CONTACT: ContactProcessCheckpoint;
+  RESUME_CONTACT_PROCESS: ContactProcessCheckpoint;
+  RESELECT_CONTACT_IMAGES: ContactProcessCheckpoint;
   WA_PREFLIGHT: WhatsAppPreflightResult;
   WA_OPEN_CONVERSATION: { navigationStarted: true };
   WA_SEND_TEXT: TextTestResult;
+  WA_SEND_IMAGE: ImageSendResult;
+  WA_RECONCILE_STEP: StepReconciliationResult;
+  WA_OPERATION_STAGE: { recorded: boolean };
   WEB_APP_PING: { operational: boolean; message: string; extensionVersion: string; configuredLimit: number; sentToday: number; availableToday: number; errorCode?: string };
   WEB_APP_PREPARE_CAMPAIGN: { campaignId: string; acceptedAt: string };
   WEB_APP_CANCEL_CAMPAIGN: { campaignId: string; cancelledAt: string };

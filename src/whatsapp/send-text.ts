@@ -55,7 +55,8 @@ export async function sendAndVerifyText(input: {
   phoneDigits: string;
   message: string;
   timeoutMs?: number;
-}): Promise<TextTestResult> {
+  checkpointRequired?: boolean;
+}, lifecycle: { beforeSend?: (baselineOutgoingIds: string[]) => Promise<void> } = {}): Promise<TextTestResult> {
   const { operationId, phoneDigits, message, timeoutMs = 30_000 } = input;
   const startedAt = new Date().toISOString();
   const invalidDialog = findInvalidContactDialog();
@@ -80,6 +81,7 @@ export async function sendAndVerifyText(input: {
   if (sendButton.element.disabled || sendButton.element.getAttribute("aria-disabled") === "true") {
     throw new ExtensionError(ERROR_CODES.elementNotFound, "El botón de envío está deshabilitado.");
   }
+  await lifecycle.beforeSend?.([...beforeIds]);
   sendButton.element.click();
 
   const expected = canonicalMessageText(message);
@@ -87,7 +89,7 @@ export async function sendAndVerifyText(input: {
     return outgoingMessages().find((item) => !beforeIds.has(item.identity) && item.text === expected) ?? null;
   }, { timeoutMs, description: "un nuevo mensaje saliente que coincida con el texto enviado" }).catch((error: unknown) => {
     throw new ExtensionError(ERROR_CODES.verificationFailed, "No se pudo confirmar un nuevo mensaje saliente en WhatsApp.", {
-      details: { expectedLength: expected.length },
+      details: { expectedLength: expected.length, sendAttempted: true, baselineOutgoingIds: [...beforeIds] },
       cause: error
     });
   });
