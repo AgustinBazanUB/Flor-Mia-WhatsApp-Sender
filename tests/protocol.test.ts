@@ -13,8 +13,10 @@ import { isAllowedWebAppOrigin } from "../src/config/origins";
 describe("typed protocol", () => {
   it("accepts only the explicit Flor Mía and local development origins", () => {
     expect(isAllowedWebAppOrigin("https://app-integral-fm.netlify.app")).toBe(true);
+    expect(isAllowedWebAppOrigin("https://deploy-preview-7--appintegralflormia.netlify.app")).toBe(true);
     expect(isAllowedWebAppOrigin("http://localhost:5173")).toBe(true);
     expect(isAllowedWebAppOrigin("https://app-integral-fm.netlify.app.evil.example")).toBe(false);
+    expect(isAllowedWebAppOrigin("https://deploy-preview-8--appintegralflormia.netlify.app")).toBe(false);
     expect(isAllowedWebAppOrigin("https://example.com")).toBe(false);
   });
   it("creates and validates internal envelopes", () => {
