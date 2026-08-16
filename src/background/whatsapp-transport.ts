@@ -91,7 +91,7 @@ export class WhatsAppTransport {
     while (Date.now() < deadline) {
       try {
         const result = await this.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, { timeoutMs: 1_000 }, tabId);
-        if (result.documentReady && (result.operational || result.qrDetected || result.status === "incompatible")) return result;
+        if (result.documentReady && (result.operational || result.qrDetected)) return result;
       } catch (error) {
         lastError = error;
       }

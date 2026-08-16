@@ -39,4 +39,24 @@ describe("WhatsAppTransport.sendWhenContentReady", () => {
 
     expect(waitForContent).not.toHaveBeenCalled();
   });
+
+  it("does not treat an early incompatible DOM as content-ready while WhatsApp is mounting", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new WhatsAppTransport();
+      const mounting = { documentReady: true, operational: false, qrDetected: false, status: "incompatible" };
+      const ready = { documentReady: true, operational: true, qrDetected: false, status: "ready" };
+      const send = vi.spyOn(transport, "send")
+        .mockResolvedValueOnce(mounting as never)
+        .mockResolvedValueOnce(ready as never);
+
+      const waiting = transport.waitForContent(7, 1_000);
+      await vi.advanceTimersByTimeAsync(300);
+
+      await expect(waiting).resolves.toBe(ready);
+      expect(send).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
