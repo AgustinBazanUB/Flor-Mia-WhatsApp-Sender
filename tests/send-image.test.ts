@@ -106,6 +106,20 @@ describe("verified image send", () => {
     expect(clicks).toBe(0);
   });
 
+  it("fails closed if the active chat changes after the media click while confirmation is pending", async () => {
+    document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
+      document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us");
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out' data-id='true_other_chat_media'><img src='blob:other'></div>"
+      );
+      document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
+    });
+
+    await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 50 }))
+      .rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
+  });
+
   it("never confirms outgoing media without a stable DOM id", async () => {
     document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
       document.getElementById("main")!.insertAdjacentHTML("beforeend", "<div class='message-out'><img src='blob:test'></div>");
