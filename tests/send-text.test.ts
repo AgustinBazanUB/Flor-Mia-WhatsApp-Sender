@@ -71,6 +71,23 @@ describe("verified text send", () => {
     expect(clicks).toBe(0);
   });
 
+  it("fails closed if the active chat changes after click while outgoing confirmation is pending", async () => {
+    document.querySelector("button")!.addEventListener("click", () => {
+      document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us");
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out' data-id='true_other_chat'><span class='selectable-text'>Hola Flor Mía</span></div>"
+      );
+    });
+
+    await expect(sendAndVerifyText({
+      operationId: "changed-after-click",
+      phoneDigits: "5491112345678",
+      message: "Hola Flor Mía",
+      timeoutMs: 50
+    })).rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
+  });
+
   it("never confirms a matching outgoing node without a stable DOM id", async () => {
     document.querySelector("button")!.addEventListener("click", () => {
       document.getElementById("main")!.insertAdjacentHTML("beforeend", "<div class='message-out'><span class='selectable-text'>Sin ID</span></div>");

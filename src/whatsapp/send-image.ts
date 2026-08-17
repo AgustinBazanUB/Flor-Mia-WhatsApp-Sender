@@ -1,5 +1,5 @@
 import type { StepVerification } from "../engine/types";
-import { ERROR_CODES, ExtensionError } from "../shared/errors";
+import { ERROR_CODES, ExtensionError, toExtensionError } from "../shared/errors";
 import { capabilityResolutionError, capabilityUnavailableError } from "../compatibility/diagnostic-error";
 import {
   elementVisible,
@@ -144,12 +144,15 @@ export async function sendAndVerifyImage(
   requireConversationContext(input.expectedPhoneDigits);
   sendButton.element.click();
   const verified = await waitForCondition(() => {
+    requireConversationContext(input.expectedPhoneDigits);
     const outgoing = outgoingMediaMessages().find((item) => item.stableIdentity && !before.has(item.identity));
     return outgoing && !elementVisible(preview.element) ? outgoing : null;
   }, {
     timeoutMs: confirmationTimeoutMs,
     description: "el nuevo mensaje multimedia saliente y el cierre de su preview"
   }).catch((error: unknown) => {
+    const normalized = toExtensionError(error);
+    if (normalized.code === ERROR_CODES.contactContextUnverified) throw normalized;
     throw new ExtensionError(ERROR_CODES.ambiguousResult, "Se accionó enviar, pero no se pudo confirmar el resultado multimedia.", {
       details: {
         imageId: input.imageId,
@@ -160,6 +163,7 @@ export async function sendAndVerifyImage(
       cause: error
     });
   });
+  requireConversationContext(input.expectedPhoneDigits);
 
   return {
     success: true,

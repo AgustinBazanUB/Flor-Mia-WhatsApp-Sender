@@ -17,7 +17,7 @@ import {
   resolveCapability,
   type CapabilityResolverOptions
 } from "./selectors";
-import { waitForCondition, waitForDocumentReady } from "./wait";
+import { waitForCondition, waitForDocumentReady, type DocumentReadySignal } from "./wait";
 
 const ALL_CAPABILITIES: WhatsAppCapability[] = [
   "whatsapp_page",
@@ -250,6 +250,10 @@ async function discoverMediaContext(
     : { ...send, state: "unavailable", message: "La prueba multimedia no pudo restaurar la interfaz con seguridad." };
 }
 
+function hasSemanticWhatsAppSurface(): boolean {
+  return Boolean(findQrCode() || resolveCapability("main_interface").match || findComposer());
+}
+
 export async function runWhatsAppPreflight(
   input: number | WhatsAppPreflightRequest = 8_000
 ): Promise<WhatsAppPreflightResult> {
@@ -260,13 +264,19 @@ export async function runWhatsAppPreflight(
   const requirements = request.requirements ?? DEFAULT_PREFLIGHT_REQUIREMENTS;
   const required = requiredCapabilities(requirements, level);
   const pageDetected = window.location.origin === "https://web.whatsapp.com";
-  let documentReady = document.readyState === "interactive" || document.readyState === "complete";
+  let readinessSignal: DocumentReadySignal | null = document.readyState === "interactive" || document.readyState === "complete"
+    ? "ready-state"
+    : hasSemanticWhatsAppSurface()
+      ? "semantic-surface"
+      : null;
+  let documentReady = Boolean(readinessSignal);
   if (pageDetected && !documentReady) {
     try {
-      await waitForDocumentReady(timeoutMs);
+      readinessSignal = await waitForDocumentReady(timeoutMs, hasSemanticWhatsAppSurface);
       documentReady = true;
     } catch {
       documentReady = false;
+      readinessSignal = null;
     }
   }
 
@@ -277,16 +287,28 @@ export async function runWhatsAppPreflight(
     ).catch(() => null);
   }
 
+  // La lista de chats puede seguir disponible mientras /send?phone=... todavía está
+  // cargando el panel de conversación. Si la campaña necesita composer, no debemos
+  // clasificar ese estado transitorio como incompatibilidad: esperamos el contexto
+  // que realmente exige la campaña, sin hacer click ni degradar la validación.
+  if (pageDetected && documentReady && required.has("composer") && !findQrCode() && !findComposer()) {
+    await waitForCondition(
+      () => findQrCode() || findComposer(),
+      { timeoutMs, description: "la conversación activa y su campo de escritura" }
+    ).catch(() => null);
+  }
+
   const qr = findQrCode();
   const main = resolveCapability("main_interface", document, resolverOptions("main_interface", required.has("main_interface"), request));
   const composer = resolveCapability("composer", document, resolverOptions("composer", required.has("composer"), request));
   const qrDetected = Boolean(qr);
   const mainInterfaceReady = Boolean(main.match || composer.match);
   const sessionReady = mainInterfaceReady && !qrDetected;
+  const documentReadyStrategy = readinessSignal === "semantic-surface" ? "document.semantic-surface" : documentReady ? "document.ready-state" : undefined;
   const discoveries: Partial<Record<WhatsAppCapability, CapabilityDiscovery>> = {
     whatsapp_page: syntheticDiscovery("whatsapp_page", pageDetected ? "available" : "unavailable", required.has("whatsapp_page"), "preflight.page", "origen web.whatsapp.com", pageDetected ? "WhatsApp Web detectado." : "Esta página no es WhatsApp Web.", pageDetected ? "origin.web-whatsapp" : undefined, "window"),
     content_script: syntheticDiscovery("content_script", "available", required.has("content_script"), "preflight.content_script", "Content Script conectado", "El Content Script respondió al Service Worker.", "runtime.content-script-response", "script"),
-    document_ready: syntheticDiscovery("document_ready", documentReady ? "available" : "unavailable", required.has("document_ready"), "preflight.document_ready", "document readyState interactive/complete", documentReady ? "El documento terminó de cargar." : "El documento todavía está cargando.", documentReady ? "document.ready-state" : undefined),
+    document_ready: syntheticDiscovery("document_ready", documentReady ? "available" : "unavailable", required.has("document_ready"), "preflight.document_ready", "documento utilizable o readyState interactive/complete", documentReady ? readinessSignal === "semantic-surface" ? "La interfaz semántica de WhatsApp está montada aunque el navegador todavía informe loading." : "El documento terminó de cargar." : "El documento y la interfaz semántica todavía están cargando.", documentReadyStrategy),
     session: syntheticDiscovery("session", sessionReady ? "available" : "unavailable", required.has("session"), "preflight.session", "sesión autenticada sin QR", sessionReady ? "La sesión está iniciada." : qrDetected ? "WhatsApp requiere inicio de sesión manual." : "La sesión todavía no puede confirmarse.", sessionReady ? "session.main-interface-without-qr" : undefined),
     main_interface: main.discovery,
     open_conversation: syntheticDiscovery("open_conversation", sessionReady ? "available" : "unavailable", required.has("open_conversation"), "conversation.open", "navegación segura /send sin envío", sessionReady ? "La navegación a un destinatario explícito está disponible." : "Se necesita una sesión iniciada.", sessionReady ? "navigation.send-url" : undefined, "location"),

@@ -31,6 +31,12 @@ export interface ContactTarget {
   name?: string;
   phoneDigits: string;
   maskedPhone: string;
+  /**
+   * Pestaña de WhatsApp Web vinculada de forma duradera al contacto activo.
+   * Se persiste dentro del checkpoint para que un reinicio del Service Worker
+   * nunca seleccione silenciosamente otra pestaña de WhatsApp.
+   */
+  whatsappTabId?: number;
 }
 
 export interface StepVerification {

@@ -31,6 +31,46 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.attachment_action.required).toBe(false);
   });
 
+  it("accepts a verified WhatsApp semantic surface even while readyState still reports loading", async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(document, "readyState");
+    Object.defineProperty(document, "readyState", { configurable: true, get: () => "loading" });
+    try {
+      const result = await runWhatsAppPreflight({
+        timeoutMs: 20,
+        level: "full",
+        requirements: { needsText: true, needsImages: false }
+      });
+      expect(result.overallStatus).toBe("GREEN");
+      expect(result.documentReady).toBe(true);
+      expect(result.capabilities.document_ready.selectedStrategy).toBe("document.semantic-surface");
+      expect(result.status).toBe("ready");
+    } finally {
+      if (originalDescriptor) Object.defineProperty(document, "readyState", originalDescriptor);
+      else delete (document as unknown as { readyState?: string }).readyState;
+    }
+  });
+
+  it("waits for a required composer while the chat list remains visible during conversation navigation", async () => {
+    document.body.innerHTML = `<div data-testid="chat-list"></div><div id="main"></div>`;
+    globalThis.setTimeout(() => {
+      document.getElementById("main")!.innerHTML = `
+        <footer>
+          <div role="textbox" contenteditable="true" data-testid="conversation-compose-box-input"></div>
+          <button aria-label="Send" data-testid="compose-btn-send"></button>
+        </footer>`;
+    }, 5);
+
+    const result = await runWhatsAppPreflight({
+      timeoutMs: 100,
+      level: "full",
+      requirements: { needsText: true, needsImages: false }
+    });
+
+    expect(result.overallStatus).toBe("GREEN");
+    expect(result.capabilities.composer.state).toBe("available");
+    expect(result.capabilities.composer.selectedStrategy).toBe("composer.accessibility.textbox");
+  });
+
   it("remains GREEN when a primary strategy is disabled and a fallback works", async () => {
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
@@ -56,7 +96,7 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.text_send_action.required).toBe(false);
   });
 
-  it("requires multimedia for an image campaign and becomes RED when it is absent", async () => {
+  it("requires the non-destructive attachment capability for an image campaign", async () => {
     document.querySelector("[data-testid='clip']")?.remove();
     const result = await runWhatsAppPreflight({
       timeoutMs: 10,
@@ -68,7 +108,29 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.attachment_action.state).toBe("unavailable");
   });
 
-  it("completes a full image preflight when preview and send strategies are observable", async () => {
+  it("does not inject a diagnostic image before a real image send", async () => {
+    baseConversation(`<input type="file" accept="image/*">`);
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    const result = await runWhatsAppPreflight({
+      timeoutMs: 20,
+      level: "full",
+      requirements: { needsText: true, needsImages: true },
+      probeImage: {
+        name: "probe.png",
+        type: "image/png",
+        size: 1,
+        dataBase64: "AA=="
+      }
+    });
+    expect(result.overallStatus).toBe("GREEN");
+    expect(result.capabilities.media_preview.required).toBe(false);
+    expect(result.capabilities.media_send_action.required).toBe(false);
+    expect(result.capabilities.image_file_input.required).toBe(false);
+    expect(fileInput.files?.length ?? 0).toBe(0);
+    expect(document.querySelector("[data-testid='media-editor-canvas']")).toBeNull();
+  });
+
+  it("can still observe an already-open media preview without requiring it preflight-wide", async () => {
     baseConversation(`
       <input type="file" accept="image/*">
       <div data-testid="media-editor-canvas"></div>
@@ -80,8 +142,10 @@ describe("contextual WhatsApp preflight", () => {
     });
     expect(result.overallStatus).toBe("GREEN");
     expect(result.capabilities.media_preview.state).toBe("available");
+    expect(result.capabilities.media_preview.required).toBe(false);
     expect(result.capabilities.media_preview.selectedStrategy).toBe("media-preview.testid.editor-canvas");
     expect(result.capabilities.media_send_action.state).toBe("available");
+    expect(result.capabilities.media_send_action.required).toBe(false);
     expect(result.strategiesUsed.length).toBeGreaterThan(8);
   });
 

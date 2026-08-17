@@ -3,6 +3,7 @@ import { ChromeWhatsAppContactAdapter } from "../src/background/contact-adapter"
 import type { WhatsAppTransport } from "../src/background/whatsapp-transport";
 import { createUnavailablePreflight } from "../src/compatibility/preflight-result";
 import { createContactCheckpoint } from "../src/engine/steps";
+import type { ContactCheckpointRepository, ContactProcessCheckpoint } from "../src/engine/types";
 import type { InternalMessageType } from "../src/shared/protocol";
 import { ERROR_CODES, ExtensionError } from "../src/shared/errors";
 
@@ -29,6 +30,15 @@ function checkpoint() {
     text: "Hola",
     now: NOW
   });
+}
+
+function memoryCheckpoints(initial: ContactProcessCheckpoint): ContactCheckpointRepository & { active: ContactProcessCheckpoint | null } {
+  return {
+    active: initial,
+    async loadActive() { return this.active; },
+    async saveActive(next) { this.active = next; return next; },
+    async clearActive() { this.active = null; }
+  };
 }
 
 describe("active WhatsApp tab binding", () => {
@@ -61,6 +71,64 @@ describe("active WhatsApp tab binding", () => {
 
     expect(discoveryCalls).toBe(1);
     expect(calls.map((call) => call.tabId)).toEqual([11, 11, 11, 11, 11]);
+  });
+
+  it("persists the tab id before navigation and reuses it after a simulated Service Worker restart", async () => {
+    const state = checkpoint();
+    const store = memoryCheckpoints(state);
+    let discoveryCalls = 0;
+    const requiredIds: number[] = [];
+    const fakeTransport = {
+      requireTab: async () => { discoveryCalls += 1; return { id: discoveryCalls === 1 ? 11 : 22, url: "https://web.whatsapp.com/" }; },
+      requireTabId: async (id: number) => { requiredIds.push(id); return { id, url: "https://web.whatsapp.com/" }; },
+      waitForContent: async () => green(),
+      send: async (type: InternalMessageType) => type === "WA_OPEN_CONVERSATION"
+        ? { navigationStarted: true }
+        : { verified: true, evidence: "structured-recipient-id", checkedAt: NOW }
+    };
+
+    const firstAdapter = new ChromeWhatsAppContactAdapter(
+      { getImage: async () => null },
+      fakeTransport as unknown as WhatsAppTransport,
+      store
+    );
+    await firstAdapter.openConversation(state.contact, 10);
+    expect(store.active?.contact.whatsappTabId).toBe(11);
+
+    const recoveredContact = { ...store.active!.contact };
+    const recoveredAdapter = new ChromeWhatsAppContactAdapter(
+      { getImage: async () => null },
+      fakeTransport as unknown as WhatsAppTransport,
+      store
+    );
+    await recoveredAdapter.openConversation(recoveredContact, 10);
+
+    expect(discoveryCalls).toBe(1);
+    expect(requiredIds).toEqual([11]);
+  });
+
+  it("fails closed after restart when the persisted tab was closed instead of selecting another WhatsApp tab", async () => {
+    const state = checkpoint();
+    state.contact.whatsappTabId = 11;
+    const store = memoryCheckpoints(state);
+    let discoveryCalls = 0;
+    const fakeTransport = {
+      requireTab: async () => { discoveryCalls += 1; return { id: 22, url: "https://web.whatsapp.com/" }; },
+      requireTabId: async (id: number) => {
+        expect(id).toBe(11);
+        throw new ExtensionError(ERROR_CODES.whatsappNotOpen, "closed");
+      },
+      waitForContent: async () => green(),
+      send: async () => ({ navigationStarted: true })
+    };
+    const recoveredAdapter = new ChromeWhatsAppContactAdapter(
+      { getImage: async () => null },
+      fakeTransport as unknown as WhatsAppTransport,
+      store
+    );
+
+    await expect(recoveredAdapter.openConversation({ ...state.contact }, 10)).rejects.toMatchObject({ code: "WHATSAPP_NOT_OPEN" });
+    expect(discoveryCalls).toBe(0);
   });
 
   it("does not fall back to another tab when the bound tab closes", async () => {

@@ -56,6 +56,34 @@ describe("state storage", () => {
     expect(state.compatibility.lastKnownGoodExtensionVersion).toBeNull();
   });
 
+  it("does not crash when embedded legacy compatibility metadata is incomplete", async () => {
+    const storage = new MemoryStorage();
+    storage.value = {
+      extensionState: {
+        ...createDefaultState(),
+        compatibility: {
+          schemaVersion: 1,
+          overallStatus: "GREEN",
+          lastKnownGood: {
+            composer: {
+              capability: "composer",
+              extensionVersion: "0.8.0",
+              selectedStrategy: "old-selector"
+            }
+          },
+          developmentFault: "none"
+        }
+      }
+    };
+
+    const state = await new StateStore(storage).load();
+
+    expect(state.schemaVersion).toBe(7);
+    expect(state.compatibility.schemaVersion).toBe(2);
+    expect(state.compatibility.lastKnownGood).toEqual({});
+    expect(state.compatibility.lastKnownGoodExtensionVersion).toBeNull();
+  });
+
   it("persists transitions and limits operation history", async () => {
     const storage = new MemoryStorage();
     const store = new StateStore(storage);

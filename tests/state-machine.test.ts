@@ -9,8 +9,14 @@ describe("extension state machine", () => {
     }
   });
 
+  it("allows a verified preflight to recover readiness after an error", () => {
+    expect(canTransition("error", "ready")).toBe(true);
+    expect(() => assertTransition("error", "ready")).not.toThrow();
+  });
+
   it("rejects contradictory transitions", () => {
     expect(() => assertTransition("idle", "running")).toThrow(/inválida/i);
     expect(allowedTransitions("running")).not.toContain("ready");
+    expect(allowedTransitions("error")).not.toContain("running");
   });
 });
