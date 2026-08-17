@@ -17,8 +17,14 @@ import {
   type CampaignPublicEventType
 } from "../campaign/events";
 import type { CampaignPublicStatus } from "../campaign/campaign-types";
+import {
+  captureBridgeRuntimeMetadata,
+  invalidatedContextMessage,
+  isExtensionContextInvalidated
+} from "./bridge-runtime";
 
 const lastPostedSequenceByCampaign = new Map<string, number>();
+const BRIDGE_RUNTIME = captureBridgeRuntimeMetadata();
 
 function post(message: WebAppEnvelope): void {
   window.postMessage(message, window.location.origin);
@@ -139,6 +145,23 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
   }
 }
 
+function bridgeFailure(error: unknown): {
+  code: string;
+  message: string;
+  recoverable: boolean;
+  details?: Record<string, unknown>;
+  stack?: string;
+} {
+  if (isExtensionContextInvalidated(error)) {
+    return {
+      code: "EXTENSION_CONTEXT_INVALIDATED",
+      message: invalidatedContextMessage(),
+      recoverable: true
+    };
+  }
+  return serializeError(error);
+}
+
 if (isAllowedWebAppOrigin(window.location.origin)) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
@@ -161,14 +184,14 @@ if (isAllowedWebAppOrigin(window.location.origin)) {
     if (event.source !== window || event.origin !== window.location.origin || !isWebAppInboundEnvelope(event.data)) return;
     const request = event.data;
     void handleRequest(request).catch((error: unknown) => {
-      const serialized = serializeError(error);
-      logger.warn("web_app.request_rejected", { type: request.type, errorCode: serialized.code });
+      const failure = bridgeFailure(error);
+      logger.warn("web_app.request_rejected", { type: request.type, errorCode: failure.code });
       if (request.type === WEB_APP_MESSAGE_TYPES.ping || request.type === WEB_APP_MESSAGE_TYPES.preflightRequest) {
         post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, {
           operational: false,
-          message: serialized.message,
-          extensionVersion: chrome.runtime.getManifest().version,
-          manifestVersion: chrome.runtime.getManifest().manifest_version,
+          message: failure.message,
+          extensionVersion: BRIDGE_RUNTIME.extensionVersion,
+          manifestVersion: BRIDGE_RUNTIME.manifestVersion,
           protocolVersion: PROTOCOL_VERSION,
           configuredLimit: 0,
           sentToday: 0,
@@ -176,7 +199,7 @@ if (isAllowedWebAppOrigin(window.location.origin)) {
           overallStatus: "RED",
           campaign: null,
           updatedAt: new Date().toISOString(),
-          errorCode: serialized.code
+          errorCode: failure.code
         }));
         return;
       }
@@ -187,9 +210,9 @@ if (isAllowedWebAppOrigin(window.location.origin)) {
         type: WEB_APP_MESSAGE_TYPES.error,
         replyTo: request.requestId,
         ...(campaignId ? { campaignId } : {}),
-        payload: serialized as unknown as Record<string, unknown>
+        payload: failure as unknown as Record<string, unknown>
       });
     });
   });
-  logger.debug("web_app.bridge_ready", { origin: window.location.origin });
+  logger.debug("web_app.bridge_ready", { origin: window.location.origin, extensionVersion: BRIDGE_RUNTIME.extensionVersion });
 }
