@@ -111,13 +111,17 @@ export async function sendAndVerifyText(input: {
 
   const expected = canonicalMessageText(message);
   const verified = await waitForCondition(() => {
+    requireConversationContext(phoneDigits);
     return outgoingMessages().find((item) => item.stableIdentity && !beforeIds.has(item.identity) && item.text === expected) ?? null;
   }, { timeoutMs, description: "un nuevo mensaje saliente que coincida con el texto enviado" }).catch((error: unknown) => {
+    const normalized = toExtensionError(error);
+    if (normalized.code === ERROR_CODES.contactContextUnverified) throw normalized;
     throw new ExtensionError(ERROR_CODES.verificationFailed, "No se pudo confirmar un nuevo mensaje saliente en WhatsApp.", {
       details: { expectedLength: expected.length, sendAttempted: true, baselineOutgoingIds: [...beforeIds] },
       cause: error
     });
   });
+  requireConversationContext(phoneDigits);
 
   return {
     success: true,
