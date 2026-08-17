@@ -96,7 +96,7 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.text_send_action.required).toBe(false);
   });
 
-  it("requires multimedia for an image campaign and becomes RED when it is absent", async () => {
+  it("requires the non-destructive attachment capability for an image campaign", async () => {
     document.querySelector("[data-testid='clip']")?.remove();
     const result = await runWhatsAppPreflight({
       timeoutMs: 10,
@@ -108,7 +108,29 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.attachment_action.state).toBe("unavailable");
   });
 
-  it("completes a full image preflight when preview and send strategies are observable", async () => {
+  it("does not inject a diagnostic image before a real image send", async () => {
+    baseConversation(`<input type="file" accept="image/*">`);
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    const result = await runWhatsAppPreflight({
+      timeoutMs: 20,
+      level: "full",
+      requirements: { needsText: true, needsImages: true },
+      probeImage: {
+        name: "probe.png",
+        type: "image/png",
+        size: 1,
+        dataBase64: "AA=="
+      }
+    });
+    expect(result.overallStatus).toBe("GREEN");
+    expect(result.capabilities.media_preview.required).toBe(false);
+    expect(result.capabilities.media_send_action.required).toBe(false);
+    expect(result.capabilities.image_file_input.required).toBe(false);
+    expect(fileInput.files?.length ?? 0).toBe(0);
+    expect(document.querySelector("[data-testid='media-editor-canvas']")).toBeNull();
+  });
+
+  it("can still observe an already-open media preview without requiring it preflight-wide", async () => {
     baseConversation(`
       <input type="file" accept="image/*">
       <div data-testid="media-editor-canvas"></div>
@@ -120,8 +142,10 @@ describe("contextual WhatsApp preflight", () => {
     });
     expect(result.overallStatus).toBe("GREEN");
     expect(result.capabilities.media_preview.state).toBe("available");
+    expect(result.capabilities.media_preview.required).toBe(false);
     expect(result.capabilities.media_preview.selectedStrategy).toBe("media-preview.testid.editor-canvas");
     expect(result.capabilities.media_send_action.state).toBe("available");
+    expect(result.capabilities.media_send_action.required).toBe(false);
     expect(result.strategiesUsed.length).toBeGreaterThan(8);
   });
 
