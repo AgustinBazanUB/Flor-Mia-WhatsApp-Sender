@@ -1,5 +1,6 @@
 import type {
   ContactAdapter,
+  ContactCheckpointRepository,
   ContactStep,
   ImageContactStep,
   StepExecutionContext,
@@ -11,6 +12,7 @@ import { ERROR_CODES, ExtensionError, serializeError, toExtensionError } from ".
 import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
 import { arrayBufferToBase64 } from "../shared/serialization";
 import type { CampaignBlobStore } from "../storage/blob-store";
+import { ContactCheckpointStore } from "../storage/checkpoint-store";
 import { WhatsAppTransport } from "./whatsapp-transport";
 
 function executionError(error: unknown): StepExecutionResult {
@@ -40,19 +42,43 @@ function executionError(error: unknown): StepExecutionResult {
   };
 }
 
+function defaultCheckpointStore(): ContactCheckpointRepository | null {
+  if (typeof chrome === "undefined" || !chrome.storage?.local) return null;
+  return new ContactCheckpointStore();
+}
+
 export class ChromeWhatsAppContactAdapter implements ContactAdapter {
   private whatsappTabId: number | null = null;
 
   constructor(
     private readonly blobs: Pick<CampaignBlobStore, "getImage">,
-    private readonly transport: WhatsAppTransport = new WhatsAppTransport()
+    private readonly transport: WhatsAppTransport = new WhatsAppTransport(),
+    private readonly checkpoints: ContactCheckpointRepository | null = defaultCheckpointStore()
   ) {}
 
+  private async persistTabBinding(contact: Parameters<ContactAdapter["openConversation"]>[0], tabId: number): Promise<void> {
+    contact.whatsappTabId = tabId;
+    if (!this.checkpoints) return;
+    const active = await this.checkpoints.loadActive();
+    if (!active || active.contact.contactId !== contact.contactId || active.contact.phoneDigits !== contact.phoneDigits) return;
+    if (active.contact.whatsappTabId === tabId) return;
+    await this.checkpoints.saveActive({
+      ...active,
+      contact: { ...active.contact, whatsappTabId: tabId },
+      updatedAt: new Date().toISOString()
+    });
+  }
+
   async openConversation(contact: Parameters<ContactAdapter["openConversation"]>[0], timeoutMs: number): Promise<void> {
-    const tab = this.whatsappTabId === null
+    const persistedTabId = Number.isInteger(contact.whatsappTabId) ? contact.whatsappTabId! : null;
+    const boundTabId = this.whatsappTabId ?? persistedTabId;
+    const tab = boundTabId === null
       ? await this.transport.requireTab()
-      : await this.transport.requireTabId(this.whatsappTabId);
+      : await this.transport.requireTabId(boundTabId);
     this.whatsappTabId = tab.id;
+    // Persist before navigation. If the Service Worker dies after this point, the
+    // recovered checkpoint must reuse this exact tab or fail closed.
+    await this.persistTabBinding(contact, tab.id);
     await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
       operationId: `open:${contact.contactId}`,
       phoneDigits: contact.phoneDigits
