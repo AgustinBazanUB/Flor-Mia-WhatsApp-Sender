@@ -1,4 +1,5 @@
 import type { StepReconciliationResult } from "../engine/types";
+import { ERROR_CODES, ExtensionError } from "../shared/errors";
 import {
   canonicalMessageText,
   findComposer,
@@ -33,6 +34,10 @@ function result(outcome: StepReconciliationResult["outcome"], method: string, se
 }
 
 function inspect(input: ReconcileStepInput): StepReconciliationResult | null {
+  // La reconciliación puede observar el DOM durante varios segundos. El usuario
+  // puede cambiar de chat en ese intervalo: cada observación debe volver a probar
+  // el destinatario antes de concluir confirmed o not_sent.
+  requireConversationContext(input.expectedPhoneDigits);
   const baseline = new Set(input.baselineOutgoingIds);
   if (input.kind === "text") {
     const expected = canonicalMessageText(input.message ?? "");
@@ -54,13 +59,23 @@ function inspect(input: ReconcileStepInput): StepReconciliationResult | null {
   return null;
 }
 
+function isContextError(error: unknown): boolean {
+  return error instanceof ExtensionError && error.code === ERROR_CODES.contactContextUnverified;
+}
+
 export async function reconcileWhatsAppStep(input: ReconcileStepInput): Promise<StepReconciliationResult> {
-  requireConversationContext(input.expectedPhoneDigits);
   const immediate = inspect(input);
-  if (immediate) return immediate;
+  if (immediate) {
+    requireConversationContext(input.expectedPhoneDigits);
+    return immediate;
+  }
   const resolved = await waitForCondition(() => inspect(input), {
     timeoutMs: input.timeoutMs ?? 6_000,
     description: "evidencia suficiente para reconciliar el envío"
-  }).catch(() => null);
+  }).catch((error: unknown) => {
+    if (isContextError(error)) throw error;
+    return null;
+  });
+  requireConversationContext(input.expectedPhoneDigits);
   return resolved ?? result("ambiguous", "no-conclusive-dom-evidence", true);
 }
