@@ -4,6 +4,7 @@ import type { ExtensionState, ExtensionStatus, OperationRecord } from "../shared
 import { DEFAULT_RETRY_POLICY } from "../engine/retry-policy";
 import { DEFAULT_CAMPAIGN_POLICY, normalizeCampaignPolicy } from "../campaign/campaign-policy";
 import { createDefaultCompatibilityState } from "../compatibility/fingerprint";
+import { normalizeCompatibilityState } from "../compatibility/state-normalizer";
 
 const STATE_KEY = "extensionState";
 const MAX_ERRORS = 20;
@@ -74,22 +75,13 @@ export class StateStore {
     const stored = result[STATE_KEY];
     if (!stored || typeof stored !== "object") return createDefaultState();
     const defaults = createDefaultState();
-    const storedCompatibility = (stored as Partial<ExtensionState>).compatibility as Partial<ExtensionState["compatibility"]> | undefined;
-    const lastKnownGood = {
-      ...defaults.compatibility.lastKnownGood,
-      ...storedCompatibility?.lastKnownGood
-    };
-    const lastKnownGoodExtensionVersion = storedCompatibility?.lastKnownGoodExtensionVersion
-      ?? Object.values(lastKnownGood)
-        .filter((item): item is NonNullable<typeof item> => Boolean(item))
-        .sort((a, b) => b.lastWorkingAt.localeCompare(a.lastWorkingAt))[0]?.extensionVersion
-      ?? null;
     const storedState = stored as Partial<ExtensionState> & { activeCampaign?: unknown };
     const activeCampaign = storedState.activeCampaign
       && typeof storedState.activeCampaign === "object"
       && (storedState.activeCampaign as { snapshotSchemaVersion?: unknown }).snapshotSchemaVersion === 1
       ? storedState.activeCampaign as ExtensionState["activeCampaign"]
       : null;
+    const compatibility = normalizeCompatibilityState(storedState.compatibility, defaults.updatedAt);
     return {
       ...defaults,
       ...storedState,
@@ -97,30 +89,24 @@ export class StateStore {
       activeCampaign,
       config: {
         ...defaults.config,
-        ...(stored as Partial<ExtensionState>).config,
+        ...storedState.config,
         retryPolicy: {
           ...defaults.config.retryPolicy,
-          ...(stored as Partial<ExtensionState>).config?.retryPolicy,
+          ...storedState.config?.retryPolicy,
           backoff: {
             ...defaults.config.retryPolicy.backoff,
-            ...(stored as Partial<ExtensionState>).config?.retryPolicy?.backoff
+            ...storedState.config?.retryPolicy?.backoff
           },
           timeouts: {
             ...defaults.config.retryPolicy.timeouts,
-            ...(stored as Partial<ExtensionState>).config?.retryPolicy?.timeouts
+            ...storedState.config?.retryPolicy?.timeouts
           }
         },
-        campaignPolicy: normalizeCampaignPolicy((stored as Partial<ExtensionState>).config?.campaignPolicy)
+        campaignPolicy: normalizeCampaignPolicy(storedState.config?.campaignPolicy)
       },
-      progress: { ...defaults.progress, ...(stored as Partial<ExtensionState>).progress },
-      dailyLimit: { ...defaults.dailyLimit, ...(stored as Partial<ExtensionState>).dailyLimit },
-      compatibility: {
-        ...defaults.compatibility,
-        ...storedCompatibility,
-        schemaVersion: defaults.compatibility.schemaVersion,
-        lastKnownGoodExtensionVersion,
-        lastKnownGood
-      }
+      progress: { ...defaults.progress, ...storedState.progress },
+      dailyLimit: { ...defaults.dailyLimit, ...storedState.dailyLimit },
+      compatibility
     };
   }
 
