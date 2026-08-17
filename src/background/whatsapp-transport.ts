@@ -88,15 +88,28 @@ export class WhatsAppTransport {
   async waitForContent(tabId: number, timeoutMs: number): Promise<WhatsAppPreflightResult> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown;
+    let lastResult: WhatsAppPreflightResult | null = null;
     while (Date.now() < deadline) {
       try {
         const result = await this.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, { timeoutMs: 1_000 }, tabId);
+        lastResult = result;
         if (result.documentReady && (result.operational || result.qrDetected)) return result;
       } catch (error) {
         lastError = error;
       }
       await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
     }
-    throw new ExtensionError(ERROR_CODES.timeout, "WhatsApp Web no quedó listo después de abrir la conversación.", { cause: lastError });
+    throw new ExtensionError(ERROR_CODES.timeout, "WhatsApp Web no quedó listo después de abrir la conversación.", {
+      cause: lastError,
+      details: lastResult ? {
+        lastStatus: lastResult.status,
+        pageDetected: lastResult.pageDetected,
+        documentReady: lastResult.documentReady,
+        sessionReady: lastResult.sessionReady,
+        mainInterfaceReady: lastResult.mainInterfaceReady,
+        qrDetected: lastResult.qrDetected,
+        overallStatus: lastResult.overallStatus
+      } : { lastStatus: "no_response" }
+    });
   }
 }
