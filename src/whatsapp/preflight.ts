@@ -277,6 +277,17 @@ export async function runWhatsAppPreflight(
     ).catch(() => null);
   }
 
+  // La lista de chats puede seguir disponible mientras /send?phone=... todavía está
+  // cargando el panel de conversación. Si la campaña necesita composer, no debemos
+  // clasificar ese estado transitorio como incompatibilidad: esperamos el contexto
+  // que realmente exige la campaña, sin hacer click ni degradar la validación.
+  if (pageDetected && documentReady && required.has("composer") && !findQrCode() && !findComposer()) {
+    await waitForCondition(
+      () => findQrCode() || findComposer(),
+      { timeoutMs, description: "la conversación activa y su campo de escritura" }
+    ).catch(() => null);
+  }
+
   const qr = findQrCode();
   const main = resolveCapability("main_interface", document, resolverOptions("main_interface", required.has("main_interface"), request));
   const composer = resolveCapability("composer", document, resolverOptions("composer", required.has("composer"), request));
