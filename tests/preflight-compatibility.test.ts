@@ -31,6 +31,25 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.attachment_action.required).toBe(false);
   });
 
+  it("accepts a verified WhatsApp semantic surface even while readyState still reports loading", async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(document, "readyState");
+    Object.defineProperty(document, "readyState", { configurable: true, get: () => "loading" });
+    try {
+      const result = await runWhatsAppPreflight({
+        timeoutMs: 20,
+        level: "full",
+        requirements: { needsText: true, needsImages: false }
+      });
+      expect(result.overallStatus).toBe("GREEN");
+      expect(result.documentReady).toBe(true);
+      expect(result.capabilities.document_ready.selectedStrategy).toBe("document.semantic-surface");
+      expect(result.status).toBe("ready");
+    } finally {
+      if (originalDescriptor) Object.defineProperty(document, "readyState", originalDescriptor);
+      else delete (document as unknown as { readyState?: string }).readyState;
+    }
+  });
+
   it("waits for a required composer while the chat list remains visible during conversation navigation", async () => {
     document.body.innerHTML = `<div data-testid="chat-list"></div><div id="main"></div>`;
     globalThis.setTimeout(() => {
