@@ -58,6 +58,25 @@ describe("ambiguous result reconciliation", () => {
     })).rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
   });
 
+  it("fails closed if the user switches chat while reconciliation is polling", async () => {
+    globalThis.setTimeout(() => {
+      document.querySelector("header")!.setAttribute("data-jid", "5491199999999@c.us");
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out' data-id='true_wrong_chat'><span class='selectable-text'>Hola Flor Mía</span></div>"
+      );
+    }, 5);
+
+    await expect(reconcileWhatsAppStep({
+      kind: "text",
+      operationId: "chat-switch-during-poll",
+      expectedPhoneDigits: "5491112345678",
+      baselineOutgoingIds: [],
+      message: "Hola Flor Mía",
+      timeoutMs: 100
+    })).rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
+  });
+
   it("keeps reconciliation ambiguous when matching evidence lacks a stable id", async () => {
     document.getElementById("main")!.insertAdjacentHTML("beforeend", "<div class='message-out'><span class='selectable-text'>Hola Flor Mía</span></div>");
     const result = await reconcileWhatsAppStep({
