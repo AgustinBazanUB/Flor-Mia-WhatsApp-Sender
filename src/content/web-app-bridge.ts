@@ -19,12 +19,15 @@ import {
 import type { CampaignPublicStatus } from "../campaign/campaign-types";
 import {
   captureBridgeRuntimeMetadata,
+  installBridgeInstanceGuard,
   invalidatedContextMessage,
   isExtensionContextInvalidated
 } from "./bridge-runtime";
 
 const lastPostedSequenceByCampaign = new Map<string, number>();
 const BRIDGE_RUNTIME = captureBridgeRuntimeMetadata();
+const BRIDGE_INSTANCE = installBridgeInstanceGuard();
+let bridgeActive = true;
 
 function post(message: WebAppEnvelope): void {
   window.postMessage(message, window.location.origin);
@@ -162,47 +165,66 @@ function bridgeFailure(error: unknown): {
   return serializeError(error);
 }
 
-if (isAllowedWebAppOrigin(window.location.origin)) {
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local") return;
-    const event = changes[CAMPAIGN_EVENT_KEY]?.newValue as CampaignPublicEvent | undefined;
-    if (!event || event.eventSchemaVersion !== 1 || event.campaignId !== event.payload.campaignId) return;
-    const lastSequence = lastPostedSequenceByCampaign.get(event.campaignId) ?? -1;
-    if (event.sequence <= lastSequence) return;
-    lastPostedSequenceByCampaign.set(event.campaignId, event.sequence);
-    post({
-      channel: WEB_APP_CHANNEL,
-      protocolVersion: PROTOCOL_VERSION,
-      type: messageTypeForEvent(event.type),
-      campaignId: event.campaignId,
-      sequence: event.sequence,
-      payload: event.payload as unknown as Record<string, unknown>
-    });
-  });
+function retireBridge(): void {
+  if (!bridgeActive) return;
+  bridgeActive = false;
+  window.removeEventListener("message", onWindowMessage);
+  BRIDGE_INSTANCE.release();
+  try {
+    chrome.storage.onChanged.removeListener(onStorageChanged);
+  } catch {
+    // Un contexto MV3 invalidado ya no permite tocar chrome.*; el listener de window
+    // igualmente queda retirado para que esta instancia no compita con la nueva.
+  }
+}
 
-  window.addEventListener("message", (event: MessageEvent<unknown>) => {
-    if (event.source !== window || event.origin !== window.location.origin || !isWebAppInboundEnvelope(event.data)) return;
-    const request = event.data;
-    void handleRequest(request).catch((error: unknown) => {
-      const failure = bridgeFailure(error);
-      logger.warn("web_app.request_rejected", { type: request.type, errorCode: failure.code });
-      if (request.type === WEB_APP_MESSAGE_TYPES.ping || request.type === WEB_APP_MESSAGE_TYPES.preflightRequest) {
-        post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, {
-          operational: false,
-          message: failure.message,
-          extensionVersion: BRIDGE_RUNTIME.extensionVersion,
-          manifestVersion: BRIDGE_RUNTIME.manifestVersion,
-          protocolVersion: PROTOCOL_VERSION,
-          configuredLimit: 0,
-          sentToday: 0,
-          availableToday: 0,
-          overallStatus: "RED",
-          campaign: null,
-          updatedAt: new Date().toISOString(),
-          errorCode: failure.code
-        }));
-        return;
-      }
+function onStorageChanged(changes: { [key: string]: chrome.storage.StorageChange }, areaName: string): void {
+  if (!bridgeActive || !BRIDGE_INSTANCE.isCurrent()) {
+    retireBridge();
+    return;
+  }
+  if (areaName !== "local") return;
+  const event = changes[CAMPAIGN_EVENT_KEY]?.newValue as CampaignPublicEvent | undefined;
+  if (!event || event.eventSchemaVersion !== 1 || event.campaignId !== event.payload.campaignId) return;
+  const lastSequence = lastPostedSequenceByCampaign.get(event.campaignId) ?? -1;
+  if (event.sequence <= lastSequence) return;
+  lastPostedSequenceByCampaign.set(event.campaignId, event.sequence);
+  post({
+    channel: WEB_APP_CHANNEL,
+    protocolVersion: PROTOCOL_VERSION,
+    type: messageTypeForEvent(event.type),
+    campaignId: event.campaignId,
+    sequence: event.sequence,
+    payload: event.payload as unknown as Record<string, unknown>
+  });
+}
+
+function onWindowMessage(event: MessageEvent<unknown>): void {
+  if (!bridgeActive || !BRIDGE_INSTANCE.isCurrent()) {
+    retireBridge();
+    return;
+  }
+  if (event.source !== window || event.origin !== window.location.origin || !isWebAppInboundEnvelope(event.data)) return;
+  const request = event.data;
+  void handleRequest(request).catch((error: unknown) => {
+    const failure = bridgeFailure(error);
+    logger.warn("web_app.request_rejected", { type: request.type, errorCode: failure.code });
+    if (request.type === WEB_APP_MESSAGE_TYPES.ping || request.type === WEB_APP_MESSAGE_TYPES.preflightRequest) {
+      post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, {
+        operational: false,
+        message: failure.message,
+        extensionVersion: BRIDGE_RUNTIME.extensionVersion,
+        manifestVersion: BRIDGE_RUNTIME.manifestVersion,
+        protocolVersion: PROTOCOL_VERSION,
+        configuredLimit: 0,
+        sentToday: 0,
+        availableToday: 0,
+        overallStatus: "RED",
+        campaign: null,
+        updatedAt: new Date().toISOString(),
+        errorCode: failure.code
+      }));
+    } else {
       const campaignId = campaignIdOf(request);
       post({
         channel: WEB_APP_CHANNEL,
@@ -212,7 +234,19 @@ if (isAllowedWebAppOrigin(window.location.origin)) {
         ...(campaignId ? { campaignId } : {}),
         payload: failure as unknown as Record<string, unknown>
       });
-    });
+    }
+    if (failure.code === "EXTENSION_CONTEXT_INVALIDATED") retireBridge();
   });
-  logger.debug("web_app.bridge_ready", { origin: window.location.origin, extensionVersion: BRIDGE_RUNTIME.extensionVersion });
+}
+
+if (isAllowedWebAppOrigin(window.location.origin)) {
+  chrome.storage.onChanged.addListener(onStorageChanged);
+  window.addEventListener("message", onWindowMessage);
+  logger.debug("web_app.bridge_ready", {
+    origin: window.location.origin,
+    extensionVersion: BRIDGE_RUNTIME.extensionVersion,
+    bridgeInstance: BRIDGE_INSTANCE.instanceId
+  });
+} else {
+  retireBridge();
 }
