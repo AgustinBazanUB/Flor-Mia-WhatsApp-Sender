@@ -31,6 +31,27 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.attachment_action.required).toBe(false);
   });
 
+  it("waits for a required composer while the chat list remains visible during conversation navigation", async () => {
+    document.body.innerHTML = `<div data-testid="chat-list"></div><div id="main"></div>`;
+    globalThis.setTimeout(() => {
+      document.getElementById("main")!.innerHTML = `
+        <footer>
+          <div role="textbox" contenteditable="true" data-testid="conversation-compose-box-input"></div>
+          <button aria-label="Send" data-testid="compose-btn-send"></button>
+        </footer>`;
+    }, 5);
+
+    const result = await runWhatsAppPreflight({
+      timeoutMs: 100,
+      level: "full",
+      requirements: { needsText: true, needsImages: false }
+    });
+
+    expect(result.overallStatus).toBe("GREEN");
+    expect(result.capabilities.composer.state).toBe("available");
+    expect(result.capabilities.composer.selectedStrategy).toBe("composer.accessibility.textbox");
+  });
+
   it("remains GREEN when a primary strategy is disabled and a fallback works", async () => {
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
