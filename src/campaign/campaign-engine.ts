@@ -72,17 +72,30 @@ function checkpointBlock(checkpoint: ContactProcessCheckpoint, at: string): {
     return {
       status: "paused",
       recipientStatus: "paused",
-      reason: block("contact_ambiguous", "El resultado del contacto es ambiguo y debe reconciliarse antes de continuar.", at, true, technicalError)
+      reason: block("contact_ambiguous", "No pudimos confirmar el resultado del último envío. La campaña quedó pausada para evitar duplicados.", at, true, technicalError)
     };
   }
   const code = technicalError?.code;
+  if (code === ERROR_CODES.contactContextUnverified) {
+    return {
+      status: "paused",
+      recipientStatus: "paused",
+      reason: block(
+        "contact_paused",
+        "No pudimos confirmar que WhatsApp abrió el contacto correcto. La campaña se pausó para evitar enviar el mensaje a otra persona.",
+        at,
+        true,
+        technicalError
+      )
+    };
+  }
   if (code && COMPATIBILITY_ERROR_CODES.has(code)) {
     return {
       status: "paused",
       recipientStatus: "paused",
       reason: block(
         "whatsapp_ui_changed",
-        "WhatsApp Web cambió y una capability crítica dejó de estar disponible.",
+        "WhatsApp cambió y necesitamos revisar la conexión antes de continuar.",
         at,
         true,
         technicalError
@@ -93,34 +106,34 @@ function checkpointBlock(checkpoint: ContactProcessCheckpoint, at: string): {
     return {
       status: "paused",
       recipientStatus: "paused",
-      reason: block("whatsapp_tab_closed", "La pestaña de WhatsApp Web no está disponible.", at, true, technicalError)
+      reason: block("whatsapp_tab_closed", "WhatsApp Web no está abierto. Abrilo para continuar.", at, true, technicalError)
     };
   }
   if (code === ERROR_CODES.sessionNotReady) {
     return {
       status: "paused",
       recipientStatus: "paused",
-      reason: block("whatsapp_session_closed", "La sesión de WhatsApp Web requiere intervención del usuario.", at, true, technicalError)
+      reason: block("whatsapp_session_closed", "WhatsApp necesita iniciar sesión. Abrí WhatsApp Web y escaneá el código QR.", at, true, technicalError)
     };
   }
   if (code === ERROR_CODES.interfaceLoading || code === ERROR_CODES.timeout) {
     return {
       status: "paused",
       recipientStatus: "paused",
-      reason: block("whatsapp_reloading", "WhatsApp Web se está cargando o dejó de responder temporalmente.", at, true, technicalError)
+      reason: block("whatsapp_reloading", "WhatsApp Web todavía se está cargando. La campaña quedó pausada para continuar de forma segura.", at, true, technicalError)
     };
   }
   if (checkpoint.status === "failed") {
     return {
       status: "error",
       recipientStatus: "error",
-      reason: block("contact_failed", "El contacto se detuvo por un error no recuperable.", at, false, technicalError)
+      reason: block("contact_failed", "Necesita revisión. El contacto se detuvo de forma segura.", at, false, technicalError)
     };
   }
   return {
     status: "paused",
     recipientStatus: "paused",
-    reason: block("contact_paused", "El ContactEngine pausó el destinatario actual.", at, true, technicalError)
+    reason: block("contact_paused", "La campaña quedó pausada antes de continuar con este contacto.", at, true, technicalError)
   };
 }
 
@@ -342,7 +355,7 @@ export class CampaignEngine {
       pauseRequested: true,
       blockReason: block(
         "service_worker_restarted",
-        "La campaña fue recuperada después de reiniciar el Service Worker. Ejecutá preflight y reanudá.",
+        "La campaña quedó pausada después de recargar la extensión. Comprobá la conexión y reanudá cuando estés listo.",
         this.now().toISOString(),
         true
       )
@@ -404,7 +417,7 @@ export class CampaignEngine {
               blockCode,
               health.message ?? (health.temporary
                 ? "WhatsApp Web todavía está cargando; la campaña quedó pausada temporalmente."
-                : "El health check detectó una capability crítica no resoluble."),
+                : "WhatsApp cambió y necesitamos revisar la conexión antes de continuar."),
               this.now().toISOString(),
               true,
               health.error
