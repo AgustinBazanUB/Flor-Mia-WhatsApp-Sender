@@ -14,49 +14,92 @@ function strategyIds(report: TechnicalReportV1): string {
   return ids.length ? ids.join(", ") : "no disponibles";
 }
 
+function preflightMoment(report: TechnicalReportV1, key: string): string {
+  const value = report.preflight?.[key];
+  if (!value || typeof value !== "object") return "no disponible";
+  const record = value as Record<string, unknown>;
+  return `${available(record.action)} · ${available(record.outcome)} · ${available(record.completedAt ?? record.startedAt)} · ${available(record.durationMs)} ms`;
+}
+
+function sendSafety(report: TechnicalReportV1): { attempted: boolean; ambiguous: boolean; reconciled: boolean } {
+  const steps = report.checkpoint?.steps ?? [];
+  const attempted = steps.some((step) => step.verification?.sendAttempted === true);
+  const ambiguous = steps.some((step) => step.verification?.outcome === "ambiguous" || step.status === "verification_pending");
+  const reconciled = ambiguous && steps.some((step) => step.verification?.method?.includes("reconcil"));
+  return { attempted, ambiguous, reconciled };
+}
+
+function userSummary(report: TechnicalReportV1): string {
+  const code = report.incident.error?.code;
+  if (code === "CONTACT_CONTEXT_UNVERIFIED") {
+    return "No pudimos confirmar que WhatsApp abrió el contacto correcto. La campaña se pausó antes de enviar contenido para evitar un envío a otra persona.";
+  }
+  if (report.incident.errorCategory === "WHATSAPP_UI_CHANGED") {
+    return "WhatsApp cambió y necesitamos revisar la conexión antes de continuar la campaña.";
+  }
+  return report.incident.resultSummary;
+}
+
 export function formatTechnicalReportText(report: TechnicalReportV1): string {
   const incident = report.incident;
   const capability = incident.capability ?? report.compatibility.failedCapability;
   const lastKnown = capability ? report.compatibility.lastKnownGood[capability] as Record<string, unknown> | undefined : undefined;
   const lastStrategy = lastKnown?.selectedStrategy;
+  const safety = sendSafety(report);
+  const capabilityApplies = Boolean(capability);
   return [
-    "REPORTE PARA CODEX — FLOR MÍA WHATSAPP SENDER",
+    "REPORTE PARA SOPORTE — FLOR MÍA WHATSAPP SENDER",
     "",
-    `La extensión Flor Mía WhatsApp Sender dejó de funcionar durante ${available(incident.stepId ?? incident.actionAttempted)}.`,
-    `La última estrategia funcional para ${available(capability)} era ${available(lastStrategy)}.`,
-    `Actualmente se intentaron ${strategyIds(report)} y no se encontró una coincidencia funcional confirmada.`,
-    `El último paso confirmado fue ${available(incident.lastConfirmedStepId)}.`,
-    "Analizá el código de la extensión y modificá únicamente lo necesario para recuperar esta capability sin alterar el flujo atómico, checkpoints ni prevención de duplicados.",
+    "RESUMEN PARA USUARIO",
+    userSummary(report),
     "",
-    "RESTRICCIÓN PRINCIPAL",
-    "Preservar atomicidad, verificación y checkpoints. No reemplazar por clicks ciegos.",
+    "CAUSA TÉCNICA",
+    `Código: ${available(incident.error?.code)}`,
+    `Operación real: ${available(incident.actionAttempted ?? incident.stepId)}`,
+    `Fase: ${incident.stepId ? available(incident.stepKind) : "before_content / open_conversation"}`,
+    `Mensaje técnico: ${available(incident.error?.message)}`,
+    `Capability de compatibilidad: ${capabilityApplies ? available(capability) : "no aplica a este incidente"}`,
+    "",
+    "SEND SAFETY",
+    `sendAttempted: ${safety.attempted}`,
+    `ambiguous: ${safety.ambiguous}`,
+    `reconciled: ${safety.reconciled}`,
+    `Último paso confirmado: ${available(incident.lastConfirmedStepId)}`,
     "",
     "RESUMEN DEL INCIDENTE",
     `Fecha: ${report.generatedAt}`,
     `Categoría: ${incident.errorCategory}`,
-    `Código: ${available(incident.error?.code)}`,
-    `Mensaje técnico: ${available(incident.error?.message)}`,
     `Resultado: ${incident.resultSummary}`,
     `Recuperable: ${available(incident.error?.recoverable)}`,
-    `Semáforo: ${incident.overallStatus}`,
+    `Compatibilidad general: ${incident.overallStatus}`,
     `Campaña: ${available(incident.campaignId)}`,
     `Estado campaña: ${available(incident.campaignStatus)}`,
     `Contacto: ${available(incident.recipientPosition)} / ${available(incident.totalRecipients)}`,
-    `ID interno: ${available(incident.recipientInternalId)}`,
+    `ID interno de correlación: ${available(incident.recipientInternalId)}`,
     `Teléfono: ${available(incident.maskedPhone)}`,
     `Estado contacto: ${available(incident.contactStatus)}`,
     `Paso: ${available(incident.stepId)} (${available(incident.stepKind)})`,
     `Orden de imagen: ${available(incident.imageOrder)}`,
     `Intentos: ${available(incident.attempts)}`,
-    `Acción intentada: ${available(incident.actionAttempted)}`,
+    "",
+    "ESTADO TEMPORAL DE PREFLIGHT",
+    `Preflight durante start: ${preflightMoment(report, "campaignStartPreflight")}`,
+    `Último preflight ejecutado: ${preflightMoment(report, "latestPreflight")}`,
+    `Último preflight exitoso: ${preflightMoment(report, "latestSuccessfulPreflight")}`,
+    `Último preflight fallido: ${preflightMoment(report, "latestFailedPreflight")}`,
     "",
     "EVIDENCIA DE COMPATIBILIDAD",
-    `Capability fallida: ${available(capability)}`,
-    `Última capability exitosa: ${available(report.compatibility.lastSuccessfulCapability)}`,
-    `Última estrategia funcional: ${available(lastStrategy)}`,
-    `Estrategias actuales intentadas: ${strategyIds(report)}`,
-    `Drifts registrados: ${report.compatibility.driftChanges.length}`,
+    `Capability fallida del incidente: ${capabilityApplies ? available(capability) : "no aplica"}`,
+    `Última capability exitosa relacionada: ${capabilityApplies ? available(report.compatibility.lastSuccessfulCapability) : "no aplica"}`,
+    `Última estrategia funcional relacionada: ${capabilityApplies ? available(lastStrategy) : "no aplica"}`,
+    `Estrategias actuales intentadas: ${capabilityApplies ? strategyIds(report) : "no aplica"}`,
+    `Drifts registrados (históricos, no causa automática): ${report.compatibility.driftChanges.length}`,
     `Roturas registradas: ${report.compatibility.breakChanges.length}`,
+    "",
+    "RECUPERACIÓN DEL SERVICE WORKER",
+    report.serviceWorkerRecovery
+      ? `${available(report.serviceWorkerRecovery.recoveredAt)} · ${available(report.serviceWorkerRecovery.relationToIncident)} · campaña ${available(report.serviceWorkerRecovery.campaignId)}`
+      : "no disponible",
     "",
     "ENTORNO",
     `Extensión: ${report.extension.extensionVersion} · Manifest V${report.extension.manifestVersion}`,
