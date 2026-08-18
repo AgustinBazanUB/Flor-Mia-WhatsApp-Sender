@@ -8,11 +8,12 @@ import {
   type InternalResponseMap
 } from "../shared/protocol";
 import { logger } from "../shared/logger";
+import { maskPhone } from "../shared/phone";
 import { runWhatsAppPreflight } from "../whatsapp/preflight";
 import { scheduleConversationNavigation, sendAndVerifyText } from "../whatsapp/send-text";
 import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
-import { requireConversationContext } from "../whatsapp/conversation-context";
+import { waitForConversationContext } from "../whatsapp/conversation-context";
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
   return { ok: true, requestId, data };
@@ -40,8 +41,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       sendResponse({ ok: false, requestId: message.requestId, error: serializeError(new ExtensionError(ERROR_CODES.invalidInput, "Número interno inválido.")) });
       return false;
     }
-    sendResponse(success<InternalResponseMap["WA_OPEN_CONVERSATION"]>(message.requestId, { navigationStarted: true }));
-    logger.info("whatsapp.navigation_scheduled", { operationId: payload.operationId, phone: payload.phoneDigits });
+    const requestedNavigationAt = new Date().toISOString();
+    sendResponse(success<InternalResponseMap["WA_OPEN_CONVERSATION"]>(message.requestId, { navigationStarted: true, requestedNavigationAt }));
+    logger.info("whatsapp.navigation_scheduled", {
+      operationId: payload.operationId,
+      requestedNavigationAt,
+      expectedMaskedPhone: maskPhone(`+${payload.phoneDigits}`)
+    });
     scheduleConversationNavigation(payload.phoneDigits);
     return false;
   }
@@ -55,7 +61,25 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappProveConversation) {
         const payload = message.payload as InternalRequestMap["WA_PROVE_CONVERSATION"];
-        sendResponse(success(message.requestId, requireConversationContext(payload.phoneDigits)));
+        const proveConversationStartedAt = new Date().toISOString();
+        let composerObservedAt: string | null = null;
+        const data = await waitForConversationContext(payload.phoneDigits, {
+          timeoutMs: payload.timeoutMs,
+          onObservation: (observation) => {
+            if (!composerObservedAt && document.querySelector("#main footer [role='textbox'][contenteditable='true'], #main footer [contenteditable='true']")) {
+              composerObservedAt = new Date().toISOString();
+            }
+            logger.debug("whatsapp.conversation_proof", {
+              operationId: payload.operationId,
+              proveConversationStartedAt,
+              requestedNavigationAt: payload.requestedNavigationAt ?? null,
+              navigationObservedAt: payload.navigationObservedAt ?? null,
+              composerObservedAt,
+              ...observation
+            });
+          }
+        });
+        sendResponse(success(message.requestId, data));
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendText) {
