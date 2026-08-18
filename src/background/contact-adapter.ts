@@ -69,21 +69,26 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
     });
   }
 
-  async openConversation(contact: Parameters<ContactAdapter["openConversation"]>[0], timeoutMs: number): Promise<void> {
+  async openConversation(
+    contact: Parameters<ContactAdapter["openConversation"]>[0],
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
     const persistedTabId = Number.isInteger(contact.whatsappTabId) ? contact.whatsappTabId! : null;
     const boundTabId = this.whatsappTabId ?? persistedTabId;
     const tab = boundTabId === null
       ? await this.transport.requireTab()
       : await this.transport.requireTabId(boundTabId);
     this.whatsappTabId = tab.id;
-    // Persist before navigation. If the Service Worker dies after this point, the
-    // recovered checkpoint must reuse this exact tab or fail closed.
+    // Persistimos antes de navegar. Si el Service Worker muere, el checkpoint recuperado
+    // debe reutilizar exactamente esta pestaña o fallar cerrado.
     await this.persistTabBinding(contact, tab.id);
-    await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
+    const navigation = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
       operationId: `open:${contact.contactId}`,
       phoneDigits: contact.phoneDigits
     }, tab.id);
-    const result = await this.transport.waitForContent(tab.id, timeoutMs);
+    const result = await this.transport.waitForContent(tab.id, timeoutMs, signal);
     if (!result.operational) {
       if (result.qrDetected) throw new ExtensionError(ERROR_CODES.sessionNotReady, result.message);
       if (result.status === "incompatible") {
@@ -108,8 +113,15 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
       }
       throw new ExtensionError(ERROR_CODES.interfaceLoading, result.message);
     }
+    if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
+    // Composer listo no equivale a destinatario probado. El Content Script espera una
+    // señal estructurada fuerte y sólo entonces habilitamos los steps de contenido.
     await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
-      phoneDigits: contact.phoneDigits
+      operationId: `prove:${contact.contactId}`,
+      phoneDigits: contact.phoneDigits,
+      timeoutMs: Math.min(timeoutMs, 15_000),
+      requestedNavigationAt: navigation.requestedNavigationAt,
+      navigationObservedAt: new Date().toISOString()
     }, this.requireBoundTabId());
   }
 
