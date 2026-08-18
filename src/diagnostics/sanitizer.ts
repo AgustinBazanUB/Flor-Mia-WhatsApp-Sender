@@ -21,6 +21,7 @@ const SAFE_CANDIDATE_ARIA = /^(?:send|enviar|attach|adjuntar|close|cerrar|chat|m
 const SAFE_STRUCTURAL_VALUE = /^[a-z0-9_.:-]{1,120}$/i;
 const SAFE_HIERARCHY_HINT = /^(?:[a-z][a-z0-9-]*(?:\[(?:role|testid|icon)=[a-z0-9_.:-]+\])*)(?: > [a-z][a-z0-9-]*(?:\[(?:role|testid|icon)=[a-z0-9_.:-]+\])*){0,2}$/i;
 const MAX_STRING_LENGTH = 500;
+const CORRELATION_KEYS = new Set(["campaignId", "contactId", "recipientInternalId", "checkpointId", "operationId"]);
 
 export interface DiagnosticSanitizerOptions {
   sensitiveStrings?: string[];
@@ -41,6 +42,26 @@ function replaceSensitiveStrings(value: string, sensitiveStrings: string[]): str
 
 function redactPhoneCandidates(value: string): string {
   return value.replace(PHONE_PATTERN, (candidate) => candidate.replace(/\D/g, "").length >= 10 ? "[REDACTED_PHONE]" : candidate);
+}
+
+function stableCorrelationHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36).padStart(7, "0");
+}
+
+export function sanitizeCorrelationId(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  // Si un ID interno es puramente/naturalmente numérico puede parecer un teléfono.
+  // Conservamos correlación estable sin exponer el valor original.
+  const redacted = redactPhoneCandidates(trimmed);
+  if (redacted.includes("[REDACTED_PHONE]")) return `corr_${stableCorrelationHash(trimmed)}`;
+  return sanitizeDiagnosticText(trimmed, { maxStringLength: 160 });
 }
 
 export function sanitizeDiagnosticText(value: string, options: DiagnosticSanitizerOptions = {}): string {
@@ -83,7 +104,10 @@ export function sanitizeDiagnosticValue(
 ): unknown {
   if (depth > 6) return "[TRUNCATED]";
   if (isSensitiveKey(key)) return REDACTED;
-  if (typeof value === "string") return sanitizeDiagnosticText(value, options);
+  if (typeof value === "string") {
+    if (CORRELATION_KEYS.has(key)) return sanitizeCorrelationId(value);
+    return sanitizeDiagnosticText(value, options);
+  }
   if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) return value ?? null;
   if (Array.isArray(value)) return value.slice(0, 100).map((item) => sanitizeDiagnosticValue(item, "", options, depth + 1));
   if (typeof value === "object") {
@@ -156,14 +180,14 @@ export function sanitizeCampaignForReport(
     : campaign.currentRecipientIndex === null ? null : campaign.recipients[campaign.currentRecipientIndex] ?? null;
   const sensitiveStrings = [campaign.text];
   return {
-    campaignId: sanitizeDiagnosticText(campaign.campaignId, { maxStringLength: 160 }),
+    campaignId: sanitizeCorrelationId(campaign.campaignId) ?? "unknown",
     campaignName: options.includeCampaignName ? sanitizeDiagnosticText(campaign.campaignName, { sensitiveStrings: [campaign.text], maxStringLength: 160 }) : null,
     status: campaign.status,
     totalRecipients: campaign.recipients.length,
     completedRecipients: campaign.completedRecipients,
     progress: progressForCampaign(campaign),
     activeRecipient: active ? {
-      recipientInternalId: sanitizeDiagnosticText(active.recipientId, { maxStringLength: 160 }),
+      recipientInternalId: sanitizeCorrelationId(active.recipientId) ?? "unknown",
       position: active.position,
       maskedPhone: sanitizeDiagnosticText(active.maskedPhone, { maxStringLength: 40 }),
       status: active.status
@@ -187,10 +211,10 @@ export function sanitizeCheckpointForReport(
   if (!checkpoint) return null;
   return {
     schemaVersion: checkpoint.schemaVersion,
-    checkpointId: sanitizeDiagnosticText(checkpoint.checkpointId, { maxStringLength: 160 }),
-    campaignId: sanitizeDiagnosticText(checkpoint.campaignId, { maxStringLength: 160 }),
+    checkpointId: sanitizeCorrelationId(checkpoint.checkpointId) ?? "unknown",
+    campaignId: sanitizeCorrelationId(checkpoint.campaignId) ?? "unknown",
     contact: {
-      recipientInternalId: sanitizeDiagnosticText(checkpoint.contact.contactId, { maxStringLength: 160 }),
+      recipientInternalId: sanitizeCorrelationId(checkpoint.contact.contactId) ?? "unknown",
       maskedPhone: sanitizeDiagnosticText(checkpoint.contact.maskedPhone, { maxStringLength: 40 })
     },
     status: checkpoint.status,
