@@ -9,6 +9,26 @@ import {
 } from "../shared/protocol";
 import type { WhatsAppPreflightResult } from "../shared/state";
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
+}
+
+async function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new DOMException("Operación cancelada", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export class WhatsAppTransport {
   async findTab(): Promise<chrome.tabs.Tab | null> {
     const tabs = await chrome.tabs.query({ url: "https://web.whatsapp.com/*" });
@@ -74,30 +94,41 @@ export class WhatsAppTransport {
     type: T,
     payload: InternalRequestMap[T],
     tabId: number,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ): Promise<InternalResponseMap[T]> {
+    throwIfAborted(signal);
     try {
       return await this.send(type, payload, tabId);
     } catch (error) {
       if (!(error instanceof ExtensionError) || error.code !== ERROR_CODES.interfaceLoading) throw error;
-      await this.waitForContent(tabId, timeoutMs);
+      await this.waitForContent(tabId, timeoutMs, signal);
+      throwIfAborted(signal);
       return this.send(type, payload, tabId);
     }
   }
 
-  async waitForContent(tabId: number, timeoutMs: number): Promise<WhatsAppPreflightResult> {
+  async waitForContent(tabId: number, timeoutMs: number, signal?: AbortSignal): Promise<WhatsAppPreflightResult> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown;
     let lastResult: WhatsAppPreflightResult | null = null;
     while (Date.now() < deadline) {
+      throwIfAborted(signal);
       try {
-        const result = await this.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, { timeoutMs: 1_000 }, tabId);
+        // Este loop sólo necesita saber si la pestaña/sesión y la superficie base están listas.
+        // Antes se ejecutaba el preflight FULL por defecto en cada vuelta, incluyendo probes y
+        // scans de capabilities que no aportaban seguridad a la navegación.
+        const result = await this.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, {
+          timeoutMs: Math.min(1_000, Math.max(250, deadline - Date.now())),
+          level: "lightweight",
+          requirements: { needsText: false, needsImages: false }
+        }, tabId);
         lastResult = result;
         if (result.documentReady && (result.operational || result.qrDetected)) return result;
       } catch (error) {
         lastError = error;
       }
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
+      if (Date.now() < deadline) await abortableDelay(Math.min(300, Math.max(1, deadline - Date.now())), signal);
     }
     throw new ExtensionError(ERROR_CODES.timeout, "WhatsApp Web no quedó listo después de abrir la conversación.", {
       cause: lastError,
