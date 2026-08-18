@@ -1,3 +1,5 @@
+import { INTERNAL_CHANNEL, INTERNAL_MESSAGE_TYPES, PROTOCOL_VERSION } from "../shared/protocol";
+
 export type CampaignControlIntent = "pause" | "stop";
 
 const intents = new Map<string, { kind: CampaignControlIntent; requestedAt: string }>();
@@ -36,4 +38,33 @@ export function registerActiveContactController(campaignId: string, controller: 
 
 export function releaseActiveContactController(campaignId: string, controller: AbortController): void {
   if (activeControllers.get(campaignId) === controller) activeControllers.delete(campaignId);
+}
+
+function senderMayControl(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  const url = sender.url ?? "";
+  return url.startsWith(`chrome-extension://${chrome.runtime.id}/popup/`)
+    || (!url.startsWith("https://web.whatsapp.com/") && /^https:\/\//.test(url));
+}
+
+// Listener deliberadamente síncrono y mínimo. Se registra durante la evaluación del
+// Service Worker, antes del dispatcher serializado. Sólo marca intención/cancela waits
+// cooperativos; la transición durable sigue pasando por CampaignEngine y su cola.
+if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message: unknown, sender) => {
+    if (!message || typeof message !== "object" || !senderMayControl(sender)) return false;
+    const value = message as Record<string, unknown>;
+    if (value.channel !== INTERNAL_CHANNEL || value.protocolVersion !== PROTOCOL_VERSION) return false;
+    if (value.source !== "popup" && value.source !== "web-app-bridge") return false;
+    const kind = value.type === INTERNAL_MESSAGE_TYPES.campaignPause
+      ? "pause"
+      : value.type === INTERNAL_MESSAGE_TYPES.campaignStop
+        ? "stop"
+        : null;
+    if (!kind || !value.payload || typeof value.payload !== "object") return false;
+    const campaignId = (value.payload as Record<string, unknown>).campaignId;
+    if (typeof campaignId !== "string" || !campaignId.trim() || campaignId.length > 200) return false;
+    requestCampaignControlIntent(campaignId, kind);
+    return false;
+  });
 }
