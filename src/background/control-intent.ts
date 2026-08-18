@@ -1,3 +1,4 @@
+import { isAllowedWebAppOrigin } from "../config/origins";
 import { INTERNAL_CHANNEL, INTERNAL_MESSAGE_TYPES, PROTOCOL_VERSION } from "../shared/protocol";
 
 export type CampaignControlIntent = "pause" | "stop";
@@ -40,11 +41,16 @@ export function releaseActiveContactController(campaignId: string, controller: A
   if (activeControllers.get(campaignId) === controller) activeControllers.delete(campaignId);
 }
 
-function senderMayControl(sender: chrome.runtime.MessageSender): boolean {
+function senderMayControl(sender: chrome.runtime.MessageSender, source: unknown): boolean {
   if (sender.id !== chrome.runtime.id) return false;
   const url = sender.url ?? "";
-  return url.startsWith(`chrome-extension://${chrome.runtime.id}/popup/`)
-    || (!url.startsWith("https://web.whatsapp.com/") && /^https:\/\//.test(url));
+  if (source === "popup") return url.startsWith(`chrome-extension://${chrome.runtime.id}/popup/`);
+  if (source !== "web-app-bridge") return false;
+  try {
+    return isAllowedWebAppOrigin(new URL(url).origin);
+  } catch {
+    return false;
+  }
 }
 
 // Listener deliberadamente síncrono y mínimo. Se registra durante la evaluación del
@@ -52,10 +58,10 @@ function senderMayControl(sender: chrome.runtime.MessageSender): boolean {
 // cooperativos; la transición durable sigue pasando por CampaignEngine y su cola.
 if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message: unknown, sender) => {
-    if (!message || typeof message !== "object" || !senderMayControl(sender)) return false;
+    if (!message || typeof message !== "object") return false;
     const value = message as Record<string, unknown>;
     if (value.channel !== INTERNAL_CHANNEL || value.protocolVersion !== PROTOCOL_VERSION) return false;
-    if (value.source !== "popup" && value.source !== "web-app-bridge") return false;
+    if (!senderMayControl(sender, value.source)) return false;
     const kind = value.type === INTERNAL_MESSAGE_TYPES.campaignPause
       ? "pause"
       : value.type === INTERNAL_MESSAGE_TYPES.campaignStop
