@@ -66,7 +66,13 @@ export interface InternalRequestMap {
   CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
   WA_PREFLIGHT: WhatsAppPreflightRequest;
   WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string };
-  WA_PROVE_CONVERSATION: { phoneDigits: string };
+  WA_PROVE_CONVERSATION: {
+    operationId: string;
+    phoneDigits: string;
+    timeoutMs?: number;
+    requestedNavigationAt?: string;
+    navigationObservedAt?: string;
+  };
   WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string; timeoutMs?: number; checkpointRequired?: boolean };
   WA_SEND_IMAGE: ImageSendInput;
   WA_RECONCILE_STEP: ReconcileStepInput;
@@ -92,7 +98,7 @@ export interface InternalResponseMap {
   CAMPAIGN_STATUS: CampaignPublicStatus | null;
   CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
   WA_PREFLIGHT: WhatsAppPreflightResult;
-  WA_OPEN_CONVERSATION: { navigationStarted: true };
+  WA_OPEN_CONVERSATION: { navigationStarted: true; requestedNavigationAt: string };
   WA_PROVE_CONVERSATION: ConversationContextProof;
   WA_SEND_TEXT: TextTestResult;
   WA_SEND_IMAGE: ImageSendResult;
