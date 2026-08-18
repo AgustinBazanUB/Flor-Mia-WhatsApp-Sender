@@ -76,6 +76,19 @@ async function defaultSleep(delayMs: number): Promise<void> {
   await new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
 }
 
+async function sleepWithSignal(
+  sleep: (delayMs: number) => Promise<void>,
+  delayMs: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (!signal) return sleep(delayMs);
+  if (signal.aborted) return;
+  await Promise.race([
+    sleep(delayMs),
+    new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
+  ]);
+}
+
 export async function processContact(
   initial: ContactProcessCheckpoint,
   dependencies: ContactEngineDependencies
@@ -104,10 +117,19 @@ export async function processContact(
     return saved;
   };
 
+  const pauseRequested = async (): Promise<boolean> => Boolean(await dependencies.shouldPause?.());
+  const pauseAtSafeBoundary = async (): Promise<ContactProcessCheckpoint> => persist({
+    ...checkpoint,
+    status: "paused",
+    pauseReason: "manual_pause",
+    error: undefined
+  });
+
   if (checkpoint.status === "completed") return checkpoint;
 
   let opened = false;
   while (!opened && checkpoint.openConversationAttempts < openConversationAttemptLimit) {
+    if ((dependencies.signal?.aborted || await pauseRequested()) && await pauseRequested()) return pauseAtSafeBoundary();
     checkpoint = await persist({
       ...checkpoint,
       status: "opening_chat",
@@ -119,6 +141,7 @@ export async function processContact(
       opened = true;
       checkpoint = await persist({ ...checkpoint, status: "running", error: undefined });
     } catch (error) {
+      if ((dependencies.signal?.aborted || await pauseRequested()) && await pauseRequested()) return pauseAtSafeBoundary();
       const normalized = toExtensionError(error);
       checkpoint = await persist({ ...checkpoint, error: serializeError(normalized) });
       if (!normalized.recoverable || checkpoint.openConversationAttempts >= openConversationAttemptLimit) {
@@ -129,10 +152,9 @@ export async function processContact(
         });
         return checkpoint;
       }
-      if (await dependencies.shouldPause?.()) {
-        return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
-      }
-      await sleep(retryDelayMs(checkpoint.openConversationAttempts, policy));
+      if (await pauseRequested()) return pauseAtSafeBoundary();
+      await sleepWithSignal(sleep, retryDelayMs(checkpoint.openConversationAttempts, policy), dependencies.signal);
+      if (await pauseRequested()) return pauseAtSafeBoundary();
     }
   }
 
@@ -140,8 +162,8 @@ export async function processContact(
     let step = checkpoint.steps.find((candidate) => candidate.id === originalStep.id)!;
     if (step.status === "confirmed") continue;
     const requiresReconciliation = step.status === "verification_pending";
-    if (!requiresReconciliation && await dependencies.shouldPause?.()) {
-      return persist({ ...checkpoint, status: "paused", currentStepId: step.id, pauseReason: "manual_pause" });
+    if (!requiresReconciliation && await pauseRequested()) {
+      return persist({ ...checkpoint, status: "paused", currentStepId: step.id, pauseReason: "manual_pause", error: undefined });
     }
     checkpoint = await persist({ ...checkpoint, status: "running", currentStepId: step.id, pauseReason: undefined });
 
@@ -156,7 +178,7 @@ export async function processContact(
       checkpoint = await applyReconciliation(checkpoint, step, reconciled, persist, now);
       step = checkpoint.steps.find((candidate) => candidate.id === originalStep.id)!;
       if (step.status === "verification_pending") return checkpoint;
-      if (await dependencies.shouldPause?.()) {
+      if (await pauseRequested()) {
         return persist({ ...checkpoint, status: "paused", currentStepId: step.status === "confirmed" ? null : step.id, pauseReason: "manual_pause" });
       }
       if (step.status === "confirmed") continue;
@@ -164,6 +186,7 @@ export async function processContact(
 
     const attemptLimit = step.id === resumedStepId ? resumedStepAttemptLimit : policy.maxAttemptsPerStep;
     while (step.attempts < attemptLimit) {
+      if (await pauseRequested()) return persist({ ...checkpoint, status: "paused", currentStepId: step.id, pauseReason: "manual_pause" });
       const attemptAt = now();
       checkpoint = withStep(checkpoint, step.id, (current) => ({
         ...current,
@@ -220,10 +243,9 @@ export async function processContact(
       if (step.status === "confirmed") break;
       if (step.status === "verification_pending" || step.status === "images_required" || checkpoint.status === "failed") return checkpoint;
       if (step.status === "failed") return checkpoint;
-      if (await dependencies.shouldPause?.()) {
-        return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
-      }
-      await sleep(retryDelayMs(step.attempts, policy));
+      if (await pauseRequested()) return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
+      await sleepWithSignal(sleep, retryDelayMs(step.attempts, policy), dependencies.signal);
+      if (await pauseRequested()) return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
     }
 
     step = checkpoint.steps.find((candidate) => candidate.id === originalStep.id)!;
