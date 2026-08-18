@@ -14,6 +14,7 @@ import {
   sanitizeCampaignForReport,
   sanitizeCandidate,
   sanitizeCheckpointForReport,
+  sanitizeCorrelationId,
   sanitizeDailyLimit,
   sanitizeDiagnosticText,
   sanitizeDiagnosticUrl,
@@ -112,7 +113,7 @@ function sanitizeFailure(failure: CompatibilityFailure | null): Record<string, u
     candidateSummaries: failure.candidateSummaries.map(sanitizeCandidate),
     lastSuccessfulCapability: failure.lastSuccessfulCapability ?? null,
     classification: failure.classification,
-    campaignId: failure.campaignId ?? null,
+    campaignId: sanitizeCorrelationId(failure.campaignId) ?? null,
     maskedContact: failure.maskedContact ?? null,
     stepId: failure.stepId ?? null,
     attempts: failure.attempts ?? null,
@@ -120,9 +121,47 @@ function sanitizeFailure(failure: CompatibilityFailure | null): Record<string, u
   };
 }
 
-function sanitizePreflight(preflight: WhatsAppPreflightResult | null, sensitiveStrings: string[]): Record<string, unknown> | null {
+function preflightTraceSnapshot(record: TechnicalTraceRecord | undefined): Record<string, unknown> | null {
+  if (!record) return null;
+  return {
+    action: record.action,
+    outcome: record.outcome,
+    startedAt: record.timestampStart,
+    completedAt: record.timestampEnd,
+    durationMs: record.durationMs,
+    capability: record.capability,
+    errorCode: record.errorCode
+  };
+}
+
+function preflightTimeline(trace: TechnicalTraceRecord[]): Record<string, unknown> {
+  const preflights = trace.filter((record) => record.action.startsWith("preflight_"));
+  const campaignStart = [...trace].reverse().find((record) => record.action === "campaign_start");
+  const startMs = campaignStart ? Date.parse(campaignStart.timestampStart) : Number.NaN;
+  const endMs = campaignStart?.timestampEnd ? Date.parse(campaignStart.timestampEnd) : Number.NaN;
+  const startPreflight = Number.isFinite(startMs) && Number.isFinite(endMs)
+    ? preflights.find((record) => {
+        const time = Date.parse(record.timestampStart);
+        return time >= startMs && time <= endMs;
+      })
+    : undefined;
+  return {
+    campaignStartPreflight: preflightTraceSnapshot(startPreflight),
+    latestPreflight: preflightTraceSnapshot(preflights.at(-1)),
+    latestSuccessfulPreflight: preflightTraceSnapshot([...preflights].reverse().find((record) => record.outcome === "green")),
+    latestFailedPreflight: preflightTraceSnapshot([...preflights].reverse().find((record) => record.outcome !== "green"))
+  };
+}
+
+function sanitizePreflight(
+  preflight: WhatsAppPreflightResult | null,
+  sensitiveStrings: string[],
+  trace: TechnicalTraceRecord[]
+): Record<string, unknown> | null {
   if (!preflight) return null;
   return {
+    snapshotRole: "latest_extension_state_snapshot",
+    ...preflightTimeline(trace),
     checkedAt: preflight.checkedAt,
     overallStatus: preflight.overallStatus,
     level: preflight.level,
@@ -154,13 +193,33 @@ function sanitizePreflight(preflight: WhatsAppPreflightResult | null, sensitiveS
   };
 }
 
-function probableFiles(capability: WhatsAppCapability | null): string[] {
+function probableFiles(
+  incident: DiagnosticIncident,
+  capability: WhatsAppCapability | null,
+  trace: TechnicalTraceRecord[]
+): string[] {
+  const errorCode = incident.error?.code ?? null;
+  const actions = new Set(trace.slice(-30).map((record) => record.action));
+  if (errorCode === "CONTACT_CONTEXT_UNVERIFIED"
+    || incident.actionAttempted === "openConversation"
+    || actions.has("open_conversation")
+    || actions.has("prove_conversation")) {
+    return [
+      "src/whatsapp/conversation-context.ts",
+      "src/content/whatsapp.ts",
+      "src/background/contact-adapter.ts",
+      "src/background/whatsapp-transport.ts",
+      "src/engine/contact-engine.ts",
+      "src/campaign/campaign-engine.ts",
+      "src/background/service-worker.ts"
+    ];
+  }
   const base = [
     "src/compatibility/diagnostic-error.ts",
     "src/compatibility/manager.ts",
     "src/campaign/campaign-engine.ts"
   ];
-  if (!capability) return base;
+  if (!capability) return ["src/background/service-worker.ts", "src/engine/contact-engine.ts", ...base];
   if (["composer", "text_send_action", "outgoing_text_evidence"].includes(capability)) {
     return ["src/whatsapp/selectors.ts", "src/whatsapp/send-text.ts", "src/whatsapp/preflight.ts", ...base];
   }
@@ -173,6 +232,8 @@ function probableFiles(capability: WhatsAppCapability | null): string[] {
 function safeIncident(incident: DiagnosticIncident, sensitiveStrings: string[]): DiagnosticIncident {
   return {
     ...incident,
+    campaignId: sanitizeCorrelationId(incident.campaignId),
+    recipientInternalId: sanitizeCorrelationId(incident.recipientInternalId),
     campaignName: incident.campaignName ? sanitizeDiagnosticText(incident.campaignName, { sensitiveStrings, maxStringLength: 160 }) : null,
     maskedPhone: incident.maskedPhone ? sanitizeDiagnosticText(incident.maskedPhone, { maxStringLength: 40 }) : null,
     resultSummary: sanitizeDiagnosticText(incident.resultSummary, { sensitiveStrings, maxStringLength: 300 }),
@@ -183,9 +244,22 @@ function safeIncident(incident: DiagnosticIncident, sensitiveStrings: string[]):
 export function buildTechnicalReport(input: TechnicalReportInput): TechnicalReportV1 {
   const sensitiveStrings = input.campaign?.text ? [input.campaign.text] : [];
   const failure = input.compatibility.lastFailure;
-  const failedCapability = failure?.capability ?? input.incident.capability;
+  const compatibilityCausedIncident = input.incident.errorCategory === "WHATSAPP_UI_CHANGED" || input.incident.capability !== null;
+  // Un lastFailure histórico de compatibilidad no debe apropiarse de un incidente de contexto.
+  const failedCapability = compatibilityCausedIncident
+    ? (input.incident.capability ?? failure?.capability ?? null)
+    : null;
   const currentDiscovery = failedCapability && input.state.whatsapp
     ? input.state.whatsapp.capabilities[failedCapability]
+    : null;
+  const recovery = input.serviceWorkerRecovery
+    ? {
+        ...input.serviceWorkerRecovery,
+        campaignId: sanitizeCorrelationId(input.serviceWorkerRecovery.campaignId),
+        relationToIncident: input.serviceWorkerRecovery.campaignId && input.incident.campaignId
+          ? input.serviceWorkerRecovery.campaignId === input.incident.campaignId ? "same_campaign" as const : "historical_unrelated" as const
+          : "unknown" as const
+      }
     : null;
   return {
     reportSchemaVersion: 1,
@@ -213,12 +287,14 @@ export function buildTechnicalReport(input: TechnicalReportInput): TechnicalRepo
     }, sensitiveStrings),
     campaign: sanitizeCampaignForReport(input.campaign, { includeCampaignName: input.includeCampaignName }),
     checkpoint: sanitizeCheckpointForReport(input.checkpoint, sensitiveStrings),
-    preflight: sanitizePreflight(input.state.whatsapp, sensitiveStrings),
+    preflight: sanitizePreflight(input.state.whatsapp, sensitiveStrings, input.trace),
     compatibility: {
       overallStatus: input.compatibility.overallStatus,
       checkedAt: input.compatibility.checkedAt,
-      failedCapability: failedCapability ?? null,
-      lastSuccessfulCapability: failure?.lastSuccessfulCapability ?? input.incident.lastSuccessfulCapability,
+      failedCapability,
+      lastSuccessfulCapability: compatibilityCausedIncident
+        ? failure?.lastSuccessfulCapability ?? input.incident.lastSuccessfulCapability
+        : null,
       lastKnownGood: sanitizeLastKnownGood(input.compatibility.lastKnownGood),
       currentDiscovery: currentDiscovery ? {
         capability: currentDiscovery.capability,
@@ -237,14 +313,14 @@ export function buildTechnicalReport(input: TechnicalReportInput): TechnicalRepo
     dailyLimit: input.campaign ? sanitizeDailyLimit(input.campaign.dailyLimit) : sanitizeDailyLimit(input.state.dailyLimit),
     recentTechnicalOperations: input.state.operations.slice(-20).map((operation) => sanitizeDiagnosticValue(operation, "", { sensitiveStrings }) as Record<string, unknown>),
     trace: input.trace.slice(-200).map((record) => sanitizeDiagnosticValue(record, "", { sensitiveStrings }) as unknown as TechnicalTraceRecord),
-    serviceWorkerRecovery: input.serviceWorkerRecovery,
+    serviceWorkerRecovery: recovery,
     repairContext: {
-      probableFiles: probableFiles(failedCapability ?? null),
+      probableFiles: probableFiles(input.incident, failedCapability, input.trace),
       restrictions: [
         "Preservar atomicidad, verificación y checkpoints. No reemplazar por clicks ciegos.",
         "No repetir pasos ya confirmados ni desactivar la prevención de duplicados.",
         "No usar coordenadas, automatización del sistema operativo ni técnicas de evasión.",
-        "Modificar únicamente la capability o integración necesaria y conservar ContactEngine/CampaignEngine."
+        "Modificar únicamente la integración necesaria y conservar ContactEngine/CampaignEngine."
       ]
     },
     privacy: {
