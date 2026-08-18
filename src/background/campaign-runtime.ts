@@ -36,6 +36,12 @@ import type {
   WhatsAppPreflightRequest
 } from "../compatibility/types";
 import { hasUnresolvedSendEvidence } from "../engine/checkpoint-safety";
+import {
+  clearCampaignControlIntent,
+  hasCampaignControlIntent,
+  registerActiveContactController,
+  releaseActiveContactController
+} from "./control-intent";
 
 const TERMINAL_CAMPAIGNS = new Set<CampaignState["status"]>(["completed", "stopped"]);
 
@@ -73,10 +79,10 @@ function statusMessage(campaign: CampaignState): string {
   if (campaign.status === "images_required") return "La campaña requiere volver a seleccionar imágenes temporales.";
   if (campaign.status === "waiting_batch") return "Tanda completada. Esperando la pausa configurada.";
   if (campaign.status === "waiting_contact") return "Esperando antes del siguiente contacto.";
-  if (campaign.status === "pause_requested") return "Pausa solicitada; se aplicará en la próxima frontera segura.";
+  if (campaign.status === "pause_requested") return "Pausando… se aplicará en la próxima frontera segura.";
   if (campaign.status === "paused") return campaign.blockReason?.message ?? "Campaña pausada.";
-  if (campaign.status === "error") return campaign.blockReason?.message ?? "La campaña se detuvo por un error.";
-  return `Campaña en ejecución: ${progress.completed}/${progress.total} contactos completados.`;
+  if (campaign.status === "error") return campaign.blockReason?.message ?? "Necesita revisión. La campaña quedó detenida de forma segura.";
+  return `Campaña en curso: ${progress.completed}/${progress.total} contactos completados.`;
 }
 
 function extensionStatus(campaign: CampaignState): "idle" | "ready" | "running" | "paused" | "error" | "completed" {
@@ -113,13 +119,20 @@ export class CampaignRuntime {
       contactRunner: {
         run: async (checkpoint, shouldPause) => {
           const state = await dependencies.stateStore.load();
-          return processContact(checkpoint, {
-            store: dependencies.checkpointStore,
-            adapter: new ChromeWhatsAppContactAdapter(dependencies.blobStore, dependencies.transport),
-            policy: state.config.retryPolicy,
-            shouldPause,
-            onCheckpoint: dependencies.onContactCheckpoint
-          });
+          const controller = new AbortController();
+          registerActiveContactController(checkpoint.campaignId, controller);
+          try {
+            return await processContact(checkpoint, {
+              store: dependencies.checkpointStore,
+              adapter: new ChromeWhatsAppContactAdapter(dependencies.blobStore, dependencies.transport),
+              policy: state.config.retryPolicy,
+              signal: controller.signal,
+              shouldPause: async () => hasCampaignControlIntent(checkpoint.campaignId) || await shouldPause(),
+              onCheckpoint: dependencies.onContactCheckpoint
+            });
+          } finally {
+            releaseActiveContactController(checkpoint.campaignId, controller);
+          }
         }
       },
       healthCheck: async (campaign) => this.runLightweightHealthCheck(campaign),
@@ -293,6 +306,7 @@ export class CampaignRuntime {
   }
 
   async start(campaignId: string): Promise<CampaignPublicStatus> {
+    clearCampaignControlIntent(campaignId);
     const current = await this.campaignStore.loadActive();
     if (!current || current.campaignId !== campaignId) {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
@@ -311,16 +325,22 @@ export class CampaignRuntime {
     if (!current || current.campaignId !== campaignId) {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
     }
+    if (current.status === "paused") {
+      clearCampaignControlIntent(campaignId);
+      return this.syncCampaign(current);
+    }
     if (!["running", "pause_requested", "waiting_contact", "waiting_batch"].includes(current.status)) {
       throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña no está en un estado que admita pausa.");
     }
     const campaign = await this.engine.requestPause(campaignId);
     if (campaign.status === "paused") await this.scheduler.cancel(campaign);
     else await this.scheduler.schedule(campaign, true);
+    clearCampaignControlIntent(campaignId);
     return this.syncCampaign(campaign);
   }
 
   async resume(campaignId: string): Promise<CampaignPublicStatus> {
+    clearCampaignControlIntent(campaignId);
     const current = await this.campaignStore.loadActive();
     if (!current || current.campaignId !== campaignId) {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
@@ -344,6 +364,7 @@ export class CampaignRuntime {
     } else {
       await this.scheduler.schedule(campaign, true);
     }
+    clearCampaignControlIntent(campaignId);
     return this.syncCampaign(campaign);
   }
 
@@ -429,7 +450,7 @@ export class CampaignRuntime {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
     }
     const basePreflight = await this.dependencies.runPreflight({
-      timeoutMs: campaign.policy.whatsappLoadWaitMs,
+      timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 3_000),
       level: "lightweight",
       requirements: { needsText: false, needsImages: false },
       developmentFault
@@ -445,9 +466,13 @@ export class CampaignRuntime {
       phoneDigits: recipient.phoneDigits
     }, tab.id);
     await this.dependencies.transport.waitForContent(tab.id, campaign.policy.whatsappLoadWaitMs);
-    const probeImage = await this.probeImageFor(campaign);
+    // El probe multimedia invasivo queda reservado exclusivamente a un diagnóstico manual
+    // de compatibilidad. Start/Resume no generan previews ni convierten imágenes a base64.
+    const probeImage = developmentFault === "attachment_capability_break"
+      ? await this.probeImageFor(campaign)
+      : null;
     return this.dependencies.runPreflight({
-      timeoutMs: campaign.policy.whatsappLoadWaitMs,
+      timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 5_000),
       level: "full",
       requirements: this.requirementsFor(campaign),
       ...(probeImage ? { probeImage } : {}),
@@ -511,9 +536,11 @@ export class CampaignRuntime {
     message?: string;
   }> {
     const preflight = await this.dependencies.runPreflight({
-      timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 5_000),
+      timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 1_500),
       level: "lightweight",
-      requirements: this.requirementsFor(campaign)
+      // El health check entre contactos valida sesión/superficie base. Composer, attach y
+      // evidencia de salida se validan en el step concreto, donde sí aportan seguridad.
+      requirements: { needsText: false, needsImages: false }
     });
     if (preflight.operational) return { healthy: true };
     const error = this.preflightError(preflight);
