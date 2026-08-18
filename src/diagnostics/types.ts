@@ -64,6 +64,14 @@ export interface TechnicalTraceRecord {
   capability: WhatsAppCapability | null;
   strategy: string | null;
   durationMs: number | null;
+  requestedAt?: string | null;
+  acknowledgedAt?: string | null;
+  safeBoundaryReachedAt?: string | null;
+  completedAt?: string | null;
+  queueWaitMs?: number | null;
+  executionMs?: number | null;
+  totalMs?: number | null;
+  cancelState?: "not_requested" | "requested" | "safe_boundary" | "completed" | null;
 }
 
 export type TechnicalTraceInput = Omit<TechnicalTraceRecord, "traceId"> & { traceId?: string };
@@ -153,6 +161,7 @@ export interface ServiceWorkerRecoveryInfo {
   campaignStatus: CampaignStatus | null;
   checkpointPresent: boolean;
   checkpointStatus: ContactProcessStatus | null;
+  relationToIncident?: "same_campaign" | "historical_unrelated" | "unknown";
 }
 
 export interface TechnicalReportV1 {
