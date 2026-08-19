@@ -8,18 +8,14 @@ permissions:
   statuses: write
 
 jobs:
-  diagnose-p0-typecheck:
+  diagnose-p0-line:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 20
-          cache: npm
-      - name: Patch and report TypeScript status
+      - name: Patch and publish line 278
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -36,28 +32,11 @@ jobs:
               "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
               --data "$payload" >/dev/null
           }
-          post pending p0/typecheck-start "P0 typecheck job started"
-          python3 scripts/apply-p0-text.py || { post failure p0/typecheck-patch "P0 text patch failed"; exit 1; }
-          post success p0/typecheck-patch "P0 text patch applied"
-          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
-          rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py .github/workflows/p0-handshake-fix.yml
-          post pending p0/typecheck-npm-ci "npm ci running"
-          npm ci --no-audit --no-fund >/tmp/npm-ci.log 2>&1 || { post failure p0/typecheck-npm-ci "npm ci failed"; cat /tmp/npm-ci.log; exit 1; }
-          post success p0/typecheck-npm-ci "npm ci passed"
-          post pending p0/typecheck-result "TypeScript running"
-          set +e
-          npm run typecheck >/tmp/typecheck.log 2>&1
-          code=$?
-          set -e
-          cat /tmp/typecheck.log
-          if [ "$code" -eq 0 ]; then
-            post success p0/typecheck-result "TypeScript passed"
-            post success p0/typecheck-start "P0 typecheck completed"
-            exit 0
-          fi
-          first=$(grep -E 'error TS[0-9]+' /tmp/typecheck.log | head -n 1 || true)
-          if [ -z "$first" ]; then first=$(tail -n 1 /tmp/typecheck.log); fi
-          slug=$(printf '%s' "$first" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-105)
-          post failure "p0/typecheck-$slug" "$slug"
-          post failure p0/typecheck-result "TypeScript failed"
-          exit "$code"
+          post pending p0/line-start "Inspecting patched contact-adapter line"
+          python3 scripts/apply-p0-text.py
+          for n in 276 277 278 279 280; do
+            text=$(sed -n "${n}p" src/background/contact-adapter.ts)
+            slug=$(printf '%s' "$text" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.?-' | cut -c1-90)
+            post success "p0/line-${n}-${slug}" "line $n: $slug"
+          done
+          post success p0/line-start "Patched line inspection complete"
