@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 jobs:
@@ -24,7 +24,26 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Verify
+        id: verify
         run: npm run verify
+      - name: Publish aggregate verify status
+        if: always() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        shell: bash
+        run: |
+          if [ "$VERIFY_OUTCOME" = "success" ]; then state=success; else state=failure; fi
+          description="npm run verify: $VERIFY_OUTCOME"
+          payload=$(jq -n --arg state "$state" --arg context "verify/npm" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
 
   diagnose-tests:
     if: github.event_name == 'push'
@@ -71,3 +90,38 @@ jobs:
             --header "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
             --data "$payload"
+
+  sync-release-artifacts:
+    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Synchronize lock metadata
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify and generate dist
+        run: npm run verify
+      - name: Commit generated release artifacts when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- package-lock.json dist; then
+            echo "Release artifacts already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json dist
+          git commit -m "release: sync generated 0.9.2 artifacts"
+          git push origin HEAD:main
