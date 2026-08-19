@@ -4,9 +4,10 @@ import { createUnavailablePreflight } from "../src/compatibility/preflight-resul
 import { INTERNAL_MESSAGE_TYPES } from "../src/shared/protocol";
 import type { WhatsAppPreflightRequest } from "../src/compatibility/types";
 
-function green(request: WhatsAppPreflightRequest) {
+function green(request: WhatsAppPreflightRequest, contentInstanceId = "content-current") {
   return {
     ...createUnavailablePreflight("fixture", request, { pageDetected: true, contentScriptConnected: true }),
+    contentInstanceId,
     documentReady: true,
     sessionReady: true,
     mainInterfaceReady: true,
@@ -33,8 +34,27 @@ describe("WhatsAppTransport readiness performance", () => {
     expect(send).toHaveBeenCalledTimes(1);
     const request = send.mock.calls[0]?.[1] as WhatsAppPreflightRequest;
     expect(request.level).toBe("lightweight");
+    expect(request.purpose).toBe("content_handshake");
     expect(request.requirements).toEqual({ needsText: false, needsImages: false });
     expect(request.timeoutMs).toBeLessThanOrEqual(1_000);
+  });
+
+  it("ignores the old content instance and resolves only after the post-navigation generation replies", async () => {
+    const transport = new WhatsAppTransport();
+    let probe = 0;
+    const send = vi.spyOn(transport, "send").mockImplementation(async (_type, payload) => {
+      probe += 1;
+      const request = payload as WhatsAppPreflightRequest;
+      return green(request, probe === 1 ? "content-old" : "content-new") as never;
+    });
+
+    const result = await transport.waitForContent(7, 1_000, undefined, {
+      previousContentInstanceId: "content-old",
+      purpose: "content_handshake"
+    });
+
+    expect(result.contentInstanceId).toBe("content-new");
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it("honors cancellation before starting another readiness probe", async () => {
@@ -65,6 +85,7 @@ describe("WhatsAppTransport readiness performance", () => {
     const request: WhatsAppPreflightRequest = {
       timeoutMs: 1_000,
       level: "lightweight",
+      purpose: "health_check",
       requirements: { needsText: false, needsImages: false }
     };
 
