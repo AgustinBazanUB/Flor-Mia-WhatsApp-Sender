@@ -23,6 +23,42 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Verify
+        id: verify
+        run: npm run verify
+      - name: Publish aggregate verify status
+        if: always() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        shell: bash
+        run: |
+          if [ "$VERIFY_OUTCOME" = "success" ]; then state=success; else state=failure; fi
+          description="npm run verify: $VERIFY_OUTCOME"
+          payload=$(jq -n --arg state "$state" --arg context "verify/npm" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
+
+  diagnose-verify-phase:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
       - name: Typecheck
         id: typecheck
         run: npm run typecheck
@@ -38,8 +74,8 @@ jobs:
       - name: Validate build
         id: validate
         run: npm run validate:build
-      - name: Publish aggregate verify status
-        if: always() && github.event_name == 'push'
+      - name: Publish verification phase status
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -58,15 +94,13 @@ jobs:
             state=failure
           fi
           description=$(printf '%s' "$outcomes" | cut -c1-135)
-          for context in "verify/npm" "verify/phase"; do
-            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
-            curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-              --data "$payload"
-          done
+          payload=$(jq -n --arg state "$state" --arg context "verify/phase" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
 
   diagnose-tests:
     if: github.event_name == 'push'
