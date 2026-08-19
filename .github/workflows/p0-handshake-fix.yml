@@ -1,0 +1,54 @@
+name: p0-handshake-fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/apply-p0-handshake-fix.mjs
+      - .github/workflows/p0-handshake-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact triggering revision
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Configure Git
+        run: |
+          git config user.name "AgustinBazanUB"
+          git config user.email "167490338+AgustinBazanUB@users.noreply.github.com"
+      - name: Apply lifecycle fix
+        run: |
+          node scripts/apply-p0-handshake-fix.mjs core
+          git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts
+          git commit -m "fix: synchronize WhatsApp post-navigation handshake"
+      - name: Add lifecycle regression tests
+        run: |
+          node scripts/apply-p0-handshake-fix.mjs tests
+          git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts
+          git commit -m "test: cover post-navigation content lifecycle"
+      - name: Release 0.9.4.1 metadata
+        run: |
+          node scripts/apply-p0-handshake-fix.mjs version
+          git add manifest.json package.json package-lock.json
+          git commit -m "chore: release 0.9.4.1"
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify complete extension
+        run: npm run verify
+      - name: Assert generated manifest version
+        run: |
+          node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1") { console.error(m.version); process.exit(1) } console.log(`dist version=${m.version}`)'
+      - name: Push verified commits to main
+        run: git push origin HEAD:main
