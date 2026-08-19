@@ -10,10 +10,14 @@ import {
 import { logger } from "../shared/logger";
 import { maskPhone } from "../shared/phone";
 import { CONTENT_INSTANCE_ID, runWhatsAppPreflight } from "../whatsapp/preflight";
+import { installConversationInteractionGuard } from "../whatsapp/conversation-guard";
 import { scheduleConversationNavigation, sendAndVerifyText } from "../whatsapp/send-text";
 import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
 import { waitForConversationContext } from "../whatsapp/conversation-context";
+
+const proofControllers = new Map<string, AbortController>();
+installConversationInteractionGuard(document);
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
   return { ok: true, requestId, data };
@@ -36,24 +40,34 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (sender.id !== chrome.runtime.id || !isInternalEnvelope(message) || message.source !== "service-worker") return false;
 
   if (message.type === INTERNAL_MESSAGE_TYPES.whatsappOpenConversation) {
-    const payload = message.payload as { operationId: string; phoneDigits: string };
-    if (!/^\d{8,15}$/.test(payload.phoneDigits)) {
-      sendResponse({ ok: false, requestId: message.requestId, error: serializeError(new ExtensionError(ERROR_CODES.invalidInput, "Número interno inválido.")) });
+    const payload = message.payload as InternalRequestMap["WA_OPEN_CONVERSATION"];
+    if (!/^\d{8,15}$/.test(payload.phoneDigits) || !payload.navigationRequestId) {
+      sendResponse({ ok: false, requestId: message.requestId, error: serializeError(new ExtensionError(ERROR_CODES.invalidInput, "Navegación interna inválida.")) });
       return false;
     }
     const requestedNavigationAt = new Date().toISOString();
     sendResponse(success<InternalResponseMap["WA_OPEN_CONVERSATION"]>(message.requestId, {
       navigationStarted: true,
       requestedNavigationAt,
-      contentInstanceId: CONTENT_INSTANCE_ID
+      contentInstanceId: CONTENT_INSTANCE_ID,
+      navigationRequestId: payload.navigationRequestId
     }));
     logger.info("whatsapp.navigation_scheduled", {
       operationId: payload.operationId,
+      navigationRequestId: payload.navigationRequestId,
       requestedNavigationAt,
       contentInstanceId: CONTENT_INSTANCE_ID,
       expectedMaskedPhone: maskPhone(`+${payload.phoneDigits}`)
     });
     scheduleConversationNavigation(payload.phoneDigits);
+    return false;
+  }
+
+  if (message.type === INTERNAL_MESSAGE_TYPES.whatsappCancelOperation) {
+    const payload = message.payload as InternalRequestMap["WA_CANCEL_OPERATION"];
+    const controller = proofControllers.get(payload.operationId);
+    controller?.abort();
+    sendResponse(success<InternalResponseMap["WA_CANCEL_OPERATION"]>(message.requestId, { cancelled: Boolean(controller) }));
     return false;
   }
 
@@ -76,26 +90,46 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             }
           );
         }
+        if (!payload.navigationRequestId || !payload.requestedNavigationAt || !payload.navigationObservedAt) {
+          throw new ExtensionError(ERROR_CODES.contactContextUnverified, "Falta la cadena causal de navegación necesaria para confirmar el contacto.", {
+            recoverable: true,
+            details: { proofFailureReason: "stale_navigation", retryWithoutNewEvidence: false }
+          });
+        }
         const proveConversationStartedAt = new Date().toISOString();
         let composerObservedAt: string | null = null;
-        const data = await waitForConversationContext(payload.phoneDigits, {
-          timeoutMs: payload.timeoutMs,
-          onObservation: (observation) => {
-            if (!composerObservedAt && document.querySelector("#main footer [role='textbox'][contenteditable='true'], #main footer [contenteditable='true']")) {
-              composerObservedAt = new Date().toISOString();
-            }
-            logger.debug("whatsapp.conversation_proof", {
-              operationId: payload.operationId,
+        const controller = new AbortController();
+        proofControllers.set(payload.operationId, controller);
+        try {
+          const data = await waitForConversationContext(payload.phoneDigits, {
+            timeoutMs: payload.timeoutMs,
+            signal: controller.signal,
+            causalNavigation: {
+              navigationRequestId: payload.navigationRequestId,
               contentInstanceId: CONTENT_INSTANCE_ID,
-              proveConversationStartedAt,
-              requestedNavigationAt: payload.requestedNavigationAt ?? null,
-              navigationObservedAt: payload.navigationObservedAt ?? null,
-              composerObservedAt,
-              ...observation
-            });
-          }
-        });
-        sendResponse(success(message.requestId, data));
+              requestedNavigationAt: payload.requestedNavigationAt,
+              navigationObservedAt: payload.navigationObservedAt
+            },
+            onObservation: (observation) => {
+              if (!composerObservedAt && document.querySelector("#main footer [role='textbox'][contenteditable='true'], #main footer [contenteditable='true']")) {
+                composerObservedAt = new Date().toISOString();
+              }
+              logger.debug("whatsapp.conversation_proof", {
+                operationId: payload.operationId,
+                navigationRequestId: payload.navigationRequestId,
+                contentInstanceId: CONTENT_INSTANCE_ID,
+                proveConversationStartedAt,
+                requestedNavigationAt: payload.requestedNavigationAt,
+                navigationObservedAt: payload.navigationObservedAt,
+                composerObservedAt,
+                ...observation
+              });
+            }
+          });
+          sendResponse(success(message.requestId, data));
+        } finally {
+          if (proofControllers.get(payload.operationId) === controller) proofControllers.delete(payload.operationId);
+        }
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendText) {
