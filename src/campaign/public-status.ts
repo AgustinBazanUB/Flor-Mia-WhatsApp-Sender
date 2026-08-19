@@ -1,6 +1,6 @@
 import type { ContactProcessCheckpoint } from "../engine/types";
 import type { CampaignPublicStatus, CampaignState } from "./campaign-types";
-import { progressForCampaign } from "./progress";
+import { campaignRecipientCounters, progressForCampaign } from "./progress";
 import type { CompatibilityOverallStatus } from "../compatibility/types";
 import { classifyDiagnosticError } from "../diagnostics/taxonomy";
 
@@ -27,6 +27,7 @@ export function toCampaignPublicStatus(
       ? null
       : campaign.recipients[campaign.currentRecipientIndex] ?? null;
   const progress = progressForCampaign(campaign);
+  const counters = campaignRecipientCounters(campaign);
   const terminalAt = campaign.completedAt ?? campaign.stoppedAt ?? null;
   const startedAt = campaign.startedAt ?? campaign.createdAt;
   const error = campaign.blockReason?.error ?? null;
@@ -39,9 +40,10 @@ export function toCampaignPublicStatus(
   const finalSummary = campaign.status === "completed" && terminalAt ? {
     campaignId: campaign.campaignId,
     completedAt: terminalAt,
-    total: progress.total,
-    sent: progress.completed,
-    failed: 0,
+    total: counters.total,
+    processed: counters.processed,
+    sent: counters.sent,
+    failed: counters.failed,
     durationMs: durationBetween(startedAt, terminalAt),
     batches: campaign.batchNumber,
     sentToday: campaign.dailyLimit.completedToday,
@@ -56,9 +58,11 @@ export function toCampaignPublicStatus(
     status: campaign.status,
     progress,
     progressPercentage: progress.percentage,
-    sent: progress.completed,
-    total: progress.total,
-    remaining: Math.max(0, progress.total - progress.completed),
+    processed: counters.processed,
+    sent: counters.sent,
+    failed: counters.failed,
+    total: counters.total,
+    remaining: counters.remaining,
     currentRecipientIndex: campaign.currentRecipientIndex,
     currentRecipientId: recipient?.recipientId ?? null,
     ...(options.includeRecipientName && recipient?.name ? { currentRecipientName: recipient.name } : {}),
@@ -97,6 +101,8 @@ export function toCampaignPublicStatus(
     pauseRequested: campaign.pauseRequested,
     stopRequested: campaign.stopRequested,
     sequence: campaign.sequence,
+    retryCycle: campaign.retryCycle ?? 0,
+    retryableFailed: campaign.recipients.filter((item) => item.status === "error" && item.failure?.retryEligible === true && item.failure.ambiguous !== true).length,
     finalSummary
   };
 }
