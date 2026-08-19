@@ -22,11 +22,13 @@ describe("content script recovery bootstrap", () => {
     expect(manifest.host_permissions).toContain("https://deploy-preview-7--appintegralflormia.netlify.app/*");
   });
 
-  it("reinjects WhatsApp and Web App scripts only once per recovery marker", async () => {
+  it("recovers stale scripts once per loaded extension session", async () => {
     const source = await read("src/background/recovery-bootstrap.ts");
     expect(source).toContain("content/whatsapp.js");
     expect(source).toContain("content/web-app-bridge.js");
-    expect(source).toContain("RECOVERY_MARKER_KEY");
-    expect(source).toContain("refreshLightweightHealth");
+    expect(source).toContain("RECOVERY_SESSION_KEY");
+    expect(source).toContain("chrome.storage.session");
+    expect(source).toContain("lightweightHealth");
+    expect(source).toContain("ensureWhatsAppContentScript");
   });
 });
