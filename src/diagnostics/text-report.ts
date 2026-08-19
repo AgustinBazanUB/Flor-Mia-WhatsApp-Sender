@@ -48,7 +48,7 @@ export function formatTechnicalReportText(report: TechnicalReportV1): string {
   const safety = sendSafety(report);
   const capabilityApplies = Boolean(capability);
   return [
-    "REPORTE PARA SOPORTE — FLOR MÍA WHATSAPP SENDER",
+    "REPORTE PARA CODEX — FLOR MÍA WHATSAPP SENDER",
     "",
     "RESUMEN PARA USUARIO",
     userSummary(report),
