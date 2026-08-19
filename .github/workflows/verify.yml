@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   verify:
@@ -24,3 +25,24 @@ jobs:
         run: npm ci
       - name: Typecheck, lint, test and validate build
         run: npm run verify
+      - name: Publish verify commit status
+        if: always() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          VERIFY_STATE: ${{ job.status }}
+        run: |
+          if [ "$VERIFY_STATE" = "success" ]; then
+            state=success
+            description="npm run verify passed (tests + build)"
+          else
+            state=failure
+            description="npm run verify failed"
+          fi
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "{\"state\":\"$state\",\"context\":\"verify/npm\",\"description\":\"$description\"}"
