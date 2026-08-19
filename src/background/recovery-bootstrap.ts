@@ -6,8 +6,7 @@ import { CompatibilityStore } from "../storage/compatibility-store";
 import { StateStore } from "../storage/state-store";
 import { WhatsAppTransport } from "./whatsapp-transport";
 
-const RECOVERY_MARKER_KEY = "contentScriptRecoveryMarker";
-const RECOVERY_MARKER = "bridge-recovery-2026-08-19-1";
+const RECOVERY_SESSION_KEY = "contentScriptRecoveryCompleted";
 const WHATSAPP_PATTERN = "https://web.whatsapp.com/*";
 
 async function injectIntoTabs(patterns: string[], file: string): Promise<number> {
@@ -30,49 +29,68 @@ async function injectIntoTabs(patterns: string[], file: string): Promise<number>
   return injected;
 }
 
-async function refreshLightweightHealth(): Promise<void> {
-  const transport = new WhatsAppTransport();
+async function lightweightHealth(transport: WhatsAppTransport): Promise<ReturnType<WhatsAppTransport["sendWhenContentReady"]> | null> {
   const tab = await transport.findTab();
-  if (!tab?.id) return;
+  if (!tab?.id) return null;
+  return transport.sendWhenContentReady(
+    INTERNAL_MESSAGE_TYPES.whatsappPreflight,
+    {
+      timeoutMs: 4_000,
+      level: "lightweight",
+      purpose: "health_check",
+      requirements: { needsText: false, needsImages: false },
+    },
+    tab.id,
+    4_000,
+  );
+}
+
+async function persistLightweightHealth(raw: Awaited<ReturnType<WhatsAppTransport["sendWhenContentReady"]>>): Promise<void> {
+  const compatibilityStore = new CompatibilityStore();
+  const manager = new CompatibilityManager(
+    compatibilityStore,
+    chrome.runtime.getManifest().version,
+  );
+  const evaluated = await manager.evaluate(raw);
+  await new StateStore().patch({
+    whatsapp: evaluated.preflight,
+    compatibility: evaluated.state,
+    operational: evaluated.preflight.operational,
+    statusMessage: evaluated.preflight.message,
+  });
+}
+
+async function ensureWhatsAppContentScript(): Promise<void> {
+  const transport = new WhatsAppTransport();
   try {
-    const raw = await transport.sendWhenContentReady(
-      INTERNAL_MESSAGE_TYPES.whatsappPreflight,
-      {
-        timeoutMs: 4_000,
-        level: "lightweight",
-        purpose: "health_check",
-        requirements: { needsText: false, needsImages: false },
-      },
-      tab.id,
-      4_000,
-    );
-    const compatibilityStore = new CompatibilityStore();
-    const manager = new CompatibilityManager(
-      compatibilityStore,
-      chrome.runtime.getManifest().version,
-    );
-    const evaluated = await manager.evaluate(raw);
-    await new StateStore().patch({
-      whatsapp: evaluated.preflight,
-      compatibility: evaluated.state,
-      operational: evaluated.preflight.operational,
-      statusMessage: evaluated.preflight.message,
-    });
+    const current = await lightweightHealth(transport);
+    if (current) await persistLightweightHealth(await current);
+    return;
   } catch {
-    // No degradamos el estado por una recuperación oportunista. La Web App o el
-    // popup pueden ejecutar un preflight completo si WhatsApp todavía está cargando.
+    // Un receiving-end ausente después de recargar/actualizar la extensión deja
+    // la pestaña abierta pero con un Content Script perteneciente al runtime viejo.
+  }
+
+  await injectIntoTabs([WHATSAPP_PATTERN], "content/whatsapp.js");
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 100));
+  try {
+    const recovered = await lightweightHealth(transport);
+    if (recovered) await persistLightweightHealth(await recovered);
+  } catch {
+    // No convertimos una recuperación oportunista en un error nuevo. El preflight
+    // explícito conserva la responsabilidad de diagnosticar WhatsApp si sigue cargando.
   }
 }
 
 export async function recoverContentScriptsOnce(): Promise<void> {
-  const stored = await chrome.storage.local.get(RECOVERY_MARKER_KEY);
-  if (stored[RECOVERY_MARKER_KEY] === RECOVERY_MARKER) return;
+  const stored = await chrome.storage.session.get(RECOVERY_SESSION_KEY);
+  if (stored[RECOVERY_SESSION_KEY] === true) return;
 
-  await injectIntoTabs([WHATSAPP_PATTERN], "content/whatsapp.js");
-  await new Promise((resolve) => globalThis.setTimeout(resolve, 100));
-  await refreshLightweightHealth();
+  await ensureWhatsAppContentScript();
+  // El bridge tiene un guard de generación: una inyección nueva retira de forma
+  // determinista cualquier bridge viejo y evita listeners duplicados en la Web App.
   await injectIntoTabs([...WEB_APP_MATCH_PATTERNS], "content/web-app-bridge.js");
-  await chrome.storage.local.set({ [RECOVERY_MARKER_KEY]: RECOVERY_MARKER });
+  await chrome.storage.session.set({ [RECOVERY_SESSION_KEY]: true });
 }
 
 void recoverContentScriptsOnce().catch(() => undefined);
