@@ -52,4 +52,25 @@ describe("web-app bridge runtime lifecycle", () => {
     second.release();
     expect(second.isCurrent()).toBe(false);
   });
+
+  it("notifies a stale generation exactly once and never lets it become current again", () => {
+    const root = new MarkerRoot();
+    const first = installBridgeInstanceGuard(root as unknown as Element);
+    let superseded = 0;
+    first.onSuperseded(() => { superseded += 1; });
+
+    const second = installBridgeInstanceGuard(root as unknown as Element);
+    expect(first.isCurrent()).toBe(false);
+    expect(second.isCurrent()).toBe(true);
+
+    // MarkerRoot is intentionally not a DOM Node, so onSuperseded is checked
+    // synchronously on registration/currentness rather than relying on MutationObserver.
+    first.onSuperseded(() => { superseded += 1; });
+    expect(superseded).toBe(1);
+
+    first.release();
+    expect(first.isCurrent()).toBe(false);
+    expect(second.isCurrent()).toBe(true);
+    second.release();
+  });
 });
