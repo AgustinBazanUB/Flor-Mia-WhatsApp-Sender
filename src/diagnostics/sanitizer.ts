@@ -57,8 +57,6 @@ export function sanitizeCorrelationId(value: string | null | undefined): string 
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  // Si un ID interno es puramente/naturalmente numérico puede parecer un teléfono.
-  // Conservamos correlación estable sin exponer el valor original.
   const redacted = redactPhoneCandidates(trimmed);
   if (redacted.includes("[REDACTED_PHONE]")) return `corr_${stableCorrelationHash(trimmed)}`;
   return sanitizeDiagnosticText(trimmed, { maxStringLength: 160 });
@@ -221,6 +219,7 @@ export function sanitizeCheckpointForReport(
     currentStepId: checkpoint.currentStepId,
     lastConfirmedStepId: checkpoint.lastConfirmedStepId,
     openConversationAttempts: checkpoint.openConversationAttempts,
+    openConversationFailures: checkpoint.openConversationFailures ?? 0,
     pauseReason: checkpoint.pauseReason ?? null,
     error: sanitizeError(checkpoint.error, { sensitiveStrings }),
     steps: checkpoint.steps.map((step) => ({
