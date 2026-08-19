@@ -6,239 +6,54 @@ on:
 
 permissions:
   contents: write
-  statuses: write
 
 jobs:
-  apply-p0-handshake:
+  apply-verify-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout current main
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Apply source, test and version patches as text
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.sha }}
+      - name: Apply, clean, verify and publish
         shell: bash
         run: |
           set +e
-          python3 > /tmp/p0-text-patch.log 2>&1 <<'PY'
-          import json
-          from pathlib import Path
-
-          def read(path):
-              return Path(path).read_text(encoding='utf-8')
-
-          def write(path, value):
-              Path(path).write_text(value, encoding='utf-8')
-
-          def replace_required(path, old, new):
-              source = read(path)
-              if old not in source:
-                  raise RuntimeError(f'missing replacement in {path}: {old[:70]!r}')
-              write(path, source.replace(old, new, 1))
-
-          def replace_section(path, start_marker, end_marker, replacement):
-              source = read(path)
-              start = source.find(start_marker)
-              if start < 0:
-                  raise RuntimeError(f'missing section start in {path}: {start_marker[:70]!r}')
-              end = source.find(end_marker, start)
-              if end < 0:
-                  raise RuntimeError(f'missing section end in {path}: {end_marker[:70]!r}')
-              write(path, source[:start] + replacement + source[end:])
-
-          helper = read('scripts/apply-p0-handshake-fix.mjs')
-
-          def extract(name, end_marker):
-              prefix = f'const {name} = String.raw`'
-              start = helper.find(prefix)
-              if start < 0:
-                  raise RuntimeError(f'missing embedded block {name}')
-              start += len(prefix)
-              end = helper.find(end_marker, start)
-              if end < 0:
-                  raise RuntimeError(f'missing embedded block end {name}')
-              return helper[start:end]
-
-          print('phase=extract')
-          transport = extract('transportSource', '`;\n\nconst openConversationSource = String.raw`')
-          open_conversation = extract('openConversationSource', '`;\n\nfunction patchCore()')
-          lifecycle_tests = extract('lifecycleTestSource', '`;\n\nfunction patchTests()')
-          transport = transport.replace('chrome.tabs.TabStatus | null', 'chrome.tabs.Tab["status"] | null')
-          lifecycle_tests = lifecycle_tests.replace('(...args: any[]) => void', '(...args: unknown[]) => void')
-
-          print('phase=transport')
-          write('src/background/whatsapp-transport.ts', transport)
-
-          print('phase=types-preflight-policy')
-          replace_required(
-              'src/compatibility/types.ts',
-              'export type PreflightPurpose = "campaign_start" | "health_check" | "content_handshake" | "manual_diagnostic" | "unspecified";',
-              'export type PreflightPurpose = "campaign_start" | "health_check" | "content_handshake" | "semantic_ready" | "manual_diagnostic" | "unspecified";'
-          )
-          replace_required(
-              'src/whatsapp/preflight.ts',
-              '  const pageDetected = window.location.origin === "https://web.whatsapp.com";\n\n  let readinessSignal:',
-              '  const pageDetected = window.location.origin === "https://web.whatsapp.com";\n  const handshakeOnly = request.purpose === "content_handshake" && level === "lightweight";\n\n  let readinessSignal:'
-          )
-          replace_required('src/whatsapp/preflight.ts', '  if (pageDetected && !documentReady) {', '  if (pageDetected && !documentReady && !handshakeOnly) {')
-          replace_required(
-              'src/whatsapp/preflight.ts',
-              '  if (pageDetected && documentReady && !findQrCode() && !resolveCapability("main_interface").match && !findComposer()) {',
-              '  if (!handshakeOnly && pageDetected && documentReady && !findQrCode() && !resolveCapability("main_interface").match && !findComposer()) {'
-          )
-          replace_required(
-              'src/whatsapp/preflight.ts',
-              '  if (pageDetected && documentReady && inspectConversation && request.targetedCapability && !findQrCode() && !findComposer()) {',
-              '  if (!handshakeOnly && pageDetected && documentReady && inspectConversation && request.targetedCapability && !findQrCode() && !findComposer()) {'
-          )
-          replace_required('src/engine/retry-policy.ts', '    openConversationMs: 30_000,', '    openConversationMs: 40_000,')
-
-          print('phase=contact-adapter')
-          replace_required(
-              'src/background/contact-adapter.ts',
-              '    stage: "navigation" | "content_handshake" | "conversation_proof",',
-              '    stage: "navigation" | "content_handshake" | "semantic_ready" | "conversation_proof",'
-          )
-          replace_required(
-              'src/background/contact-adapter.ts',
-              '  navigationRequestedMs: number;\n}',
-              '  navigationRequestedMs: number;\n  navigationObservedAt?: string;\n  tabLoadingAt?: string | null;\n  tabCompleteAt?: string | null;\n}'
-          )
-          replace_section(
-              'src/background/contact-adapter.ts',
-              '  async openConversation(\n',
-              '\n  private requireBoundTabId(): number {',
-              open_conversation
-          )
-
-          print('phase=service-worker')
-          sw_start = '    const navigation = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {'
-          sw_end = '    await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {'
-          sw_new = '''    const openDeadlineMs = Date.now() + 40_000;
-              const remainingOpenBudget = () => Math.max(1, openDeadlineMs - Date.now());
-              const navigation = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
-                operationId,
-                phoneDigits: phone.digits,
-                navigationRequestId
-              }, tab.id);
-              await stateStore.patch({
-                currentStep: "wait-conversation",
-                lastCheckpoint: { operationId, recipientId: operationId, step: "navigation-requested", createdAt: new Date().toISOString() }
-              });
-              const lifecycle = await whatsappTransport.waitForNavigationLifecycle(
-                tab.id,
-                Math.min(10_000, remainingOpenBudget()),
-                undefined,
-                { expectedPhoneDigits: phone.digits, navigationRequestId }
-              );
-              const handshake = await whatsappTransport.waitForContentHandshake(tab.id, remainingOpenBudget(), undefined, {
-                previousContentInstanceId: navigation.contentInstanceId,
-                purpose: "content_handshake",
-                navigationRequestId
-              });
-              const readiness = await whatsappTransport.waitForSemanticReady(tab.id, remainingOpenBudget(), undefined, {
-                expectedContentInstanceId: handshake.contentInstanceId,
-                navigationRequestId
-              });
-              const navigationObservedAt = lifecycle.observedAt;
-          '''
-          replace_section('src/background/service-worker.ts', sw_start, sw_end, sw_new)
-
-          print('phase=tests')
-          test_path = 'tests/contact-adapter-binding.test.ts'
-          source = read(test_path)
-          marker = 'function checkpoint() {'
-          if marker not in source:
-              raise RuntimeError('missing checkpoint marker in contact-adapter-binding.test.ts')
-          helper_text = '''function withLifecycle<T extends Record<string, unknown>>(transport: T) {
-            const legacyWait = (transport as { waitForContent?: (...args: unknown[]) => Promise<unknown> }).waitForContent;
-            return {
-              waitForNavigationLifecycle: async () => ({
-                observedAt: NOW,
-                loadingAt: NOW,
-                completeAt: NOW,
-                finalStatus: "complete" as const,
-                urlMatched: true
-              }),
-              waitForContentHandshake: async (tabId: number, timeoutMs: number, signal: AbortSignal | undefined, options: {
-                previousContentInstanceId?: string;
-                navigationRequestId?: string;
-              }) => legacyWait
-                ? legacyWait(tabId, timeoutMs, signal, {
-                    previousContentInstanceId: options.previousContentInstanceId,
-                    purpose: "content_handshake"
-                  })
-                : green("content-new"),
-              waitForSemanticReady: async (_tabId: number, _timeoutMs: number, _signal: AbortSignal | undefined, options: {
-                expectedContentInstanceId?: string;
-              }) => green(options.expectedContentInstanceId ?? "content-new"),
-              ...transport
-            };
-          }
-
-          '''
-          source = source.replace(marker, helper_text + marker, 1)
-          source = source.replace('fakeTransport as unknown as WhatsAppTransport', 'withLifecycle(fakeTransport) as unknown as WhatsAppTransport')
-          write(test_path, source)
-          write('tests/post-navigation-handshake.test.ts', lifecycle_tests)
-
-          print('phase=version')
-          manifest = json.loads(read('manifest.json'))
-          manifest['version'] = '0.9.4.1'
-          manifest['version_name'] = '0.9.4.1'
-          write('manifest.json', json.dumps(manifest, indent=2, ensure_ascii=False) + '\n')
-          package = json.loads(read('package.json'))
-          package['version'] = '0.9.4.1'
-          write('package.json', json.dumps(package, indent=2, ensure_ascii=False) + '\n')
-          lock = json.loads(read('package-lock.json'))
-          lock['version'] = '0.9.4.1'
-          if isinstance(lock.get('packages'), dict) and isinstance(lock['packages'].get(''), dict):
-              lock['packages']['']['version'] = '0.9.4.1'
-          write('package-lock.json', json.dumps(lock, indent=2, ensure_ascii=False) + '\n')
-          print('phase=done')
-          PY
-          code=$?
+          {
+            python3 scripts/apply-p0-text.py &&
+            git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts &&
+            git commit -m "fix: synchronize WhatsApp post-navigation handshake" &&
+            git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts &&
+            git commit -m "test: cover post-navigation content lifecycle" &&
+            git add manifest.json package.json package-lock.json &&
+            git commit -m "chore: release 0.9.4.1" &&
+            git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml &&
+            git rm scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py .github/workflows/p0-handshake-fix.yml &&
+            git add .github/workflows/verify.yml &&
+            git commit -m "chore: remove one-shot handshake repair helper" &&
+            npm ci &&
+            npm run verify &&
+            node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`unexpected dist version ${m.version}`);process.exit(1)}; console.log(`dist version=${m.version}`)'
+          } > /tmp/p0-final.log 2>&1
+          result=$?
           set -e
-          cat /tmp/p0-text-patch.log
-          if [ "$code" -ne 0 ]; then
-            phase=$(grep '^phase=' /tmp/p0-text-patch.log | tail -n 1 | cut -d= -f2)
-            error=$(tail -n 1 /tmp/p0-text-patch.log | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-75)
-            context="p0/text-$phase-$error"
-            payload=$(jq -n --arg state failure --arg context "$context" --arg description "$error" '{state:$state,context:$context,description:$description}')
-            curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-              --data "$payload" >/dev/null
-            exit "$code"
+          cat /tmp/p0-final.log
+          if [ "$result" -ne 0 ]; then
+            git reset --hard "$GITHUB_SHA"
+            cp /tmp/p0-final.log p0-verify-failure.log
+            git add p0-verify-failure.log
+            git commit -m "diag: capture P0 final verify failure"
+            git push origin HEAD:main
+            exit "$result"
           fi
-      - name: Commit lifecycle fix
-        run: |
-          git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts
-          git commit -m "fix: synchronize WhatsApp post-navigation handshake"
-      - name: Commit regression tests
-        run: |
-          git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts
-          git commit -m "test: cover post-navigation content lifecycle"
-      - name: Commit version metadata
-        run: |
-          git add manifest.json package.json package-lock.json
-          git commit -m "chore: release 0.9.4.1"
-      - name: Restore normal CI and remove one-shot helpers
-        run: |
-          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
-          git rm scripts/apply-p0-handshake-fix.mjs .github/workflows/p0-handshake-fix.yml
-          git add .github/workflows/verify.yml
-          git commit -m "chore: remove one-shot handshake repair helper"
-      - name: Push final tree to main
-        run: git push origin HEAD:main
+          git push origin HEAD:main
