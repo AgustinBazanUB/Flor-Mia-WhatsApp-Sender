@@ -122,6 +122,7 @@ export interface SanitizedCheckpointReport {
   currentStepId: string | null;
   lastConfirmedStepId: string | null;
   openConversationAttempts: number;
+  openConversationFailures: number;
   pauseReason: string | null;
   error: SerializedExtensionError | null;
   steps: Array<{
