@@ -16,10 +16,17 @@
   },
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
-    "https://web.whatsapp.com/*"
+    "https://web.whatsapp.com/*",
+    "https://app-integral-fm.netlify.app/*",
+    "https://deploy-preview-7--app-integral-fm.netlify.app/*",
+    "https://deploy-preview-7--appintegralflormia.netlify.app/*",
+    "https://deploy-preview-8--app-integral-fm.netlify.app/*",
+    "https://deploy-preview-8--appintegralflormia.netlify.app/*",
+    "http://localhost:5173/*"
   ],
   "content_scripts": [
     {
