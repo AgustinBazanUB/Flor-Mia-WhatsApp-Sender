@@ -21,6 +21,21 @@ function preflightMoment(report: TechnicalReportV1, key: string): string {
   return `${available(record.action)} · ${available(record.outcome)} · ${available(record.completedAt ?? record.startedAt)} · ${available(record.durationMs)} ms`;
 }
 
+function openConversationTimeline(report: TechnicalReportV1): string[] {
+  const raw = report.preflight?.openConversationTimeline;
+  if (!Array.isArray(raw) || raw.length === 0) return ["no disponible"];
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const attempt = item as Record<string, unknown>;
+    const stages = Array.isArray(attempt.stages) ? attempt.stages : [];
+    if (stages.length === 0) return [`Intento ${available(attempt.attempt)}: sin etapas registradas`];
+    return stages.map((rawStage) => {
+      const stage = rawStage && typeof rawStage === "object" ? rawStage as Record<string, unknown> : {};
+      return `Intento ${available(attempt.attempt)} · ${available(stage.stage)} · ${available(stage.outcome)} · ${available(stage.durationMs)} ms · ${available(stage.errorCode)}`;
+    });
+  });
+}
+
 function sendSafety(report: TechnicalReportV1): { attempted: boolean; ambiguous: boolean; reconciled: boolean } {
   const steps = report.checkpoint?.steps ?? [];
   const attempted = steps.some((step) => step.verification?.sendAttempted === true);
@@ -33,6 +48,9 @@ function userSummary(report: TechnicalReportV1): string {
   const code = report.incident.error?.code;
   if (code === "CONTACT_CONTEXT_UNVERIFIED") {
     return "No pudimos confirmar que WhatsApp abrió el contacto correcto. La campaña se pausó antes de enviar contenido para evitar un envío a otra persona.";
+  }
+  if (code === "INTERFACE_LOADING" || code === "TIMEOUT") {
+    return "WhatsApp necesita unos segundos más. No pudimos terminar de abrir el contacto y la campaña se pausó antes de enviar para mantener la seguridad.";
   }
   if (report.incident.errorCategory === "WHATSAPP_UI_CHANGED") {
     return "WhatsApp cambió y necesitamos revisar la conexión antes de continuar la campaña.";
@@ -47,6 +65,7 @@ export function formatTechnicalReportText(report: TechnicalReportV1): string {
   const lastStrategy = lastKnown?.selectedStrategy;
   const safety = sendSafety(report);
   const capabilityApplies = Boolean(capability);
+  const preflight = report.preflight;
   return [
     "REPORTE PARA CODEX — FLOR MÍA WHATSAPP SENDER",
     "",
@@ -65,6 +84,16 @@ export function formatTechnicalReportText(report: TechnicalReportV1): string {
     `ambiguous: ${safety.ambiguous}`,
     `reconciled: ${safety.reconciled}`,
     `Último paso confirmado: ${available(incident.lastConfirmedStepId)}`,
+    "",
+    "CONTENIDO DE CAMPAÑA (SIN TEXTO PRIVADO)",
+    `campaignTextPresent: ${available(preflight?.campaignTextPresent)}`,
+    `campaignTextLength: ${available(preflight?.campaignTextLength)}`,
+    `textStepCreated: ${available(preflight?.textStepCreated)}`,
+    `diagnosticComposerMutationDetected: ${available(preflight?.diagnosticComposerMutationDetected)}`,
+    `Preflight purpose: ${available(preflight?.purpose)}`,
+    "",
+    "OPEN CONVERSATION — NAVEGACIÓN / HANDSHAKE / PROOF",
+    ...openConversationTimeline(report),
     "",
     "RESUMEN DEL INCIDENTE",
     `Fecha: ${report.generatedAt}`,
