@@ -54,14 +54,17 @@ jobs:
         run: |
           if [ "$TEST_OUTCOME" = "success" ]; then
             state=success
+            failing=success
             description="Vitest: success"
           else
             state=failure
             failing=$(node -e 'const fs=require("fs"); try { const r=JSON.parse(fs.readFileSync("/tmp/vitest.json","utf8")); const names=(r.testResults||[]).filter(x=>x.status==="failed").map(x=>String(x.name||"").split("/").pop()).filter(Boolean).slice(0,2); process.stdout.write(names.join(",")||"unknown"); } catch { process.stdout.write("unknown"); }')
             description="Vitest: $failing"
           fi
+          failing_slug=$(printf '%s' "$failing" | tr ' /,.' '----' | tr -cd 'A-Za-z0-9_-' | cut -c1-80)
           description=$(printf '%s' "$description" | cut -c1-135)
-          payload=$(jq -n --arg state "$state" --arg context "verify/tests-detail" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          context="verify/tests-$failing_slug"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
