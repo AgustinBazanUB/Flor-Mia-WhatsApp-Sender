@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://web.whatsapp.com/"}
 import { beforeEach, describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { runWhatsAppPreflight } from "../src/whatsapp/preflight";
 
 function baseConversation(extra = ""): void {
@@ -16,19 +18,41 @@ function baseConversation(extra = ""): void {
     </div>`;
 }
 
-describe("contextual WhatsApp preflight", () => {
+describe("non-destructive WhatsApp preflight", () => {
   beforeEach(() => baseConversation());
 
-  it("keeps a text-only campaign GREEN without multimedia capabilities", async () => {
+  it("keeps a text campaign GREEN without writing synthetic content", async () => {
     document.querySelector("[data-testid='clip']")?.remove();
+    const composer = document.querySelector<HTMLElement>("[role='textbox']")!;
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
       level: "full",
+      purpose: "campaign_start",
       requirements: { needsText: true, needsImages: false }
     });
     expect(result.overallStatus).toBe("GREEN");
-    expect(result.capabilities.text_send_action.state).toBe("available");
+    expect(result.requirements).toEqual({ needsText: true, needsImages: false });
+    expect(result.capabilities.text_send_action.required).toBe(false);
     expect(result.capabilities.attachment_action.required).toBe(false);
+    expect(result.diagnosticComposerMutationDetected).toBe(false);
+    expect(composer.textContent).toBe("");
+  });
+
+  it("preserves an existing user draft byte-for-byte during full preflight", async () => {
+    const composer = document.querySelector<HTMLElement>("[role='textbox']")!;
+    const draft = "Borrador del usuario 👋\nNo tocar áéíóú";
+    composer.textContent = draft;
+
+    const result = await runWhatsAppPreflight({
+      timeoutMs: 20,
+      level: "full",
+      purpose: "campaign_start",
+      requirements: { needsText: true, needsImages: false }
+    });
+
+    expect(result.overallStatus).toBe("GREEN");
+    expect(result.diagnosticComposerMutationDetected).toBe(false);
+    expect(composer.textContent).toBe(draft);
   });
 
   it("accepts a verified WhatsApp semantic surface even while readyState still reports loading", async () => {
@@ -50,25 +74,20 @@ describe("contextual WhatsApp preflight", () => {
     }
   });
 
-  it("waits for a required composer while the chat list remains visible during conversation navigation", async () => {
-    document.body.innerHTML = `<div data-testid="chat-list"></div><div id="main"></div>`;
-    globalThis.setTimeout(() => {
-      document.getElementById("main")!.innerHTML = `
-        <footer>
-          <div role="textbox" contenteditable="true" data-testid="conversation-compose-box-input"></div>
-          <button aria-label="Send" data-testid="compose-btn-send"></button>
-        </footer>`;
-    }, 5);
+  it("does not require a conversation during campaign-start preflight", async () => {
+    document.body.innerHTML = `<div data-testid="chat-list"></div>`;
 
     const result = await runWhatsAppPreflight({
-      timeoutMs: 100,
+      timeoutMs: 20,
       level: "full",
+      purpose: "campaign_start",
       requirements: { needsText: true, needsImages: false }
     });
 
     expect(result.overallStatus).toBe("GREEN");
-    expect(result.capabilities.composer.state).toBe("available");
-    expect(result.capabilities.composer.selectedStrategy).toBe("composer.accessibility.textbox");
+    expect(result.requirements.needsText).toBe(true);
+    expect(result.capabilities.composer.required).toBe(false);
+    expect(result.capabilities.composer.state).toBe("requires_context");
   });
 
   it("remains GREEN when a primary strategy is disabled and a fallback works", async () => {
@@ -96,16 +115,17 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.text_send_action.required).toBe(false);
   });
 
-  it("requires the non-destructive attachment capability for an image campaign", async () => {
+  it("does not require or click the attachment action for an image campaign startup", async () => {
     document.querySelector("[data-testid='clip']")?.remove();
     const result = await runWhatsAppPreflight({
       timeoutMs: 10,
       level: "full",
+      purpose: "campaign_start",
       requirements: { needsText: false, needsImages: true }
     });
-    expect(result.overallStatus).toBe("RED");
-    expect(result.capabilities.attachment_action.required).toBe(true);
-    expect(result.capabilities.attachment_action.state).toBe("unavailable");
+    expect(result.overallStatus).toBe("GREEN");
+    expect(result.capabilities.attachment_action.required).toBe(false);
+    expect(result.requirements.needsImages).toBe(true);
   });
 
   it("does not inject a diagnostic image before a real image send", async () => {
@@ -130,7 +150,7 @@ describe("contextual WhatsApp preflight", () => {
     expect(document.querySelector("[data-testid='media-editor-canvas']")).toBeNull();
   });
 
-  it("can still observe an already-open media preview without requiring it preflight-wide", async () => {
+  it("can observe an already-open media preview without opening one", async () => {
     baseConversation(`
       <input type="file" accept="image/*">
       <div data-testid="media-editor-canvas"></div>
@@ -146,18 +166,43 @@ describe("contextual WhatsApp preflight", () => {
     expect(result.capabilities.media_preview.selectedStrategy).toBe("media-preview.testid.editor-canvas");
     expect(result.capabilities.media_send_action.state).toBe("available");
     expect(result.capabilities.media_send_action.required).toBe(false);
-    expect(result.strategiesUsed.length).toBeGreaterThan(8);
   });
 
-  it("uses a lightweight health check that does not require a real media preview", async () => {
+  it("uses a lightweight health check that does not require conversation capabilities", async () => {
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
       level: "lightweight",
+      purpose: "health_check",
       requirements: { needsText: true, needsImages: true }
     });
     expect(result.overallStatus).toBe("GREEN");
     expect(result.capabilities.media_preview.required).toBe(false);
     expect(result.capabilities.media_send_action.required).toBe(false);
+    expect(result.capabilities.text_send_action.required).toBe(false);
+  });
+
+  it("manual targeted capability checks remain non-destructive when context is insufficient", async () => {
+    document.querySelector("[aria-label='Send']")?.remove();
+    const composer = document.querySelector<HTMLElement>("[role='textbox']")!;
+    const result = await runWhatsAppPreflight({
+      timeoutMs: 20,
+      level: "targeted",
+      purpose: "manual_diagnostic",
+      targetedCapability: "text_send_action",
+      requirements: { needsText: false, needsImages: false }
+    });
+    expect(result.overallStatus).toBe("RED");
+    expect(result.capabilities.text_send_action.required).toBe(true);
+    expect(result.capabilities.text_send_action.state).toBe("requires_context");
+    expect(composer.textContent).toBe("");
+  });
+
+  it("contains no legacy synthetic composer phrase in production preflight source", async () => {
+    const source = await readFile(resolve(process.cwd(), "src/whatsapp/preflight.ts"), "utf8");
+    const forbidden = ["Diagnóstico", "Flor", "Mía"].join(" ");
+    expect(source).not.toContain(forbidden);
+    expect(source).not.toContain("replaceChildren(document.createTextNode");
+    expect(source).not.toContain("DataTransfer");
   });
 
   it("differentiates a closed session from an incompatible UI", async () => {
