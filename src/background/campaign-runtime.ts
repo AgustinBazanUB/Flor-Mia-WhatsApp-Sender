@@ -21,9 +21,8 @@ import type { ContactProcessCheckpoint, ImageContactStep } from "../engine/types
 import type { ContactCheckpointRepository } from "../engine/types";
 import type { ValidatedCampaign } from "../shared/campaign";
 import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
-import { arrayBufferToBase64, base64ToArrayBuffer, type SerializedCampaignImage } from "../shared/serialization";
+import { base64ToArrayBuffer, type SerializedCampaignImage } from "../shared/serialization";
 import type { WhatsAppPreflightResult } from "../shared/state";
-import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
 import type { CampaignBlobStore } from "../storage/blob-store";
 import type { StateStore } from "../storage/state-store";
 import { ChromeWhatsAppContactAdapter } from "./contact-adapter";
@@ -32,7 +31,6 @@ import type { CampaignWakeupScheduler } from "../campaign/scheduler";
 import type {
   CampaignRequirements,
   CompatibilityDevelopmentFault,
-  PreflightProbeImage,
   WhatsAppPreflightRequest
 } from "../compatibility/types";
 import { hasUnresolvedSendEvidence } from "../engine/checkpoint-safety";
@@ -449,33 +447,14 @@ export class CampaignRuntime {
     if (!campaign || campaign.campaignId !== campaignId) {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
     }
-    const basePreflight = await this.dependencies.runPreflight({
-      timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 3_000),
-      level: "lightweight",
-      requirements: { needsText: false, needsImages: false },
-      developmentFault
-    });
-    if (!basePreflight.operational) return basePreflight;
-    const recipient = campaign.activeContactId
-      ? campaign.recipients.find((candidate) => candidate.recipientId === campaign.activeContactId)
-      : campaign.recipients.find((candidate) => candidate.status === "pending");
-    if (!recipient) return basePreflight;
-    const tab = await this.dependencies.transport.requireTab();
-    await this.dependencies.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
-      operationId: `preflight:${campaign.campaignId}:${recipient.recipientId}`,
-      phoneDigits: recipient.phoneDigits
-    }, tab.id);
-    await this.dependencies.transport.waitForContent(tab.id, campaign.policy.whatsappLoadWaitMs);
-    // El probe multimedia invasivo queda reservado exclusivamente a un diagnóstico manual
-    // de compatibilidad. Start/Resume no generan previews ni convierten imágenes a base64.
-    const probeImage = developmentFault === "attachment_capability_break"
-      ? await this.probeImageFor(campaign)
-      : null;
+    // Startup/Resume sólo comprueba readiness no destructiva. No abre destinatarios,
+    // no escribe en composer y no adjunta probes. La primera /send pertenece al
+    // ContactAdapter real, que después exige nueva generación + conversation proof.
     return this.dependencies.runPreflight({
       timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 5_000),
       level: "full",
+      purpose: "campaign_start",
       requirements: this.requirementsFor(campaign),
-      ...(probeImage ? { probeImage } : {}),
       developmentFault
     });
   }
@@ -496,20 +475,6 @@ export class CampaignRuntime {
     return {
       needsText: Boolean(campaign.text.trim()),
       needsImages: campaign.images.length > 0
-    };
-  }
-
-  private async probeImageFor(campaign: CampaignState): Promise<PreflightProbeImage | null> {
-    const asset = campaign.images[0];
-    if (!asset) return null;
-    const stored = await this.dependencies.blobStore.getImage(campaign.campaignId, asset.imageId);
-    if (!stored) return null;
-    const data = await stored.blob.arrayBuffer();
-    return {
-      name: asset.name,
-      type: asset.type,
-      size: asset.size,
-      dataBase64: arrayBufferToBase64(data)
     };
   }
 
@@ -538,6 +503,7 @@ export class CampaignRuntime {
     const preflight = await this.dependencies.runPreflight({
       timeoutMs: Math.min(campaign.policy.whatsappLoadWaitMs, 1_500),
       level: "lightweight",
+      purpose: "health_check",
       // El health check entre contactos valida sesión/superficie base. Composer, attach y
       // evidencia de salida se validan en el step concreto, donde sí aportan seguridad.
       requirements: { needsText: false, needsImages: false }
