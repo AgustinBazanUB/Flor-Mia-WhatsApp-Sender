@@ -1,6 +1,7 @@
 import type { CampaignState } from "../campaign/campaign-types";
 import type { CompatibilityState, WhatsAppCapability } from "../compatibility/types";
 import type { ContactProcessCheckpoint } from "../engine/types";
+import { ERROR_CODES } from "../shared/errors";
 import type { ExtensionState } from "../shared/state";
 import { sanitizeDiagnosticText, sanitizeError } from "./sanitizer";
 import { classifyDiagnosticError } from "./taxonomy";
@@ -53,14 +54,24 @@ export function createDiagnosticIncident(input: DiagnosticIncidentInput): Diagno
   const sensitiveStrings = campaign?.text ? [campaign.text] : [];
   const error = sanitizeError(rawError, { sensitiveStrings });
   const failure = compatibility.lastFailure;
-  const capability = failure?.capability ?? diagnosticCapability(rawError);
+  const source = input.source ?? (checkpoint ? "contact" : campaign ? "campaign" : failure ? "preflight" : "service_worker");
+  const category = classifyDiagnosticError(error, {
+    online: input.online,
+    campaignBlockCode: campaign?.status === "stopped" ? "stopped" : campaign?.blockReason?.code,
+    pauseReason: checkpoint?.pauseReason
+  });
+  // Compatibility history is useful context, but it must not become the cause of a
+  // navigation/recipient-proof incident merely because a previous preflight failed.
+  const capability = category === "WHATSAPP_UI_CHANGED"
+    ? (diagnosticCapability(rawError) ?? (source === "preflight" ? failure?.capability ?? null : null))
+    : null;
   const occurredAt = campaign?.blockReason?.at
     ?? checkpoint?.updatedAt
-    ?? failure?.timestamp
+    ?? (source === "preflight" ? failure?.timestamp : undefined)
     ?? latestStoredError?.at
     ?? state.updatedAt;
   const recipientId = checkpoint?.contact.contactId ?? campaignRecipient?.recipientId ?? null;
-  const stepId = checkpoint?.currentStepId ?? failure?.stepId ?? null;
+  const stepId = checkpoint?.currentStepId ?? (source === "preflight" ? failure?.stepId ?? null : null);
   const campaignStatus = campaign?.status ?? null;
   const disposition: DiagnosticIncident["disposition"] = campaignStatus === "stopped"
     ? "stopped"
@@ -69,12 +80,14 @@ export function createDiagnosticIncident(input: DiagnosticIncidentInput): Diagno
       : campaignStatus === "daily_limit_reached" || campaignStatus === "images_required"
         ? "blocked"
         : "paused";
-  const source = input.source ?? (checkpoint ? "contact" : campaign ? "campaign" : failure ? "preflight" : "service_worker");
-  const category = classifyDiagnosticError(error, {
-    online: input.online,
-    campaignBlockCode: campaign?.status === "stopped" ? "stopped" : campaign?.blockReason?.code,
-    pauseReason: checkpoint?.pauseReason
-  });
+  const contextFailure = error?.code === ERROR_CODES.contactContextUnverified
+    || checkpoint?.pauseReason === "open_conversation_failed";
+  const actionAttempted = currentStep
+    ? currentStep.kind === "image" ? "send_image" : "send_text"
+    : contextFailure ? "openConversation" : null;
+  const attempts = currentStep?.attempts
+    ?? (contextFailure ? checkpoint?.openConversationAttempts ?? null : null)
+    ?? (source === "preflight" ? failure?.attempts ?? null : null);
   const resultSummary = sanitizeDiagnosticText(
     campaign?.blockReason?.message
       ?? error?.message
@@ -87,26 +100,26 @@ export function createDiagnosticIncident(input: DiagnosticIncidentInput): Diagno
     occurredAt,
     source,
     disposition,
-    campaignId: campaign?.campaignId ?? checkpoint?.campaignId ?? failure?.campaignId ?? null,
+    campaignId: campaign?.campaignId ?? checkpoint?.campaignId ?? (source === "preflight" ? failure?.campaignId ?? null : null),
     campaignName: input.includeCampaignName && campaign ? sanitizeDiagnosticText(campaign.campaignName, { maxStringLength: 160 }) : null,
     campaignStatus,
     recipientInternalId: recipientId,
     recipientPosition: campaignRecipient?.position ?? null,
     totalRecipients: campaign?.recipients.length ?? null,
     contactStatus: campaignRecipient?.status ?? checkpoint?.status ?? null,
-    maskedPhone: checkpoint?.contact.maskedPhone ?? campaignRecipient?.maskedPhone ?? failure?.maskedContact ?? null,
+    maskedPhone: checkpoint?.contact.maskedPhone ?? campaignRecipient?.maskedPhone ?? (source === "preflight" ? failure?.maskedContact ?? null : null),
     stepId,
     stepKind: currentStep?.kind ?? null,
     imageOrder: currentStep?.kind === "image" ? currentStep.image.order : null,
-    attempts: currentStep?.attempts ?? failure?.attempts ?? null,
-    actionAttempted: currentStep ? currentStep.kind === "image" ? "send_image" : "send_text" : null,
+    attempts,
+    actionAttempted,
     resultSummary,
     lastConfirmedStepId: checkpoint?.lastConfirmedStepId ?? null,
     overallStatus: compatibility.overallStatus,
     errorCategory: category,
     error,
-    capability: capability ?? null,
-    lastSuccessfulCapability: failure?.lastSuccessfulCapability ?? null,
+    capability,
+    lastSuccessfulCapability: capability ? failure?.lastSuccessfulCapability ?? null : null,
     pauseReason: checkpoint?.pauseReason ?? campaign?.blockReason?.code ?? null
   };
 }
