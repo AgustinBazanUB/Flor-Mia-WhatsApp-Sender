@@ -51,6 +51,12 @@ describe("post-click text verification 0.9.4.3", () => {
     expect(result.verification.outcome).toBe("confirmed_causal");
   });
 
+  it("a new outgoing with different text never confirms the expected campaign text", async () => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing("Texto diferente", "true_other"));
+    const result = await sendAndVerifyText({ operationId: "different", phoneDigits: "5491112345678", message: "Texto esperado", timeoutMs: 40 });
+    expect(result.verification).toMatchObject({ confirmed: false, sent: true, outcome: "sent_unverified", exactTextObserved: false });
+  });
+
   it("elevates causal evidence when data-id appears milliseconds later", async () => {
     document.querySelector("button")!.addEventListener("click", () => {
       const bubble = appendOutgoing(composerText());
