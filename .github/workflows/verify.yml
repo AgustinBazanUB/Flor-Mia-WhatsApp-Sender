@@ -23,27 +23,50 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Verify
-        id: verify
-        run: npm run verify
+      - name: Typecheck
+        id: typecheck
+        run: npm run typecheck
+      - name: Lint
+        id: lint
+        run: npm run lint
+      - name: Tests
+        id: tests
+        run: npm test
+      - name: Build
+        id: build
+        run: npm run build
+      - name: Validate build
+        id: validate
+        run: npm run validate:build
       - name: Publish aggregate verify status
         if: always() && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
-          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          TYPECHECK_OUTCOME: ${{ steps.typecheck.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
         shell: bash
         run: |
-          if [ "$VERIFY_OUTCOME" = "success" ]; then state=success; else state=failure; fi
-          description="npm run verify: $VERIFY_OUTCOME"
-          payload=$(jq -n --arg state "$state" --arg context "verify/npm" --arg description "$description" '{state:$state,context:$context,description:$description}')
-          curl --fail-with-body --silent --show-error \
-            --request POST \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-            --data "$payload"
+          outcomes="typecheck=$TYPECHECK_OUTCOME lint=$LINT_OUTCOME tests=$TESTS_OUTCOME build=$BUILD_OUTCOME validate=$VALIDATE_OUTCOME"
+          if [ "$TYPECHECK_OUTCOME" = "success" ] && [ "$LINT_OUTCOME" = "success" ] && [ "$TESTS_OUTCOME" = "success" ] && [ "$BUILD_OUTCOME" = "success" ] && [ "$VALIDATE_OUTCOME" = "success" ]; then
+            state=success
+          else
+            state=failure
+          fi
+          description=$(printf '%s' "$outcomes" | cut -c1-135)
+          for context in "verify/npm" "verify/phase"; do
+            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+              --data "$payload"
+          done
 
   diagnose-tests:
     if: github.event_name == 'push'
