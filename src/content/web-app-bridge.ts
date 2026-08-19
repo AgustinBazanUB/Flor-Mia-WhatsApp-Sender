@@ -89,10 +89,10 @@ function messageTypeForStatus(
   if (["paused", "pause_requested", "daily_limit_reached", "images_required"].includes(status.status)) {
     return WEB_APP_MESSAGE_TYPES.paused;
   }
-  if ([WEB_APP_MESSAGE_TYPES.resumeRequest, WEB_APP_MESSAGE_TYPES.retryRequest].includes(requestedType ?? WEB_APP_MESSAGE_TYPES.status)) {
+  if (requestedType === WEB_APP_MESSAGE_TYPES.resumeRequest || requestedType === WEB_APP_MESSAGE_TYPES.retryRequest) {
     return WEB_APP_MESSAGE_TYPES.resumed;
   }
-  if ([WEB_APP_MESSAGE_TYPES.startRequest, WEB_APP_MESSAGE_TYPES.retryFailedRequest].includes(requestedType ?? WEB_APP_MESSAGE_TYPES.status)) {
+  if (requestedType === WEB_APP_MESSAGE_TYPES.startRequest || requestedType === WEB_APP_MESSAGE_TYPES.retryFailedRequest) {
     return WEB_APP_MESSAGE_TYPES.started;
   }
   return WEB_APP_MESSAGE_TYPES.progress;
@@ -136,11 +136,6 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
   }
 
   const campaignId = campaignIdOf(request);
-  // Retry/Retry Failed son controles públicos explícitos. Internamente reutilizan el
-  // canal serializado de Resume: CampaignRuntime distingue el estado real y decide si
-  // corresponde reanudar una pausa normal, resetear un fallo seguro o reabrir sólo
-  // destinatarios fallidos. Delete reutiliza Stop únicamente cuando la campaña ya
-  // está detenida; el primer Stop nunca elimina recursos.
   const controls = {
     [WEB_APP_MESSAGE_TYPES.cancelRequest]: INTERNAL_MESSAGE_TYPES.campaignStop,
     [WEB_APP_MESSAGE_TYPES.startRequest]: INTERNAL_MESSAGE_TYPES.campaignStart,
