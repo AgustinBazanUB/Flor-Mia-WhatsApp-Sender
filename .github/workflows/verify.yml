@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Patch and report first failing test
+      - name: Patch and report verbose failing test output
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -36,6 +36,9 @@ jobs:
               "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
               --data "$payload" >/dev/null
           }
+          slugify() {
+            printf '%s' "$1" | sed -E 's/\x1B\[[0-9;]*[mK]//g' | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.<>=+-' | cut -c1-100
+          }
           post pending p0/tests-start "P0 test diagnostic started"
           python3 scripts/apply-p0-text.py
           python3 scripts/fix-p0-test-tab-type.py
@@ -43,7 +46,7 @@ jobs:
           rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py scripts/fix-p0-test-tab-type.py .github/workflows/p0-handshake-fix.yml
           npm ci --no-audit --no-fund >/tmp/npm-ci.log 2>&1
           set +e
-          npm run test -- --reporter=json --outputFile=/tmp/vitest.json >/tmp/tests.log 2>&1
+          npm test -- --reporter=verbose >/tmp/tests.log 2>&1
           code=$?
           set -e
           cat /tmp/tests.log
@@ -52,8 +55,13 @@ jobs:
             post success p0/tests-start "P0 tests completed"
             exit 0
           fi
-          failing=$(node -e 'const fs=require("fs"); try { const r=JSON.parse(fs.readFileSync("/tmp/vitest.json","utf8")); const a=(r.testResults||[]).flatMap(t=>(t.assertionResults||[]).filter(x=>x.status==="failed").map(x=>String(x.fullName||[...(x.ancestorTitles||[]),x.title].filter(Boolean).join(" ")))); process.stdout.write(a[0]||"unknown"); } catch { process.stdout.write("unknown"); }')
-          slug=$(printf '%s' "$failing" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-105)
-          post failure "p0/tests-$slug" "$slug"
+          mapfile -t lines < <(grep -E 'FAIL|×|AssertionError|Error:|expected|Received|Timed out|timeout' /tmp/tests.log | tail -n 8)
+          idx=0
+          for line in "${lines[@]}"; do
+            idx=$((idx+1))
+            slug=$(slugify "$line")
+            [ -z "$slug" ] && continue
+            post failure "p0/test-detail-$idx-$slug" "$slug"
+          done
           post failure p0/tests-result "Vitest failed"
           exit "$code"
