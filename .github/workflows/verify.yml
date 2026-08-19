@@ -3,78 +3,194 @@ name: verify
 on:
   push:
     branches: [main]
+  pull_request:
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 jobs:
-  publish-p0-product:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Node.js 20
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
-      - name: Publish verified product commits
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify
+        id: verify
+        run: npm run verify
+      - name: Publish aggregate verify status
+        if: always() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        shell: bash
+        run: |
+          if [ "$VERIFY_OUTCOME" = "success" ]; then state=success; else state=failure; fi
+          description="npm run verify: $VERIFY_OUTCOME"
+          payload=$(jq -n --arg state "$state" --arg context "verify/npm" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
+
+  diagnose-verify-phase:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Typecheck
+        id: typecheck
+        run: npm run typecheck
+      - name: Lint
+        id: lint
+        run: npm run lint
+      - name: Tests
+        id: tests
+        run: npm test
+      - name: Build
+        id: build
+        run: npm run build
+      - name: Validate build
+        id: validate
+        run: npm run validate:build
+      - name: Publish verification phase status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          TYPECHECK_OUTCOME: ${{ steps.typecheck.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+        shell: bash
+        run: |
+          outcomes="typecheck=$TYPECHECK_OUTCOME lint=$LINT_OUTCOME tests=$TESTS_OUTCOME build=$BUILD_OUTCOME validate=$VALIDATE_OUTCOME"
+          state=failure
+          phase=unknown
+          if [ "$TYPECHECK_OUTCOME" = "failure" ]; then
+            phase=typecheck
+          elif [ "$LINT_OUTCOME" = "failure" ]; then
+            phase=lint
+          elif [ "$TESTS_OUTCOME" = "failure" ]; then
+            phase=tests
+          elif [ "$BUILD_OUTCOME" = "failure" ]; then
+            phase=build
+          elif [ "$VALIDATE_OUTCOME" = "failure" ]; then
+            phase=validate-build
+          elif [ "$TYPECHECK_OUTCOME" = "success" ] && [ "$LINT_OUTCOME" = "success" ] && [ "$TESTS_OUTCOME" = "success" ] && [ "$BUILD_OUTCOME" = "success" ] && [ "$VALIDATE_OUTCOME" = "success" ]; then
+            state=success
+            phase=success
+          fi
+          description=$(printf '%s' "$outcomes" | cut -c1-135)
+          context="verify/phase-$phase"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
+
+  diagnose-lint:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Capture ESLint JSON
+        shell: bash
+        run: npm run lint -- --format=json --output-file=/tmp/eslint.json || true
+      - name: Publish first lint violation
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          post() {
-            state="$1"; phase="$2"; desc="$3"
-            payload=$(jq -n --arg state "$state" --arg context "p0/product-$phase" --arg description "$desc" '{state:$state,context:$context,description:$description}')
-            curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-              --data "$payload" >/dev/null
-          }
-          fail() {
-            phase="$1"; code="$2"; detail="${3:-P0 product publish failed at $phase}"
-            post failure "$phase" "$detail"
-            exit "$code"
-          }
+          summary=$(node -e 'const fs=require("fs"), path=require("path"); const r=JSON.parse(fs.readFileSync("/tmp/eslint.json","utf8")); const f=r.find(x=>(x.errorCount||0)>0); if(!f){process.stdout.write("success");process.exit(0)} const m=f.messages.find(x=>x.severity===2)||{}; const file=path.basename(f.filePath||"unknown").replace(/[^A-Za-z0-9_.-]/g,"-"); const rule=String(m.ruleId||"unknown").replace(/[^A-Za-z0-9_.-]/g,"-"); process.stdout.write(`${file}-${rule}`)')
+          if [ "$summary" = "success" ]; then state=success; else state=failure; fi
+          context="verify/lint-$summary"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "First ESLint result: $summary" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
 
-          post pending start "P0 product publish started"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          python3 scripts/apply-p0-text.py || fail patch $?
-          python3 scripts/fix-p0-test-tab-type.py || fail patch $?
-          post success patch "Verified patch applied"
-
-          git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts
-          git commit -m "fix: synchronize WhatsApp post-navigation handshake" || fail commit-core $?
-          git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts
-          git commit -m "test: cover post-navigation content lifecycle" || fail commit-tests $?
-          git add manifest.json package.json package-lock.json
-          git commit -m "chore: release 0.9.4.1" || fail commit-version $?
-          post success commits "Logical product commits created"
-
-          # Validate the exact product tree while removing diagnostic helpers only from the working tree.
-          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
-          rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py scripts/fix-p0-test-tab-type.py .github/workflows/p0-handshake-fix.yml
-          npm ci --no-audit --no-fund || fail npm-ci $?
-          npm run verify || fail verify $?
-          node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`expected 0.9.4.1 got ${m.version}`);process.exit(1)}' || fail dist-version $?
-          post success verify "Product tree verify passed"
-
-          set +e
-          push_output=$(git push origin HEAD:main 2>&1)
-          push_code=$?
-          set -e
-          echo "$push_output"
-          if [ "$push_code" -ne 0 ]; then
-            detail=$(printf '%s' "$push_output" | tail -n 2 | tr '\n\r' '  ' | cut -c1-130)
-            fail push "$push_code" "$detail"
+  diagnose-tests:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run Vitest with machine-readable output
+        id: tests
+        run: npm run test -- --reporter=json --outputFile=/tmp/vitest.json
+      - name: Publish test diagnostic status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        shell: bash
+        run: |
+          if [ "$TEST_OUTCOME" = "success" ]; then
+            state=success
+            failing=success
+            description="Vitest: success"
+          else
+            state=failure
+            failing=$(node -e 'const fs=require("fs"); try { const r=JSON.parse(fs.readFileSync("/tmp/vitest.json","utf8")); const assertions=(r.testResults||[]).flatMap(t=>(t.assertionResults||[]).filter(a=>a.status==="failed").map(a=>String(a.fullName||[...(a.ancestorTitles||[]),a.title].filter(Boolean).join(" ")))); const names=assertions.filter(Boolean).slice(0,2); process.stdout.write(names.join(" | ")||"unknown"); } catch { process.stdout.write("unknown"); }')
+            description="Vitest: $failing"
           fi
-          post success push "Product commits pushed to main"
-          post success start "P0 product publish completed"
+          failing_slug=$(printf '%s' "$failing" | tr ' /,.|:()' '----------' | tr -cd 'A-Za-z0-9_-' | cut -c1-85)
+          description=$(printf '%s' "$description" | cut -c1-135)
+          context="verify/tests-$failing_slug"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
