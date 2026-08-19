@@ -156,20 +156,22 @@ describe("atomic contact engine", () => {
     expect(result.openConversationAttempts).toBe(2);
   });
 
-  it("can resume after the conversation-opening retry window is exhausted", async () => {
+  it("does not create a new open-conversation budget after Resume", async () => {
     const store = new MemoryCheckpointStore();
     const adapter = new FakeAdapter();
-    adapter.remainingOpenFailures = 3;
+    adapter.remainingOpenFailures = 10;
     const paused = await run(checkpoint(0), adapter, store);
 
     expect(paused.status).toBe("paused");
     expect(paused.pauseReason).toBe("open_conversation_failed");
+    expect(paused.openConversationAttempts).toBe(2);
     expect(paused.steps[0]?.attempts).toBe(0);
 
     const resumed = await run(paused, adapter, store);
-    expect(resumed.status).toBe("completed");
-    expect(resumed.openConversationAttempts).toBe(4);
-    expect(adapter.calls.filter((call) => call === "text")).toHaveLength(1);
+    expect(resumed.status).toBe("paused");
+    expect(resumed.openConversationAttempts).toBe(2);
+    expect(adapter.calls.filter((call) => call === "open")).toHaveLength(2);
+    expect(adapter.calls.filter((call) => call === "text")).toHaveLength(0);
   });
 
   it("processes text-only contact and verifies the outgoing step", async () => {

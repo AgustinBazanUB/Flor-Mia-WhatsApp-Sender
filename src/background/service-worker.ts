@@ -292,12 +292,30 @@ async function sendTestText(payload: InternalRequestMap["SEND_TEST_TEXT"]): Prom
       lastCheckpoint: { operationId, recipientId: operationId, step: "preflight-complete", createdAt: new Date().toISOString() },
       statusMessage: "Abriendo la conversación de prueba…"
     });
-    await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, { operationId, phoneDigits: phone.digits }, tab.id);
+    const navigationRequestId = createId("navigation");
+    const navigation = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
+      operationId,
+      phoneDigits: phone.digits,
+      navigationRequestId
+    }, tab.id);
     await stateStore.patch({
       currentStep: "wait-conversation",
       lastCheckpoint: { operationId, recipientId: operationId, step: "navigation-requested", createdAt: new Date().toISOString() }
     });
-    await whatsappTransport.waitForContent(tab.id, 30_000);
+    const readiness = await whatsappTransport.waitForContent(tab.id, 30_000, undefined, {
+      previousContentInstanceId: navigation.contentInstanceId,
+      purpose: "content_handshake"
+    });
+    const navigationObservedAt = new Date().toISOString();
+    await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
+      operationId: `prove:${operationId}`,
+      phoneDigits: phone.digits,
+      navigationRequestId,
+      timeoutMs: 4_000,
+      requestedNavigationAt: navigation.requestedNavigationAt,
+      navigationObservedAt,
+      ...(readiness.contentInstanceId ? { expectedContentInstanceId: readiness.contentInstanceId } : {})
+    }, tab.id);
     await stateStore.patch({ currentStep: "send-text", statusMessage: "Enviando y verificando el mensaje de prueba…" });
     const result = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappSendText, {
       operationId,
