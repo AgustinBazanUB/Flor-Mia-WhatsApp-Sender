@@ -1,6 +1,7 @@
 import "./service-worker";
 import { WEB_APP_MATCH_PATTERNS } from "../config/origins";
 import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
+import type { WhatsAppPreflightResult } from "../shared/state";
 import { CompatibilityManager } from "../compatibility/manager";
 import { CompatibilityStore } from "../storage/compatibility-store";
 import { StateStore } from "../storage/state-store";
@@ -29,7 +30,7 @@ async function injectIntoTabs(patterns: string[], file: string): Promise<number>
   return injected;
 }
 
-async function lightweightHealth(transport: WhatsAppTransport): Promise<ReturnType<WhatsAppTransport["sendWhenContentReady"]> | null> {
+async function lightweightHealth(transport: WhatsAppTransport): Promise<WhatsAppPreflightResult | null> {
   const tab = await transport.findTab();
   if (!tab?.id) return null;
   return transport.sendWhenContentReady(
@@ -45,7 +46,7 @@ async function lightweightHealth(transport: WhatsAppTransport): Promise<ReturnTy
   );
 }
 
-async function persistLightweightHealth(raw: Awaited<ReturnType<WhatsAppTransport["sendWhenContentReady"]>>): Promise<void> {
+async function persistLightweightHealth(raw: WhatsAppPreflightResult): Promise<void> {
   const compatibilityStore = new CompatibilityStore();
   const manager = new CompatibilityManager(
     compatibilityStore,
@@ -64,7 +65,7 @@ async function ensureWhatsAppContentScript(): Promise<void> {
   const transport = new WhatsAppTransport();
   try {
     const current = await lightweightHealth(transport);
-    if (current) await persistLightweightHealth(await current);
+    if (current) await persistLightweightHealth(current);
     return;
   } catch {
     // Un receiving-end ausente después de recargar/actualizar la extensión deja
@@ -75,7 +76,7 @@ async function ensureWhatsAppContentScript(): Promise<void> {
   await new Promise((resolve) => globalThis.setTimeout(resolve, 100));
   try {
     const recovered = await lightweightHealth(transport);
-    if (recovered) await persistLightweightHealth(await recovered);
+    if (recovered) await persistLightweightHealth(recovered);
   } catch {
     // No convertimos una recuperación oportunista en un error nuevo. El preflight
     // explícito conserva la responsabilidad de diagnosticar WhatsApp si sigue cargando.
