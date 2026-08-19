@@ -27,15 +27,14 @@ export function createContactSteps(input: ContactCheckpointInput): ContactStep[]
       attempts: 0
     });
   }
-  const text = input.text.trim();
-  if (text) {
+  if (input.text.trim()) {
     const id = "text";
     const step: TextContactStep = {
       id,
       operationId: operationId(input.campaignId, input.contact.contactId, id),
       position: steps.length + 1,
       kind: "text",
-      text,
+      text: input.text,
       status: "pending",
       attempts: 0
     };
