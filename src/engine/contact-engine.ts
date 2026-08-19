@@ -118,9 +118,9 @@ export async function processContact(
   const resumedStepAttemptLimit = resumedStepId
     ? (checkpoint.steps.find((step) => step.id === resumedStepId)?.attempts ?? 0) + policy.maxAttemptsPerStep
     : policy.maxAttemptsPerStep;
-  // Los intentos de apertura son acumulativos para diagnóstico, pero cada
-  // invocación explícita dispone de su propia ventana acotada de reintentos.
-  const openConversationAttemptLimit = checkpoint.openConversationAttempts + policy.maxAttemptsPerStep;
+  // Presupuesto TOTAL por contacto, atravesando Resume. Nunca se renueva una
+  // ventana de tres intentos sólo porque el usuario vuelva a pulsar Reanudar.
+  const openConversationAttemptLimit = policy.maxOpenConversationAttempts ?? Math.min(2, policy.maxAttemptsPerStep);
 
   const persist = async (next: ContactProcessCheckpoint): Promise<ContactProcessCheckpoint> => {
     const saved = await dependencies.store.saveActive({ ...cloneCheckpoint(next), updatedAt: now() });
@@ -165,7 +165,8 @@ export async function processContact(
       if (cancelledDuringOpen) return cancelledDuringOpen;
       const normalized = toExtensionError(error);
       checkpoint = await persist({ ...checkpoint, error: serializeError(normalized) });
-      if (!normalized.recoverable || checkpoint.openConversationAttempts >= openConversationAttemptLimit) {
+      const retryWithoutNewEvidence = normalized.details?.retryWithoutNewEvidence !== false;
+      if (!normalized.recoverable || !retryWithoutNewEvidence || checkpoint.openConversationAttempts >= openConversationAttemptLimit) {
         checkpoint = await persist({
           ...checkpoint,
           status: normalized.recoverable ? "paused" : "failed",
@@ -179,6 +180,14 @@ export async function processContact(
       if (cancelledDuringRetryDelay) return cancelledDuringRetryDelay;
       if (await pauseRequested()) return pauseAtSafeBoundary();
     }
+  }
+
+  if (!opened) {
+    return persist({
+      ...checkpoint,
+      status: "paused",
+      pauseReason: "open_conversation_failed"
+    });
   }
 
   for (const originalStep of checkpoint.steps) {

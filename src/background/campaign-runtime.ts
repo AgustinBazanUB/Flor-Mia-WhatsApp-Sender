@@ -343,6 +343,11 @@ export class CampaignRuntime {
     if (!current || current.campaignId !== campaignId) {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
     }
+    if (["running", "pause_requested", "waiting_contact", "waiting_batch"].includes(current.status)) {
+      // Un segundo Resume con otro requestId puede llegar después de que el primero ya
+      // hizo avanzar la campaña. Se responde con el estado actual en vez de INVALID_INPUT.
+      return this.syncCampaign(current);
+    }
     if (!["paused", "daily_limit_reached", "images_required"].includes(current.status)) {
       throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña no está en un estado que admita reanudación.");
     }
