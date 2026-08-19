@@ -26,6 +26,7 @@ await writeFile(resolve(dist, "manifest.json"), `${JSON.stringify(manifest, null
 await cp(resolve(root, "src/popup/index.html"), resolve(dist, "popup/index.html"));
 await cp(resolve(root, "src/popup/popup.css"), resolve(dist, "popup/popup.css"));
 await cp(resolve(root, "src/popup/user-facing.css"), resolve(dist, "popup/user-facing.css"));
+await cp(resolve(root, "src/popup/optimistic-controls.js"), resolve(dist, "popup/optimistic-controls.js"));
 await cp(resolve(root, "src/diagnostics/report.html"), resolve(dist, "diagnostics/report.html"));
 await cp(resolve(root, "src/diagnostics/report.css"), resolve(dist, "diagnostics/report.css"));
 
