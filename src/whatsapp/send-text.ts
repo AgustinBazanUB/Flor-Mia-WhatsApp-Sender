@@ -20,31 +20,37 @@ async function contactIdForPhone(phoneDigits: string): Promise<string> {
   return `contact-${id}`;
 }
 
-function normalizeLineEndings(value: string): string {
+export function normalizeComposerLineEndings(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }
 
 function composerPlainText(composer: HTMLElement): string {
   const innerText = typeof composer.innerText === "string" ? composer.innerText : "";
   const raw = innerText || composer.textContent || "";
-  return normalizeLineEndings(raw);
+  return normalizeComposerLineEndings(raw);
 }
 
-async function fingerprintText(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(normalizeLineEndings(value));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+export type ComposerPreparationState = "empty" | "prepared" | "conflict";
+
+export function classifyComposerContent(existingText: string, expectedText: string): ComposerPreparationState {
+  const existing = normalizeComposerLineEndings(existingText);
+  const expected = normalizeComposerLineEndings(expectedText);
+  if (!canonicalMessageText(existing)) return "empty";
+  return existing === expected ? "prepared" : "conflict";
 }
 
-async function setComposerText(composer: HTMLElement, message: string): Promise<void> {
-  const existing = canonicalMessageText(composerPlainText(composer));
-  if (existing) {
+export async function prepareComposerTextForSend(composer: HTMLElement, message: string): Promise<"inserted" | "reused"> {
+  const expected = normalizeComposerLineEndings(message);
+  const state = classifyComposerContent(composerPlainText(composer), expected);
+  if (state === "prepared") return "reused";
+  if (state === "conflict") {
     throw new ExtensionError(
       ERROR_CODES.invalidInput,
-      "La conversación tiene un borrador. Vacialo manualmente antes de ejecutar la prueba para no sobrescribirlo."
+      "La conversación tiene un borrador diferente. Vacialo manualmente antes de continuar para no sobrescribirlo.",
+      { recoverable: true, details: { sendAttempted: false, draftConflict: true } }
     );
   }
-  const expected = normalizeLineEndings(message);
+
   composer.focus();
   const selection = window.getSelection();
   const range = document.createRange();
@@ -61,13 +67,13 @@ async function setComposerText(composer: HTMLElement, message: string): Promise<
     composer.dispatchEvent(event);
   }
 
-  const actual = composerPlainText(composer);
-  if (actual !== expected || await fingerprintText(actual) !== await fingerprintText(expected)) {
+  if (classifyComposerContent(composerPlainText(composer), expected) !== "prepared") {
     throw capabilityUnavailableError(
       resolveCapability("composer", document, { required: true }).discovery,
       "WhatsApp localizó el composer, pero no conservó exactamente el texto preparado por la campaña."
     );
   }
+  return "inserted";
 }
 
 export function scheduleConversationNavigation(phoneDigits: string): void {
@@ -110,7 +116,7 @@ export async function sendAndVerifyText(input: {
   });
 
   const beforeIds = new Set(outgoingMessages().filter((item) => item.stableIdentity).map((item) => item.identity));
-  await setComposerText(composerMatch.element, message);
+  await prepareComposerTextForSend(composerMatch.element, message);
   const sendButton = await waitForCondition(() => findSendButton(), {
     timeoutMs: Math.min(timeoutMs, 10_000),
     description: "la acción de enviar texto"
@@ -129,7 +135,7 @@ export async function sendAndVerifyText(input: {
   }
   await lifecycle.beforeSend?.([...beforeIds]);
   requireConversationContext(phoneDigits);
-  if (composerPlainText(composerMatch.element) !== normalizeLineEndings(message)) {
+  if (classifyComposerContent(composerPlainText(composerMatch.element), message) !== "prepared") {
     throw new ExtensionError(
       ERROR_CODES.verificationFailed,
       "El contenido del composer cambió antes del envío. Se canceló el click para evitar enviar texto incorrecto.",
