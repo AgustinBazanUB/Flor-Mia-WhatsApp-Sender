@@ -19,7 +19,7 @@ new = '''type TestTab = {
 };
 
 function chromeFor(sendMessage = vi.fn()) {
-  const onUpdated = event<[number, TestTabChangeInfo, chrome.tabs.Tab]>();
+  const onUpdated = event<[number, TestTabChangeInfo, TestTab]>();
   const onRemoved = event<[number]>();
   let current: TestTab = { id: 7, url: "https://web.whatsapp.com/", status: "complete" };
   const get = vi.fn(async () => current);
