@@ -71,14 +71,12 @@ export async function waitForDocumentReady(
 
   return new Promise<DocumentReadySignal>((resolve, reject) => {
     let settled = false;
-    let interval: ReturnType<typeof globalThis.setInterval> | null = null;
     let observer: MutationObserver | null = null;
 
     const cleanup = (): void => {
       document.removeEventListener("readystatechange", check);
       document.removeEventListener("DOMContentLoaded", check);
       globalThis.removeEventListener?.("load", check as EventListener);
-      if (interval !== null) globalThis.clearInterval(interval);
       observer?.disconnect();
       globalThis.clearTimeout(timer);
     };
@@ -108,10 +106,11 @@ export async function waitForDocumentReady(
     document.addEventListener("readystatechange", check);
     document.addEventListener("DOMContentLoaded", check);
     globalThis.addEventListener?.("load", check as EventListener);
-    interval = globalThis.setInterval(check, 100);
 
     const root = document.documentElement ?? document;
     observer = new MutationObserver(check);
-    observer.observe(root, { childList: true, subtree: true, attributes: true });
+    // Sólo cambios estructurales durante esta espera acotada. No observamos atributos
+    // globales ni mantenemos un interval de 100 ms sobre toda la sesión.
+    observer.observe(root, { childList: true, subtree: true });
   });
 }
