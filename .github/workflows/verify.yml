@@ -30,12 +30,13 @@ jobs:
           tail -n 20 /tmp/p0-core.log
           if [ "$code" -eq 0 ]; then
             state=success
-            summary="core patch applied in checkout"
+            summary="core-patch-applied"
           else
             state=failure
-            summary=$(tail -n 1 /tmp/p0-core.log | tr '\n\r' '  ' | cut -c1-130)
+            summary=$(tail -n 1 /tmp/p0-core.log | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-90)
           fi
-          payload=$(jq -n --arg state "$state" --arg context "p0/core-diagnostic" --arg description "$summary" '{state:$state,context:$context,description:$description}')
+          context="p0/core-$summary"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$summary" '{state:$state,context:$context,description:$description}')
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
