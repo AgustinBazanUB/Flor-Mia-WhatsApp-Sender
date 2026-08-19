@@ -115,7 +115,10 @@ function state(total: number): CampaignState {
       source: "flor_mia" as const
     })),
     message: "Hola",
-    images: []
+    imageCount: 0,
+    imageOrder: [],
+    images: [],
+    totalRecipients: total
   });
   return createCampaignState(campaign, POLICY, refreshDailyLimit(null, POLICY.dailyContactLimit, NOW), NOW.toISOString());
 }
