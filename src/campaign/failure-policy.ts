@@ -18,6 +18,7 @@ export type CampaignContactFailureClass =
 const SYSTEMIC_ERROR_CODES = new Set<string>([
   ERROR_CODES.whatsappNotOpen,
   ERROR_CODES.sessionNotReady,
+  ERROR_CODES.interfaceLoading,
   ERROR_CODES.attachmentUnavailable,
   ERROR_CODES.imageMissing,
   ERROR_CODES.capabilityUnavailable,
@@ -34,7 +35,6 @@ const LOCAL_SAFE_ERROR_CODES = new Set<string>([
   ERROR_CODES.contactUnavailable,
   ERROR_CODES.contactContextUnverified,
   ERROR_CODES.elementNotFound,
-  ERROR_CODES.interfaceLoading,
   ERROR_CODES.timeout,
   ERROR_CODES.verificationFailed,
   ERROR_CODES.imageLoadFailed,
