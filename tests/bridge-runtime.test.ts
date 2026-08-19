@@ -3,7 +3,8 @@ import {
   captureBridgeRuntimeMetadata,
   installBridgeInstanceGuard,
   invalidatedContextMessage,
-  isExtensionContextInvalidated
+  isExtensionContextInvalidated,
+  isRuntimeAvailable
 } from "../src/content/bridge-runtime";
 
 class MarkerRoot {
@@ -16,30 +17,33 @@ class MarkerRoot {
 describe("web-app bridge runtime lifecycle", () => {
   it("caches manifest metadata while the extension context is valid", () => {
     const metadata = captureBridgeRuntimeMetadata({
-      getManifest: () => ({ version: "0.9.1.3", manifest_version: 3 }) as chrome.runtime.Manifest
+      getManifest: () => ({ version: "0.9.4", manifest_version: 3 }) as chrome.runtime.Manifest
     });
-    expect(metadata).toEqual({ extensionVersion: "0.9.1.3", manifestVersion: 3 });
+    expect(metadata).toMatchObject({ extensionVersion: "0.9.4", manifestVersion: 3, runtimeAvailable: true });
+    expect(Number.isNaN(Date.parse(metadata.createdAt))).toBe(false);
   });
 
   it("falls back without throwing when runtime metadata is unavailable", () => {
-    const metadata = captureBridgeRuntimeMetadata({
-      getManifest: () => { throw new Error("Extension context invalidated."); }
-    });
-    expect(metadata).toEqual({ extensionVersion: "unknown", manifestVersion: 3 });
+    const runtime = { getManifest: () => { throw new Error("Extension context invalidated."); } };
+    const metadata = captureBridgeRuntimeMetadata(runtime);
+    expect(metadata).toMatchObject({ extensionVersion: "unknown", manifestVersion: 3, runtimeAvailable: false });
+    expect(isRuntimeAvailable(runtime)).toBe(false);
   });
 
-  it("recognizes an invalidated content-script context and gives a reload instruction", () => {
+  it("recognizes an invalidated content-script context and gives a reconnect instruction", () => {
     expect(isExtensionContextInvalidated(new Error("Extension context invalidated."))).toBe(true);
     expect(isExtensionContextInvalidated(new Error("otro error"))).toBe(false);
-    expect(invalidatedContextMessage()).toContain("Recargá esta pestaña");
+    expect(invalidatedContextMessage()).toContain("reconectar");
   });
 
-  it("lets the newest bridge instance supersede an older instance", () => {
+  it("lets the newest bridge generation supersede an older instance", () => {
     const root = new MarkerRoot();
     const first = installBridgeInstanceGuard(root as unknown as Element);
     expect(first.isCurrent()).toBe(true);
+    expect(first.generation).toBe(1);
 
     const second = installBridgeInstanceGuard(root as unknown as Element);
+    expect(second.generation).toBe(2);
     expect(second.isCurrent()).toBe(true);
     expect(first.isCurrent()).toBe(false);
 
