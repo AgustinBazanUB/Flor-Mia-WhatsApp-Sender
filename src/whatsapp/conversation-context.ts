@@ -202,9 +202,17 @@ function fnv1a(value: string): string {
 
 function conversationFingerprint(main: Element): string {
   const header = main.querySelector("header");
+  // No usar todo textContent: presencia/estado puede cambiar sin cambiar de contacto.
+  // Preferimos un título semántico estable y la estructura del header. El valor sólo
+  // se usa dentro del hash efímero de la lease y nunca se persiste.
+  const titled = header?.querySelector<HTMLElement>("[title]");
+  const stableTitle = titled?.getAttribute("title") || header?.getAttribute("title") || "";
+  const structure = header
+    ? [...header.children].slice(0, 12).map((child) => `${child.tagName.toLowerCase()}:${child.getAttribute("role") ?? ""}:${child.getAttribute("data-testid") ?? ""}`).join(",")
+    : "";
   const parts = [
-    safeFingerprintPart(header?.textContent),
-    safeFingerprintPart(header?.getAttribute("title")),
+    safeFingerprintPart(stableTitle),
+    safeFingerprintPart(structure),
     ...RECIPIENT_ATTRIBUTES.map((attribute) => safeFingerprintPart(header?.getAttribute(attribute))),
     safeFingerprintPart(main.getAttribute("data-testid")),
     safeFingerprintPart(main.getAttribute("role"))
