@@ -134,8 +134,11 @@ export class WhatsAppTransport {
       return await this.send(type, payload, tabId);
     } catch (error) {
       if (!(error instanceof ExtensionError) || error.code !== ERROR_CODES.interfaceLoading) throw error;
-      if (signal) await this.waitForContent(tabId, timeoutMs, signal, { purpose: "content_handshake" });
-      else await this.waitForContent(tabId, timeoutMs, undefined, { purpose: "content_handshake" });
+      // Mantener la firma histórica de waitForContent cuando no hay AbortSignal evita
+      // acoplar callers/tests al objeto de opciones. waitForContent ya usa
+      // content_handshake como propósito por defecto.
+      if (signal) await this.waitForContent(tabId, timeoutMs, signal);
+      else await this.waitForContent(tabId, timeoutMs);
       throwIfAborted(signal);
       return this.send(type, payload, tabId);
     }
