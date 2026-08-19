@@ -118,9 +118,10 @@ export async function processContact(
   const resumedStepAttemptLimit = resumedStepId
     ? (checkpoint.steps.find((step) => step.id === resumedStepId)?.attempts ?? 0) + policy.maxAttemptsPerStep
     : policy.maxAttemptsPerStep;
-  // Presupuesto TOTAL por contacto, atravesando Resume. Nunca se renueva una
-  // ventana de tres intentos sólo porque el usuario vuelva a pulsar Reanudar.
-  const openConversationAttemptLimit = policy.maxOpenConversationAttempts ?? Math.min(2, policy.maxAttemptsPerStep);
+  // Presupuesto TOTAL de APERTURAS FALLIDAS por contacto, atravesando Resume.
+  // Las aperturas confirmadas siguen contando en openConversationAttempts para
+  // diagnóstico, pero no bloquean una reconciliación segura posterior.
+  const openConversationFailureLimit = policy.maxOpenConversationAttempts ?? Math.min(2, policy.maxAttemptsPerStep);
 
   const persist = async (next: ContactProcessCheckpoint): Promise<ContactProcessCheckpoint> => {
     const saved = await dependencies.store.saveActive({ ...cloneCheckpoint(next), updatedAt: now() });
@@ -144,7 +145,7 @@ export async function processContact(
   if (checkpoint.status === "completed") return checkpoint;
 
   let opened = false;
-  while (!opened && checkpoint.openConversationAttempts < openConversationAttemptLimit) {
+  while (!opened && (checkpoint.openConversationFailures ?? 0) < openConversationFailureLimit) {
     const cancelledBeforeOpen = await stopAtCancelledWait();
     if (cancelledBeforeOpen) return cancelledBeforeOpen;
     // Una pausa ya existente puede permitir la navegación segura del chat, pero jamás
@@ -164,9 +165,14 @@ export async function processContact(
       const cancelledDuringOpen = await stopAtCancelledWait();
       if (cancelledDuringOpen) return cancelledDuringOpen;
       const normalized = toExtensionError(error);
-      checkpoint = await persist({ ...checkpoint, error: serializeError(normalized) });
+      const openConversationFailures = (checkpoint.openConversationFailures ?? 0) + 1;
+      checkpoint = await persist({
+        ...checkpoint,
+        openConversationFailures,
+        error: serializeError(normalized)
+      });
       const retryWithoutNewEvidence = normalized.details?.retryWithoutNewEvidence !== false;
-      if (!normalized.recoverable || !retryWithoutNewEvidence || checkpoint.openConversationAttempts >= openConversationAttemptLimit) {
+      if (!normalized.recoverable || !retryWithoutNewEvidence || openConversationFailures >= openConversationFailureLimit) {
         checkpoint = await persist({
           ...checkpoint,
           status: normalized.recoverable ? "paused" : "failed",
@@ -175,7 +181,7 @@ export async function processContact(
         return checkpoint;
       }
       if (await pauseRequested()) return pauseAtSafeBoundary();
-      await sleepWithSignal(sleep, retryDelayMs(checkpoint.openConversationAttempts, policy), dependencies.signal);
+      await sleepWithSignal(sleep, retryDelayMs(checkpoint.openConversationFailures ?? 1, policy), dependencies.signal);
       const cancelledDuringRetryDelay = await stopAtCancelledWait();
       if (cancelledDuringRetryDelay) return cancelledDuringRetryDelay;
       if (await pauseRequested()) return pauseAtSafeBoundary();
