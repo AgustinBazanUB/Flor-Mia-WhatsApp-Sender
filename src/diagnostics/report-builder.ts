@@ -153,10 +153,37 @@ function preflightTimeline(trace: TechnicalTraceRecord[]): Record<string, unknow
   };
 }
 
+function openConversationTimeline(trace: TechnicalTraceRecord[]): Array<Record<string, unknown>> {
+  const records = trace.filter((record) => record.action.startsWith("open_conversation."));
+  const byAttempt = new Map<number, TechnicalTraceRecord[]>();
+  for (const record of records) {
+    if (record.attempt === null) continue;
+    const current = byAttempt.get(record.attempt) ?? [];
+    current.push(record);
+    byAttempt.set(record.attempt, current);
+  }
+  return [...byAttempt.entries()]
+    .sort(([a], [b]) => a - b)
+    .slice(-10)
+    .map(([attempt, items]) => ({
+      attempt,
+      stages: items.map((record) => ({
+        stage: record.action.slice("open_conversation.".length),
+        outcome: record.outcome,
+        startedAt: record.timestampStart,
+        completedAt: record.timestampEnd,
+        durationMs: record.durationMs,
+        errorCode: record.errorCode
+      }))
+    }));
+}
+
 function sanitizePreflight(
   preflight: WhatsAppPreflightResult | null,
   sensitiveStrings: string[],
-  trace: TechnicalTraceRecord[]
+  trace: TechnicalTraceRecord[],
+  campaign: CampaignState | null,
+  checkpoint: ContactProcessCheckpoint | null
 ): Record<string, unknown> | null {
   if (!preflight) return null;
   return {
@@ -165,7 +192,15 @@ function sanitizePreflight(
     checkedAt: preflight.checkedAt,
     overallStatus: preflight.overallStatus,
     level: preflight.level,
+    purpose: preflight.purpose,
     requirements: { ...preflight.requirements },
+    diagnosticComposerMutationDetected: preflight.diagnosticComposerMutationDetected,
+    contentGenerationPresent: Boolean(preflight.contentInstanceId),
+    campaignTextPresent: Boolean(campaign?.text && campaign.text.trim()),
+    campaignTextLength: campaign?.text.length ?? 0,
+    textStepCreated: checkpoint?.steps.some((step) => step.kind === "text") ?? false,
+    openConversationAttempts: checkpoint?.openConversationAttempts ?? 0,
+    openConversationTimeline: openConversationTimeline(trace),
     status: preflight.status,
     message: sanitizeDiagnosticText(preflight.message, { sensitiveStrings }),
     pageDetected: preflight.pageDetected,
@@ -199,11 +234,11 @@ function probableFiles(
   trace: TechnicalTraceRecord[]
 ): string[] {
   const errorCode = incident.error?.code ?? null;
-  const actions = new Set(trace.slice(-30).map((record) => record.action));
+  const actions = trace.slice(-30).map((record) => record.action);
   if (errorCode === "CONTACT_CONTEXT_UNVERIFIED"
     || incident.actionAttempted === "openConversation"
-    || actions.has("open_conversation")
-    || actions.has("prove_conversation")) {
+    || actions.some((action) => action === "open_conversation" || action.startsWith("open_conversation."))
+    || actions.includes("prove_conversation")) {
     return [
       "src/whatsapp/conversation-context.ts",
       "src/content/whatsapp.ts",
@@ -287,7 +322,7 @@ export function buildTechnicalReport(input: TechnicalReportInput): TechnicalRepo
     }, sensitiveStrings),
     campaign: sanitizeCampaignForReport(input.campaign, { includeCampaignName: input.includeCampaignName }),
     checkpoint: sanitizeCheckpointForReport(input.checkpoint, sensitiveStrings),
-    preflight: sanitizePreflight(input.state.whatsapp, sensitiveStrings, input.trace),
+    preflight: sanitizePreflight(input.state.whatsapp, sensitiveStrings, input.trace, input.campaign, input.checkpoint),
     compatibility: {
       overallStatus: input.compatibility.overallStatus,
       checkedAt: input.compatibility.checkedAt,
