@@ -26,6 +26,32 @@ function navigation(contentInstanceId = "content-old", navigationRequestId = "na
   return { navigationStarted: true as const, requestedNavigationAt: NOW, contentInstanceId, navigationRequestId };
 }
 
+function withLifecycle<T extends Record<string, unknown>>(transport: T) {
+  const legacyWait = (transport as { waitForContent?: (...args: unknown[]) => Promise<unknown> }).waitForContent;
+  return {
+    waitForNavigationLifecycle: async () => ({
+      observedAt: NOW,
+      loadingAt: NOW,
+      completeAt: NOW,
+      finalStatus: "complete" as const,
+      urlMatched: true
+    }),
+    waitForContentHandshake: async (tabId: number, timeoutMs: number, signal: AbortSignal | undefined, options: {
+      previousContentInstanceId?: string;
+      navigationRequestId?: string;
+    }) => legacyWait
+      ? legacyWait(tabId, timeoutMs, signal, {
+          previousContentInstanceId: options.previousContentInstanceId,
+          purpose: "content_handshake"
+        })
+      : green("content-new"),
+    waitForSemanticReady: async (_tabId: number, _timeoutMs: number, _signal: AbortSignal | undefined, options: {
+      expectedContentInstanceId?: string;
+    }) => green(options.expectedContentInstanceId ?? "content-new"),
+    ...transport
+  };
+}
+
 function checkpoint() {
   return createContactCheckpoint({
     campaignId: "campaign-1",
@@ -68,7 +94,7 @@ describe("active WhatsApp tab binding", () => {
     };
     const adapter = new ChromeWhatsAppContactAdapter({
       getImage: async () => ({ blob: new Blob([new Uint8Array([1, 2, 3])]) }) as never
-    }, fakeTransport as unknown as WhatsAppTransport);
+    }, withLifecycle(fakeTransport) as unknown as WhatsAppTransport);
     const state = checkpoint();
     const context = { checkpoint: state, timeoutMs: 10, imageLoadTimeoutMs: 10, previewTimeoutMs: 10 };
 
@@ -103,7 +129,7 @@ describe("active WhatsApp tab binding", () => {
         throw new Error("unexpected");
       }
     };
-    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, fakeTransport as unknown as WhatsAppTransport);
+    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, withLifecycle(fakeTransport) as unknown as WhatsAppTransport);
     await adapter.openConversation(checkpoint().contact, 100);
 
     expect(waitOptions).toEqual([{ previousContentInstanceId: "content-old", purpose: "content_handshake" }]);
@@ -131,7 +157,7 @@ describe("active WhatsApp tab binding", () => {
         throw new Error("unexpected");
       }
     };
-    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, fakeTransport as unknown as WhatsAppTransport);
+    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, withLifecycle(fakeTransport) as unknown as WhatsAppTransport);
     const contact = checkpoint().contact;
 
     await expect(adapter.openConversation(contact, 20)).rejects.toMatchObject({ code: "INTERFACE_LOADING" });
@@ -157,7 +183,7 @@ describe("active WhatsApp tab binding", () => {
 
     const firstAdapter = new ChromeWhatsAppContactAdapter(
       { getImage: async () => null },
-      fakeTransport as unknown as WhatsAppTransport,
+      withLifecycle(fakeTransport) as unknown as WhatsAppTransport,
       store
     );
     await firstAdapter.openConversation(state.contact, 10);
@@ -166,7 +192,7 @@ describe("active WhatsApp tab binding", () => {
     const recoveredContact = { ...store.active!.contact };
     const recoveredAdapter = new ChromeWhatsAppContactAdapter(
       { getImage: async () => null },
-      fakeTransport as unknown as WhatsAppTransport,
+      withLifecycle(fakeTransport) as unknown as WhatsAppTransport,
       store
     );
     await recoveredAdapter.openConversation(recoveredContact, 10);
@@ -191,7 +217,7 @@ describe("active WhatsApp tab binding", () => {
     };
     const recoveredAdapter = new ChromeWhatsAppContactAdapter(
       { getImage: async () => null },
-      fakeTransport as unknown as WhatsAppTransport,
+      withLifecycle(fakeTransport) as unknown as WhatsAppTransport,
       store
     );
 
@@ -218,7 +244,7 @@ describe("active WhatsApp tab binding", () => {
         return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
       }
     };
-    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, fakeTransport as unknown as WhatsAppTransport);
+    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, withLifecycle(fakeTransport) as unknown as WhatsAppTransport);
     const state = checkpoint();
     await adapter.openConversation(state.contact, 10);
     boundOpen = false;
@@ -251,7 +277,7 @@ describe("active WhatsApp tab binding", () => {
         throw new Error("unexpected");
       }
     };
-    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, fakeTransport as unknown as WhatsAppTransport);
+    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, withLifecycle(fakeTransport) as unknown as WhatsAppTransport);
     const state = checkpoint();
     const context = { checkpoint: state, timeoutMs: 10, imageLoadTimeoutMs: 10, previewTimeoutMs: 10 };
     await adapter.openConversation(state.contact, 10);
