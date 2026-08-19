@@ -20,14 +20,31 @@ async function contactIdForPhone(phoneDigits: string): Promise<string> {
   return `contact-${id}`;
 }
 
-function setComposerText(composer: HTMLElement, message: string): void {
-  const existing = canonicalMessageText(composer.textContent ?? "");
+function normalizeLineEndings(value: string): string {
+  return value.replace(/\r\n?/g, "\n");
+}
+
+function composerPlainText(composer: HTMLElement): string {
+  const innerText = typeof composer.innerText === "string" ? composer.innerText : "";
+  const raw = innerText || composer.textContent || "";
+  return normalizeLineEndings(raw);
+}
+
+async function fingerprintText(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(normalizeLineEndings(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function setComposerText(composer: HTMLElement, message: string): Promise<void> {
+  const existing = canonicalMessageText(composerPlainText(composer));
   if (existing) {
     throw new ExtensionError(
       ERROR_CODES.invalidInput,
       "La conversación tiene un borrador. Vacialo manualmente antes de ejecutar la prueba para no sobrescribirlo."
     );
   }
+  const expected = normalizeLineEndings(message);
   composer.focus();
   const selection = window.getSelection();
   const range = document.createRange();
@@ -35,15 +52,20 @@ function setComposerText(composer: HTMLElement, message: string): void {
   selection?.removeAllRanges();
   selection?.addRange(range);
 
-  const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, message);
-  if (!inserted || canonicalMessageText(composer.textContent ?? "") !== canonicalMessageText(message)) {
-    composer.replaceChildren(document.createTextNode(message));
-    composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: message }));
+  const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, expected);
+  if (!inserted || composerPlainText(composer) !== expected) {
+    composer.replaceChildren(document.createTextNode(expected));
+    const event = typeof InputEvent === "function"
+      ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: expected })
+      : new Event("input", { bubbles: true });
+    composer.dispatchEvent(event);
   }
-  if (canonicalMessageText(composer.textContent ?? "") !== canonicalMessageText(message)) {
+
+  const actual = composerPlainText(composer);
+  if (actual !== expected || await fingerprintText(actual) !== await fingerprintText(expected)) {
     throw capabilityUnavailableError(
       resolveCapability("composer", document, { required: true }).discovery,
-      "WhatsApp localizó el composer, pero no reflejó el texto de forma funcional."
+      "WhatsApp localizó el composer, pero no conservó exactamente el texto preparado por la campaña."
     );
   }
 }
@@ -88,7 +110,7 @@ export async function sendAndVerifyText(input: {
   });
 
   const beforeIds = new Set(outgoingMessages().filter((item) => item.stableIdentity).map((item) => item.identity));
-  setComposerText(composerMatch.element, message);
+  await setComposerText(composerMatch.element, message);
   const sendButton = await waitForCondition(() => findSendButton(), {
     timeoutMs: Math.min(timeoutMs, 10_000),
     description: "la acción de enviar texto"
@@ -107,6 +129,13 @@ export async function sendAndVerifyText(input: {
   }
   await lifecycle.beforeSend?.([...beforeIds]);
   requireConversationContext(phoneDigits);
+  if (composerPlainText(composerMatch.element) !== normalizeLineEndings(message)) {
+    throw new ExtensionError(
+      ERROR_CODES.verificationFailed,
+      "El contenido del composer cambió antes del envío. Se canceló el click para evitar enviar texto incorrecto.",
+      { recoverable: true, details: { sendAttempted: false, expectedLength: message.length } }
+    );
+  }
   sendButton.element.click();
 
   const expected = canonicalMessageText(message);
