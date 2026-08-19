@@ -102,7 +102,13 @@ export interface ContactProcessCheckpoint {
   status: ContactProcessStatus;
   currentStepId: string | null;
   lastConfirmedStepId: string | null;
+  /** Total de aperturas realizadas, útil para diagnóstico. */
   openConversationAttempts: number;
+  /**
+   * Presupuesto de aperturas FALLIDAS. Es opcional para rehidratar checkpoints 0.9.3;
+   * una apertura confirmada no consume este budget y no bloquea reconciliaciones futuras.
+   */
+  openConversationFailures?: number;
   pauseReason?: ContactPauseReason;
   error?: SerializedExtensionError;
   createdAt: string;
