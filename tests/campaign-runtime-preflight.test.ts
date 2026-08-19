@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CampaignRuntime } from "../src/background/campaign-runtime";
 import type { WhatsAppTransport } from "../src/background/whatsapp-transport";
 import type {
@@ -11,7 +11,6 @@ import type {
 import type { CampaignWakeupScheduler } from "../src/campaign/scheduler";
 import { createUnavailablePreflight } from "../src/compatibility/preflight-result";
 import type { WhatsAppPreflightRequest } from "../src/compatibility/types";
-import type { InternalMessageType, InternalRequestMap } from "../src/shared/protocol";
 import type { WhatsAppPreflightResult } from "../src/shared/state";
 import { CampaignBlobStore } from "../src/storage/blob-store";
 import { ContactCheckpointStore } from "../src/storage/checkpoint-store";
@@ -98,6 +97,7 @@ function campaign(): CampaignState {
 function green(request: WhatsAppPreflightRequest): WhatsAppPreflightResult {
   return {
     ...createUnavailablePreflight("fixture", request, { pageDetected: true, contentScriptConnected: true }),
+    contentInstanceId: "fixture-content",
     documentReady: true,
     sessionReady: true,
     mainInterfaceReady: true,
@@ -110,7 +110,7 @@ function green(request: WhatsAppPreflightRequest): WhatsAppPreflightResult {
 
 function runtimeWith(
   preflight: (request: WhatsAppPreflightRequest) => Promise<WhatsAppPreflightResult>,
-  transport: Record<string, unknown>
+  transport: Record<string, unknown> = {}
 ): CampaignRuntime {
   const storage = new MemoryStorage();
   const active = campaign();
@@ -128,48 +128,44 @@ function runtimeWith(
   });
 }
 
-describe("CampaignRuntime contextual preflight", () => {
-  it("opens the exact pending recipient without sending and then runs the full campaign preflight", async () => {
+describe("CampaignRuntime non-destructive startup preflight", () => {
+  it("runs exactly one non-navigating campaign-start preflight with real requirements metadata", async () => {
     const requests: WhatsAppPreflightRequest[] = [];
-    const messages: Array<{ type: InternalMessageType; payload: unknown }> = [];
-    const transport = {
-      requireTab: async () => ({ id: 7 }),
-      send: async <T extends InternalMessageType>(type: T, payload: InternalRequestMap[T]) => {
-        messages.push({ type, payload });
-        return { navigationStarted: true };
-      },
-      waitForContent: async () => green({ level: "lightweight" })
-    };
+    const requireTab = vi.fn(async () => ({ id: 7 }));
+    const send = vi.fn(async () => ({ navigationStarted: true }));
+    const waitForContent = vi.fn(async () => green({ level: "lightweight" }));
     const runtime = runtimeWith(async (request) => {
       requests.push(request);
       return green(request);
-    }, transport);
+    }, { requireTab, send, waitForContent });
 
     const result = await runtime.runCampaignPreflight("campaign-1");
 
     expect(result.overallStatus).toBe("GREEN");
-    expect(requests.map((request) => request.level)).toEqual(["lightweight", "full"]);
-    expect(requests[1]?.requirements).toEqual({ needsText: true, needsImages: false });
-    expect(messages).toEqual([{
-      type: "WA_OPEN_CONVERSATION",
-      payload: {
-        operationId: "preflight:campaign-1:contact-1",
-        phoneDigits: "5491112345678"
-      }
-    }]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      level: "full",
+      purpose: "campaign_start",
+      requirements: { needsText: true, needsImages: false }
+    });
+    expect(requireTab).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(waitForContent).not.toHaveBeenCalled();
   });
 
-  it("does not navigate when the base health check is RED", async () => {
-    let navigations = 0;
+  it("returns a RED startup result without ever selecting or opening a recipient", async () => {
+    const requireTab = vi.fn();
+    const send = vi.fn();
+    const waitForContent = vi.fn();
     const runtime = runtimeWith(async (request) => createUnavailablePreflight("WhatsApp no está abierto", request), {
-      requireTab: async () => ({ id: 7 }),
-      send: async () => { navigations += 1; return { navigationStarted: true }; },
-      waitForContent: async () => createUnavailablePreflight("fixture")
+      requireTab, send, waitForContent
     });
 
     const result = await runtime.runCampaignPreflight("campaign-1");
 
     expect(result.overallStatus).toBe("RED");
-    expect(navigations).toBe(0);
+    expect(requireTab).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(waitForContent).not.toHaveBeenCalled();
   });
 });
