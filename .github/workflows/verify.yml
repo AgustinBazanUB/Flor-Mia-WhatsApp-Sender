@@ -23,8 +23,36 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Diagnostic test pass
+        id: tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          npm run test -- --reporter=verbose 2>&1 | tee test-output.txt
+          code=${PIPESTATUS[0]}
+          exit "$code"
+      - name: Publish failing test file
+        if: always() && github.event_name == 'push' && steps.tests.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          failing=$(grep -E -m1 'FAIL .*\.test\.(ts|tsx|js|mjs)' test-output.txt | sed -E 's/.*(tests\/[^ >]+\.test\.(ts|tsx|js|mjs)).*/\1/' | tr '/.' '--' | cut -c1-70 || true)
+          if [ -z "$failing" ]; then failing="unknown"; fi
+          context="verify/failing-$failing"
+          payload=$(jq -n --arg state failure --arg context "$context" --arg description "Vitest failing file: $failing" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
       - name: Verify
         id: verify
+        continue-on-error: true
         run: npm run verify
       - name: Publish aggregate verify status
         if: always() && github.event_name == 'push'
@@ -42,3 +70,8 @@ jobs:
             --header "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
             --data "$payload"
+      - name: Fail when verify failed
+        if: always()
+        env:
+          VERIFY: ${{ steps.verify.outcome }}
+        run: test "$VERIFY" = success
