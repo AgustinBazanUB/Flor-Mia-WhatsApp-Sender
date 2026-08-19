@@ -28,31 +28,35 @@ jobs:
         run: |
           git config user.name "AgustinBazanUB"
           git config user.email "167490338+AgustinBazanUB@users.noreply.github.com"
-      - name: Apply lifecycle fix
+      - name: Apply, verify and publish P0 repair
+        shell: bash
         run: |
-          node scripts/apply-p0-handshake-fix.mjs core
-          git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts
-          git commit -m "fix: synchronize WhatsApp post-navigation handshake"
-      - name: Add lifecycle regression tests
-        run: |
-          node scripts/apply-p0-handshake-fix.mjs tests
-          git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts
-          git commit -m "test: cover post-navigation content lifecycle"
-      - name: Release 0.9.4.1 metadata
-        run: |
-          node scripts/apply-p0-handshake-fix.mjs version
-          git add manifest.json package.json package-lock.json
-          git commit -m "chore: release 0.9.4.1"
-      - name: Remove one-shot repair helper from final tree
-        run: |
-          git rm scripts/apply-p0-handshake-fix.mjs .github/workflows/p0-handshake-fix.yml
-          git commit -m "chore: remove one-shot handshake repair helper"
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Verify complete extension
-        run: npm run verify
-      - name: Assert generated manifest version
-        run: |
-          node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1") { console.error(m.version); process.exit(1) } console.log(`dist version=${m.version}`)'
-      - name: Push verified commits to main
-        run: git push origin HEAD:main
+          set +e
+          {
+            node scripts/apply-p0-handshake-fix.mjs core &&
+            git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts &&
+            git commit -m "fix: synchronize WhatsApp post-navigation handshake" &&
+            node scripts/apply-p0-handshake-fix.mjs tests &&
+            git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts &&
+            git commit -m "test: cover post-navigation content lifecycle" &&
+            node scripts/apply-p0-handshake-fix.mjs version &&
+            git add manifest.json package.json package-lock.json &&
+            git commit -m "chore: release 0.9.4.1" &&
+            git rm scripts/apply-p0-handshake-fix.mjs .github/workflows/p0-handshake-fix.yml &&
+            git commit -m "chore: remove one-shot handshake repair helper" &&
+            npm ci &&
+            npm run verify &&
+            node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1") { console.error(m.version); process.exit(1) } console.log(`dist version=${m.version}`)'
+          } > /tmp/p0-handshake.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/p0-handshake.log
+          if [ "$result" -ne 0 ]; then
+            git reset --hard "$GITHUB_SHA"
+            cp /tmp/p0-handshake.log p0-verify-failure.log
+            git add p0-verify-failure.log
+            git commit -m "diag: capture P0 handshake verify failure"
+            git push origin HEAD:main
+            exit "$result"
+          fi
+          git push origin HEAD:main
