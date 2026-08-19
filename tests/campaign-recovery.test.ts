@@ -51,7 +51,7 @@ class MemoryDaily implements DailyLimitRepository {
   }
 }
 
-type Outcome = "complete" | "timeout";
+type Outcome = "complete" | "timeout" | "unverified";
 
 function confirmedSteps(steps: ContactStep[]): ContactStep[] {
   return steps.map((step) => ({
@@ -90,6 +90,16 @@ class Runner implements CampaignContactRunner {
           recoverable: true,
           details: { stage: "open_conversation", sendAttempted: false }
         }
+      };
+    }
+    if (this.outcomes.get(checkpoint.contact.contactId) === "unverified") {
+      return {
+        ...checkpoint,
+        status: "completed",
+        currentStepId: null,
+        lastConfirmedStepId: null,
+        steps: checkpoint.steps.map((step) => ({ ...step, status: "confirmed" as const, attempts: 1, completedAt: NOW.toISOString(), verification: { outcome: "sent_unverified" as const, confidence: "unverified" as const, method: "send-click-unverified", observedAt: NOW.toISOString(), sendAttempted: true } })),
+        completedAt: NOW.toISOString()
       };
     }
     return {
@@ -153,8 +163,30 @@ describe("campaign recovery semantics", () => {
     const finished = await test.engine.advance("campaign-recovery");
     expect(finished.status).toBe("completed");
     expect(finished.recipients.map((item) => item.status)).toEqual(["error", "completed"]);
-    expect(campaignRecipientCounters(finished)).toEqual({ total: 2, processed: 2, sent: 1, failed: 1, remaining: 0 });
+    expect(campaignRecipientCounters(finished)).toEqual({ total: 2, processed: 2, sent: 1, confirmedSent: 1, unverifiedSent: 0, failed: 1, remaining: 0 });
     expect(test.daily.state.completedToday).toBe(1);
+    expect(test.runner.calls).toEqual(["contact-1", "contact-2"]);
+  });
+
+  it("treats SENT_UNVERIFIED as terminal sent, increments daily limit and completes without retry", async () => {
+    const test = setup(1);
+    test.runner.outcomes.set("contact-1", "unverified");
+    await test.engine.start("campaign-recovery");
+    const finished = await test.engine.advance("campaign-recovery");
+    expect(finished.status).toBe("completed");
+    expect(finished.recipients[0]).toMatchObject({ status: "completed", deliveryConfidence: "unverified" });
+    expect(campaignRecipientCounters(finished)).toEqual({ total: 1, processed: 1, sent: 1, confirmedSent: 0, unverifiedSent: 1, failed: 0, remaining: 0 });
+    expect(test.daily.state.completedToday).toBe(1);
+  });
+
+  it("completes two contacts with one confirmed and one unverified", async () => {
+    const test = setup(2);
+    test.runner.outcomes.set("contact-2", "unverified");
+    await test.engine.start("campaign-recovery");
+    await test.engine.advance("campaign-recovery");
+    const finished = await test.engine.advance("campaign-recovery");
+    expect(finished.status).toBe("completed");
+    expect(campaignRecipientCounters(finished)).toEqual({ total: 2, processed: 2, sent: 2, confirmedSent: 1, unverifiedSent: 1, failed: 0, remaining: 0 });
     expect(test.runner.calls).toEqual(["contact-1", "contact-2"]);
   });
 
@@ -197,7 +229,7 @@ describe("campaign recovery semantics", () => {
     }));
     campaign.completedRecipients = 97;
 
-    expect(campaignRecipientCounters(campaign)).toEqual({ total: 100, processed: 100, sent: 97, failed: 3, remaining: 0 });
+    expect(campaignRecipientCounters(campaign)).toEqual({ total: 100, processed: 100, sent: 97, confirmedSent: 97, unverifiedSent: 0, failed: 3, remaining: 0 });
     expect(progressForCampaign(campaign)).toEqual({ completed: 100, total: 100, percentage: 100 });
   });
 

@@ -135,8 +135,15 @@ export interface SanitizedCheckpointReport {
     completedAt: string | null;
     verification: {
       outcome: string;
+      confidence: string | null;
       method: string;
       sendAttempted: boolean;
+      verificationElapsedMs: number | null;
+      stableIdObserved: boolean | null;
+      newOutgoingObserved: boolean | null;
+      exactTextObserved: boolean | null;
+      composerConsumed: boolean | null;
+      recipientStillVerified: boolean | null;
     } | null;
     error: SerializedExtensionError | null;
   }>;

@@ -232,8 +232,15 @@ export function sanitizeCheckpointForReport(
       completedAt: step.completedAt ?? null,
       verification: step.verification ? {
         outcome: step.verification.outcome,
+        confidence: step.verification.confidence ?? null,
         method: sanitizeDiagnosticText(step.verification.method, { maxStringLength: 160 }),
-        sendAttempted: step.verification.sendAttempted
+        sendAttempted: step.verification.sendAttempted,
+        verificationElapsedMs: typeof step.verification.details?.verificationElapsedMs === "number" ? step.verification.details.verificationElapsedMs : null,
+        stableIdObserved: typeof step.verification.details?.stableIdObserved === "boolean" ? step.verification.details.stableIdObserved : null,
+        newOutgoingObserved: typeof step.verification.details?.newOutgoingObserved === "boolean" ? step.verification.details.newOutgoingObserved : null,
+        exactTextObserved: typeof step.verification.details?.exactTextObserved === "boolean" ? step.verification.details.exactTextObserved : null,
+        composerConsumed: typeof step.verification.details?.composerConsumed === "boolean" ? step.verification.details.composerConsumed : null,
+        recipientStillVerified: typeof step.verification.details?.recipientStillVerified === "boolean" ? step.verification.details.recipientStillVerified : null
       } : null,
       error: sanitizeError(step.error, { sensitiveStrings })
     })),

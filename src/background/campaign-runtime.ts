@@ -72,9 +72,12 @@ function statusMessage(campaign: CampaignState): string {
   const counters = campaignRecipientCounters(campaign);
   if (campaign.status === "received") return "Campaña recibida. Ejecutá Iniciar cuando WhatsApp esté preparado.";
   if (campaign.status === "completed") {
+    if (counters.unverifiedSent > 0) {
+      return `Campaña completada · ${counters.confirmedSent} confirmados · ${counters.unverifiedSent} enviados sin confirmación · ${counters.failed} con problemas.`;
+    }
     return counters.failed > 0
       ? `Campaña completada · ${counters.sent} enviados · ${counters.failed} con problemas.`
-      : `Campaña completada: ${counters.sent}/${counters.total} enviados.`;
+      : `Campaña completada con éxito: ${counters.sent}/${counters.total} enviados.`;
   }
   if (campaign.status === "stopped") return "Campaña detenida por el usuario. Podés quitarla del emisor cuando no haya un envío ambiguo pendiente.";
   if (campaign.status === "daily_limit_reached") return "Límite diario alcanzado. No se iniciarán más contactos hoy.";
@@ -190,6 +193,8 @@ export class CampaignRuntime {
       completed: counters.sent,
       failed: counters.failed,
       processed: counters.processed,
+      confirmedSent: counters.confirmedSent,
+      unverifiedSent: counters.unverifiedSent,
       retryCycle: campaign.retryCycle ?? 0,
       status: campaign.status,
       errorCategory: campaign.status === "stopped" ? "USER_STOP" : null,

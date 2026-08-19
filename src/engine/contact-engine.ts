@@ -369,6 +369,20 @@ async function applyExecutionResult(
     }));
     return persist({ ...next, status: "running", lastConfirmedStepId: step.id });
   }
+  if (result.outcome === "sent_unverified") {
+    let next = withStep(checkpoint, step.id, (current) => ({
+      ...current,
+      status: "confirmed",
+      completedAt: timestamp,
+      verification: result.verification,
+      error: undefined
+    }));
+    const terminal = next.steps.find((item) => item.id === step.id)!;
+    next = appendHistory(next, technicalRecord(next, terminal, "sent_unverified", timestamp, {
+      verificationMethod: result.verification.method
+    }));
+    return persist({ ...next, status: "running" });
+  }
   if (result.outcome === "ambiguous") {
     let next = withStep(checkpoint, step.id, (current) => ({
       ...current,

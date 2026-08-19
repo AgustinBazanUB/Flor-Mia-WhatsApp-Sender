@@ -262,7 +262,7 @@ function failedTextResult(operationId: string, maskedPhone: string, startedAt: s
     step: "text",
     startedAt,
     completedAt: new Date().toISOString(),
-    verification: { confirmed: false, method: "none" },
+    verification: { confirmed: false, sent: false, outcome: "none", confidence: "none", method: "none", sendAttempted: false },
     error: serializeError(error)
   };
 }

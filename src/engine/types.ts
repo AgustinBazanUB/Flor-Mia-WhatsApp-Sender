@@ -40,7 +40,8 @@ export interface ContactTarget {
 }
 
 export interface StepVerification {
-  outcome: "confirmed" | "not_sent" | "ambiguous";
+  outcome: "confirmed" | "sent_unverified" | "not_sent" | "ambiguous";
+  confidence?: "strong" | "causal" | "unverified";
   method: string;
   observedAt: string;
   sendAttempted: boolean;
@@ -87,7 +88,7 @@ export interface StepTechnicalRecord {
   contactId: string;
   stepId: string;
   attempt: number;
-  result: "started" | "confirmed" | "failed" | "ambiguous" | "not_sent" | "missing_resource";
+  result: "started" | "confirmed" | "sent_unverified" | "failed" | "ambiguous" | "not_sent" | "missing_resource";
   verificationMethod?: string;
   errorCode?: string;
 }
@@ -127,6 +128,7 @@ export interface StepExecutionContext {
 
 export type StepExecutionResult =
   | { outcome: "confirmed"; verification: StepVerification }
+  | { outcome: "sent_unverified"; verification: StepVerification }
   | { outcome: "ambiguous"; verification: StepVerification; error?: SerializedExtensionError }
   | { outcome: "failed"; error: SerializedExtensionError; recoverable: boolean; sendAttempted: false }
   | { outcome: "missing_resource"; error: SerializedExtensionError };

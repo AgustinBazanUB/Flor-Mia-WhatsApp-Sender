@@ -418,17 +418,56 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         timeoutMs: context.timeoutMs,
         checkpointRequired: true
       }, this.requireBoundTabId());
-      if (!result.success || !result.verification.confirmed) {
-        throw new ExtensionError(ERROR_CODES.verificationFailed, "WhatsApp no confirmó el texto saliente.");
+      const sentExecuted = result.verification.sent === true || result.verification.confirmed === true;
+      if (!result.success || !sentExecuted) {
+        throw new ExtensionError(ERROR_CODES.verificationFailed, "WhatsApp no confirmó la ejecución del envío de texto.");
+      }
+      const details = {
+        verificationOutcome: result.verification.outcome,
+        verificationConfidence: result.verification.confidence,
+        verificationElapsedMs: result.verification.verificationElapsedMs ?? null,
+        stableIdObserved: result.verification.stableIdObserved === true,
+        newOutgoingObserved: result.verification.newOutgoingObserved === true,
+        exactTextObserved: result.verification.exactTextObserved === true,
+        composerConsumed: result.verification.composerConsumed === true,
+        recipientStillVerified: result.verification.recipientStillVerified === true,
+        sendAttempted: true,
+        observerMutationCount: result.verification.observerMutationCount ?? 0,
+        candidateOutgoingCount: result.verification.candidateOutgoingCount ?? 0,
+        sendClickAt: result.verification.sendClickAt ?? null,
+        firstOutgoingMutationAt: result.verification.firstOutgoingMutationAt ?? null,
+        strongConfirmedAt: result.verification.strongConfirmedAt ?? null,
+        causalConfirmedAt: result.verification.causalConfirmedAt ?? null,
+        verificationTimeoutAt: result.verification.verificationTimeoutAt ?? null
+      };
+      if (result.verification.outcome === "sent_unverified") {
+        return {
+outcome: "sent_unverified",
+verification: {
+  outcome: "sent_unverified",
+  confidence: "unverified",
+  method: result.verification.method,
+  observedAt: result.verification.observedAt ?? result.completedAt,
+  sendAttempted: true,
+  details
+}
+        };
+      }
+      if (!result.verification.confirmed) {
+        throw new ExtensionError(ERROR_CODES.verificationFailed, "WhatsApp no confirmó el texto saliente.", {
+details: { ...details, sendAttempted: true }
+        });
       }
       return {
         outcome: "confirmed",
         verification: {
-          outcome: "confirmed",
-          method: result.verification.method,
-          observedAt: result.completedAt,
-          sendAttempted: true,
-          ...(result.verification.messageElementId ? { outgoingMessageId: result.verification.messageElementId } : {})
+outcome: "confirmed",
+confidence: result.verification.confidence === "strong" ? "strong" : "causal",
+method: result.verification.method,
+observedAt: result.verification.observedAt ?? result.completedAt,
+sendAttempted: true,
+...(result.verification.messageElementId ? { outgoingMessageId: result.verification.messageElementId } : {}),
+details
         }
       };
     } catch (error) {

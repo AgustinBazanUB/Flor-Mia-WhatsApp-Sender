@@ -41,9 +41,27 @@ export interface WhatsAppPreflightResult {
 
 export interface TextVerification {
   confirmed: boolean;
-  method: "new-outgoing-message-dom" | "none";
+  sent: boolean;
+  outcome: "confirmed_strong" | "confirmed_causal" | "sent_unverified" | "none";
+  confidence: "strong" | "causal" | "unverified" | "none";
+  method: "new-outgoing-message-stable-dom" | "new-outgoing-node-after-click" | "send-click-unverified" | "none";
+  observedAt?: string;
   matchedTextLength?: number;
   messageElementId?: string;
+  stableIdObserved?: boolean;
+  newOutgoingObserved?: boolean;
+  exactTextObserved?: boolean;
+  composerConsumed?: boolean;
+  recipientStillVerified?: boolean;
+  sendAttempted?: boolean;
+  verificationElapsedMs?: number;
+  observerMutationCount?: number;
+  candidateOutgoingCount?: number;
+  sendClickAt?: string;
+  firstOutgoingMutationAt?: string;
+  strongConfirmedAt?: string;
+  causalConfirmedAt?: string;
+  verificationTimeoutAt?: string;
 }
 
 export interface TextTestResult {

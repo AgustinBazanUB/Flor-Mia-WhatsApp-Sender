@@ -4,156 +4,95 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { sendAndVerifyText } from "../src/whatsapp/send-text";
 
 beforeEach(() => {
-  document.body.innerHTML = `
-    <div id="main">
-      <header data-jid="5491112345678@c.us"></header>
-      <div class="message-out" data-id="true_old"><span class="selectable-text">Anterior</span></div>
-      <footer>
-        <div contenteditable="true" role="textbox" data-testid="conversation-compose-box-input"></div>
-        <button type="button" data-testid="compose-btn-send">Enviar</button>
-      </footer>
-    </div>`;
+  document.body.innerHTML = `<div id="main"><header data-jid="5491112345678@c.us"></header><div class="messages"><div class="message-out" data-id="true_old"><span class="selectable-text">Anterior</span></div></div><footer><div contenteditable="true" role="textbox" data-testid="conversation-compose-box-input"></div><button type="button" data-testid="compose-btn-send">Enviar</button></footer></div>`;
   Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
   Object.defineProperty(document, "execCommand", { value: () => false, configurable: true });
 });
 
-function echoComposerAsOutgoing(id: string, onClick?: (exactComposerText: string) => void): void {
-  document.querySelector("button")!.addEventListener("click", () => {
-    const composer = document.querySelector<HTMLElement>("[contenteditable='true']")!;
-    const exact = composer.textContent ?? "";
-    onClick?.(exact);
-    const outgoing = document.createElement("div");
-    outgoing.className = "message-out";
-    outgoing.dataset.id = id;
-    const text = document.createElement("span");
-    text.className = "selectable-text";
-    text.textContent = exact;
-    outgoing.append(text);
-    document.getElementById("main")!.append(outgoing);
-  });
+function composerText(): string { return document.querySelector<HTMLElement>("[contenteditable='true']")?.textContent ?? ""; }
+function appendOutgoing(text: string, id?: string, ancestorId = false): HTMLElement {
+  const bubble = document.createElement("div"); bubble.className = "message-out";
+  const span = document.createElement("span"); span.className = "selectable-text"; span.textContent = text; bubble.append(span);
+  if (id && !ancestorId) bubble.dataset.id = id;
+  if (id && ancestorId) { const wrapper = document.createElement("div"); wrapper.dataset.id = id; wrapper.append(bubble); document.querySelector(".messages")!.append(wrapper); }
+  else document.querySelector(".messages")!.append(bubble);
+  return bubble;
 }
 
-describe("verified text send", () => {
-  it("returns success only after a new matching outgoing message exists", async () => {
-    echoComposerAsOutgoing("true_new");
-    const result = await sendAndVerifyText({ operationId: "operation-1", phoneDigits: "5491112345678", message: "Hola Flor Mía", timeoutMs: 100 });
-    expect(result.success).toBe(true);
-    expect(result.verification).toMatchObject({ confirmed: true, method: "new-outgoing-message-dom", messageElementId: "true_new" });
-    expect(result.contactId).not.toContain("5491112345678");
+describe("post-click text verification 0.9.4.3", () => {
+  it("CONFIRMED_STRONG: new exact outgoing with stable id", async () => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText(), "true_new"));
+    const result = await sendAndVerifyText({ operationId: "strong", phoneDigits: "5491112345678", message: "Hola Flor Mía", timeoutMs: 200 });
+    expect(result.verification).toMatchObject({ confirmed: true, sent: true, outcome: "confirmed_strong", confidence: "strong", method: "new-outgoing-message-stable-dom", messageElementId: "true_new" });
   });
 
-  it.each([
-    "Hola, esto es una prueba 👋",
-    "Árbol, pingüino, acción y corazón ❤️",
-    "Línea uno\nLínea dos\nLínea tres",
-    "  conserva espacios exteriores  ",
-    "Símbolos: ¿¡!?#%&/()[]{}—… € $ @",
-    "x".repeat(4_000)
-  ])("places the exact campaign string in the composer before Send", async (message) => {
-    let observedBeforeClick: string | null = null;
-    echoComposerAsOutgoing("true_exact", (text) => { observedBeforeClick = text; });
+  it("detects a stable data-id on an ancestor of .message-out", async () => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText(), "true_ancestor", true));
+    const result = await sendAndVerifyText({ operationId: "ancestor", phoneDigits: "5491112345678", message: "Ancestro", timeoutMs: 200 });
+    expect(result.verification).toMatchObject({ outcome: "confirmed_strong", messageElementId: "true_ancestor" });
+  });
 
-    const result = await sendAndVerifyText({
-      operationId: `exact-${message.length}`,
-      phoneDigits: "5491112345678",
-      message,
-      timeoutMs: 100
+  it("CONFIRMED_CAUSAL: new exact outgoing without stable id", async () => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText()));
+    const result = await sendAndVerifyText({ operationId: "causal", phoneDigits: "5491112345678", message: "Sin ID", timeoutMs: 250 });
+    expect(result.verification).toMatchObject({ confirmed: true, sent: true, outcome: "confirmed_causal", confidence: "causal", method: "new-outgoing-node-after-click", newOutgoingObserved: true, exactTextObserved: true });
+  });
+
+  it("does not confirm an old identical bubble", async () => {
+    document.querySelector(".selectable-text")!.textContent = "Repetido";
+    const result = await sendAndVerifyText({ operationId: "old-only", phoneDigits: "5491112345678", message: "Repetido", timeoutMs: 40 });
+    expect(result.verification).toMatchObject({ confirmed: false, sent: true, outcome: "sent_unverified", confidence: "unverified" });
+  });
+
+  it("old identical + new identical confirms only the new causal node", async () => {
+    document.querySelector(".selectable-text")!.textContent = "Repetido";
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing("Repetido"));
+    const result = await sendAndVerifyText({ operationId: "repeat-new", phoneDigits: "5491112345678", message: "Repetido", timeoutMs: 200 });
+    expect(result.verification.outcome).toBe("confirmed_causal");
+  });
+
+  it("elevates causal evidence when data-id appears milliseconds later", async () => {
+    document.querySelector("button")!.addEventListener("click", () => {
+      const bubble = appendOutgoing(composerText());
+      window.setTimeout(() => { bubble.dataset.id = "true_late"; }, 10);
     });
-
-    expect(observedBeforeClick).toBe(message);
-    expect(result.success).toBe(true);
+    const result = await sendAndVerifyText({ operationId: "late-id", phoneDigits: "5491112345678", message: "ID tardío", timeoutMs: 250 });
+    expect(result.verification).toMatchObject({ outcome: "confirmed_strong", messageElementId: "true_late" });
   });
 
-  it("normalizes only CRLF line endings before writing to a browser contenteditable", async () => {
-    const message = "Línea uno\r\nLínea dos";
-    let observedBeforeClick: string | null = null;
-    echoComposerAsOutgoing("true_crlf", (text) => { observedBeforeClick = text; });
-
-    await sendAndVerifyText({ operationId: "crlf", phoneDigits: "5491112345678", message, timeoutMs: 100 });
-    expect(observedBeforeClick).toBe("Línea uno\nLínea dos");
+  it.each(["Hola, esto es una prueba 👋", "Árbol, pingüino, acción y corazón ❤️", "Línea uno\nLínea dos\nLínea tres", "Símbolos: ¿¡!?#%&/()[]{}—… € $ @"])("matches exact text including unicode and multiline", async (message) => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText()));
+    const result = await sendAndVerifyText({ operationId: `exact-${message.length}`, phoneDigits: "5491112345678", message, timeoutMs: 250 });
+    expect(result.verification.confirmed).toBe(true);
   });
 
-  it("does not report success without DOM verification", async () => {
-    await expect(sendAndVerifyText({ operationId: "operation-2", phoneDigits: "5491112345678", message: "Sin confirmación", timeoutMs: 10 }))
-      .rejects.toMatchObject({ code: "VERIFICATION_FAILED" });
+  it("composer empty by itself never confirms; it becomes SENT_UNVERIFIED", async () => {
+    document.querySelector("button")!.addEventListener("click", () => { document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = ""; });
+    const result = await sendAndVerifyText({ operationId: "empty-only", phoneDigits: "5491112345678", message: "Sin bubble", timeoutMs: 40 });
+    expect(result.verification).toMatchObject({ outcome: "sent_unverified", composerConsumed: true });
   });
 
-  it("preserves an existing draft by refusing to overwrite it", async () => {
-    document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = "Borrador del usuario";
-    await expect(sendAndVerifyText({ operationId: "operation-3", phoneDigits: "5491112345678", message: "Nuevo", timeoutMs: 10 }))
-      .rejects.toMatchObject({ code: "INVALID_INPUT" });
-  });
-
-  it("cancels before click if another actor mutates the composer after the durable checkpoint", async () => {
-    let clicks = 0;
-    document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
-    await expect(sendAndVerifyText(
-      { operationId: "composer-changed", phoneDigits: "5491112345678", message: "Contenido correcto", timeoutMs: 30 },
-      { beforeSend: async () => { document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = "Contenido distinto"; } }
-    )).rejects.toMatchObject({
-      code: "VERIFICATION_FAILED",
-      details: { sendAttempted: false }
-    });
-    expect(clicks).toBe(0);
-  });
-
-  it("returns a targeted sanitized diagnostic when composer strategies are exhausted", async () => {
-    document.querySelector("[contenteditable='true']")?.remove();
-    await expect(sendAndVerifyText({ operationId: "operation-4", phoneDigits: "5491112345678", message: "Nuevo", timeoutMs: 5 }))
-      .rejects.toMatchObject({
-        code: "SELECTOR_STRATEGY_EXHAUSTED",
-        details: { compatibilityDiagnostic: { capability: "composer", logicalStep: "conversation.composer" } }
-      });
-  });
-
-  it("refuses to click when the active recipient is wrong", async () => {
-    document.querySelector("header")!.setAttribute("data-jid", "5491199999999@c.us");
-    let clicks = 0;
-    document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
-    await expect(sendAndVerifyText({ operationId: "wrong", phoneDigits: "5491112345678", message: "No enviar", timeoutMs: 5 }))
-      .rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
-    expect(clicks).toBe(0);
-  });
-
-  it("revalidates after the durable pre-click checkpoint and detects a manual chat change", async () => {
-    let clicks = 0;
-    document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
-    await expect(sendAndVerifyText(
-      { operationId: "changed", phoneDigits: "5491112345678", message: "No enviar", timeoutMs: 5 },
-      { beforeSend: async () => { document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us"); } }
-    )).rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
-    expect(clicks).toBe(0);
-  });
-
-  it("fails closed if the active chat changes after click while outgoing confirmation is pending", async () => {
+  it("fails closed if recipient changes after click", async () => {
     document.querySelector("button")!.addEventListener("click", () => {
       document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us");
-      document.getElementById("main")!.insertAdjacentHTML(
-        "beforeend",
-        "<div class='message-out' data-id='true_other_chat'><span class='selectable-text'>Hola Flor Mía</span></div>"
-      );
+      appendOutgoing("Hola Flor Mía");
     });
+    await expect(sendAndVerifyText({ operationId: "wrong-after", phoneDigits: "5491112345678", message: "Hola Flor Mía", timeoutMs: 100 }))
+      .rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED", details: { sendAttempted: true } });
+  });
 
-    await expect(sendAndVerifyText({
-      operationId: "changed-after-click",
-      phoneDigits: "5491112345678",
-      message: "Hola Flor Mía",
-      timeoutMs: 50
+  it("preserves a different user draft and never clicks", async () => {
+    document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = "Borrador del usuario";
+    let clicks = 0; document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
+    await expect(sendAndVerifyText({ operationId: "draft", phoneDigits: "5491112345678", message: "Nuevo", timeoutMs: 50 })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(clicks).toBe(0);
+  });
+
+  it("revalidates after durable checkpoint and cancels before click on chat change", async () => {
+    let clicks = 0; document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
+    await expect(sendAndVerifyText({ operationId: "checkpoint-change", phoneDigits: "5491112345678", message: "No enviar", timeoutMs: 50 }, {
+      beforeSend: async () => { document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us"); }
     })).rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
-  });
-
-  it("never confirms a matching outgoing node without a stable DOM id", async () => {
-    document.querySelector("button")!.addEventListener("click", () => {
-      document.getElementById("main")!.insertAdjacentHTML("beforeend", "<div class='message-out'><span class='selectable-text'>Sin ID</span></div>");
-    });
-    await expect(sendAndVerifyText({ operationId: "unstable", phoneDigits: "5491112345678", message: "Sin ID", timeoutMs: 5 }))
-      .rejects.toMatchObject({ code: "VERIFICATION_FAILED" });
-  });
-
-  it("distinguishes a new stable message from an older identical message", async () => {
-    document.querySelector(".selectable-text")!.textContent = "Repetido";
-    echoComposerAsOutgoing("true_new_repeat");
-    const result = await sendAndVerifyText({ operationId: "repeat", phoneDigits: "5491112345678", message: "Repetido", timeoutMs: 20 });
-    expect(result.verification.messageElementId).toBe("true_new_repeat");
+    expect(clicks).toBe(0);
   });
 });

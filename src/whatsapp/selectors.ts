@@ -359,28 +359,36 @@ export interface OutgoingMediaSnapshot {
 }
 
 function normalizeMessageText(value: string): string {
-  return value.replace(/\u200e|\u200f/g, "").replace(/\s+/g, " ").trim();
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u200e\u200f]/g, "")
+    .replace(/\u00a0/g, " ");
 }
 
 export function outgoingMessages(root: ParentNode = document): OutgoingMessageSnapshot[] {
-  const candidates = root.querySelectorAll<HTMLElement>(
-    "#main .message-out, #main [data-id^='true_'], #main [data-testid='msg-container']"
-  );
+  const selector = ".message-out, [data-id^='true_'], [data-testid='msg-container']";
+  const candidates: HTMLElement[] = [];
+  if (root instanceof HTMLElement && root.matches(selector)) candidates.push(root);
+  if ("querySelectorAll" in root) candidates.push(...root.querySelectorAll<HTMLElement>(selector));
   const seen = new Set<HTMLElement>();
   const result: OutgoingMessageSnapshot[] = [];
   for (const candidate of candidates) {
-    const container = candidate.closest<HTMLElement>(".message-out, [data-id^='true_']") ?? candidate;
-    const dataId = container.getAttribute("data-id") ?? "";
-    const isOutgoing = container.classList.contains("message-out") || dataId.startsWith("true_");
-    if (!isOutgoing || seen.has(container)) continue;
-    seen.add(container);
-    const textElement = container.querySelector<HTMLElement>("[data-testid='msg-text'], .selectable-text") ?? container;
-    const stableIdentity = dataId || container.id;
+    const bubble = candidate.classList.contains("message-out")
+      ? candidate
+      : candidate.querySelector<HTMLElement>(".message-out") ?? candidate.closest<HTMLElement>(".message-out") ?? candidate;
+    const stableContainer = bubble.closest<HTMLElement>("[data-id^='true_']")
+      ?? (candidate.matches("[data-id^='true_']") ? candidate : candidate.closest<HTMLElement>("[data-id^='true_']"));
+    const dataId = stableContainer?.getAttribute("data-id") ?? "";
+    const isOutgoing = bubble.classList.contains("message-out") || dataId.startsWith("true_");
+    if (!isOutgoing || seen.has(bubble)) continue;
+    seen.add(bubble);
+    const textElement = bubble.querySelector<HTMLElement>("[data-testid='msg-text'], .selectable-text") ?? bubble;
+    const stableIdentity = dataId || bubble.id || "";
     result.push({
       identity: stableIdentity || `observation-outgoing-${result.length}-${normalizeMessageText(textElement.textContent ?? "").length}`,
       stableIdentity: Boolean(stableIdentity),
       text: normalizeMessageText(textElement.textContent ?? ""),
-      element: container
+      element: bubble
     });
   }
   return result;

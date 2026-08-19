@@ -258,7 +258,8 @@ export class CampaignEngine {
 
   private async applyCompletedCheckpoint(
     campaign: CampaignState,
-    recipient: CampaignState["recipients"][number]
+    recipient: CampaignState["recipients"][number],
+    checkpoint: ContactProcessCheckpoint
   ): Promise<CampaignState> {
     await this.completionFault("after_contact_completed");
     const daily = await this.dependencies.dailyLimit.recordCompletion(
@@ -268,8 +269,9 @@ export class CampaignEngine {
     );
     await this.completionFault("after_daily_increment");
     const completedAt = this.now().toISOString();
+    const deliveryConfidence = checkpoint.steps.some((step) => step.verification?.outcome === "sent_unverified") ? "unverified" as const : "confirmed" as const;
     const recipients = campaign.recipients.map((item) => item.recipientId === recipient.recipientId
-      ? { ...item, status: "completed" as const, completedAt, error: undefined, failure: undefined }
+      ? { ...item, status: "completed" as const, completedAt, error: undefined, failure: undefined, deliveryConfidence }
       : item);
     const allProcessed = recipients.every((item) => terminalRecipient(item.status));
     const processedInBatch = campaign.contactsCompletedInBatch + 1;
@@ -541,7 +543,7 @@ export class CampaignEngine {
         return campaign;
       }
       if (checkpointRecipient && campaign.activeContactId === checkpointRecipient.recipientId) {
-        return this.applyCompletedCheckpoint(campaign, checkpointRecipient);
+        return this.applyCompletedCheckpoint(campaign, checkpointRecipient, checkpoint);
       }
     }
     if (TERMINAL_STATUSES.has(campaign.status)) return campaign;
@@ -698,7 +700,7 @@ export class CampaignEngine {
     campaign = await this.requireCampaign(campaignId);
     recipient = campaign.recipients.find((item) => item.recipientId === campaign.activeContactId) ?? recipient;
     if (checkpoint.status === "completed") {
-      return this.applyCompletedCheckpoint(campaign, recipient);
+      return this.applyCompletedCheckpoint(campaign, recipient, checkpoint);
     }
 
     if (hasUnresolvedSendEvidence(checkpoint)) {

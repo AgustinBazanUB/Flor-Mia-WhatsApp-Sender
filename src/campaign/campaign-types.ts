@@ -66,6 +66,7 @@ export interface CampaignRecipientState {
   completedAt?: string;
   error?: SerializedExtensionError;
   failure?: CampaignRecipientFailure;
+  deliveryConfidence?: "confirmed" | "unverified";
 }
 
 export interface CampaignImageAsset {
@@ -172,6 +173,8 @@ export interface CampaignPublicStatus {
   progressPercentage: number;
   processed: number;
   sent: number;
+  confirmedSent: number;
+  unverifiedSent: number;
   failed: number;
   total: number;
   remaining: number;
@@ -222,6 +225,8 @@ export interface FinalCampaignSummary {
   total: number;
   processed: number;
   sent: number;
+  confirmedSent: number;
+  unverifiedSent: number;
   failed: number;
   durationMs: number;
   batches: number;
@@ -239,6 +244,8 @@ export interface CampaignHistoryRecord {
   completed: number;
   failed?: number;
   processed?: number;
+  confirmedSent?: number;
+  unverifiedSent?: number;
   retryCycle?: number;
   status: Extract<CampaignStatus, "completed" | "stopped">;
   errorCategory: DiagnosticErrorCategory | null;
