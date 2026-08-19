@@ -31,6 +31,40 @@ function chromeFor(sendMessage = vi.fn()) {
 if old not in source:
     raise RuntimeError("expected chromeFor test block was not found")
 source = source.replace(old, new, 1)
+
+old_navigation_timeout = '''    const waiting = transport.waitForNavigationLifecycle(7, 500, undefined, { expectedPhoneDigits: "5491112345678" });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(waiting).rejects.toMatchObject({ code: ERROR_CODES.timeout, details: { stage: "navigation" } });'''
+new_navigation_timeout = '''    const waiting = transport.waitForNavigationLifecycle(7, 500, undefined, { expectedPhoneDigits: "5491112345678" });
+    const rejected = expect(waiting).rejects.toMatchObject({ code: ERROR_CODES.timeout, details: { stage: "navigation" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await rejected;'''
+if old_navigation_timeout not in source:
+    raise RuntimeError("expected navigation timeout test block was not found")
+source = source.replace(old_navigation_timeout, new_navigation_timeout, 1)
+
+old_handshake_timeout = '''    const waiting = transport.waitForContentHandshake(7, 900, undefined, {
+      previousContentInstanceId: "content-old",
+      navigationRequestId: "nav-timeout"
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(waiting).rejects.toMatchObject({
+      code: ERROR_CODES.timeout,
+      details: { stage: "content_handshake", contentGenerationChanged: false }
+    });'''
+new_handshake_timeout = '''    const waiting = transport.waitForContentHandshake(7, 900, undefined, {
+      previousContentInstanceId: "content-old",
+      navigationRequestId: "nav-timeout"
+    });
+    const rejected = expect(waiting).rejects.toMatchObject({
+      code: ERROR_CODES.timeout,
+      details: { stage: "content_handshake", contentGenerationChanged: false }
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejected;'''
+if old_handshake_timeout not in source:
+    raise RuntimeError("expected handshake timeout test block was not found")
+source = source.replace(old_handshake_timeout, new_handshake_timeout, 1)
 test_path.write_text(source, encoding="utf-8")
 
 transport_path = Path("src/background/whatsapp-transport.ts")
