@@ -19,41 +19,45 @@
       <section class="card status-card" aria-live="polite">
         <div class="status-card__heading">
           <div>
-            <span class="eyebrow">Estado</span>
-            <strong id="extension-status"><span class="status-dot is-error"></span>🔴 ROJO</strong>
+            <span class="eyebrow">Conexión con WhatsApp</span>
+            <strong id="extension-status"><span class="status-dot is-error"></span>Comprobando…</strong>
           </div>
-          <button id="diagnostic-button" class="button button--secondary" type="button">Ejecutar diagnóstico</button>
+          <button id="diagnostic-button" class="button button--secondary" type="button">Revisar conexión</button>
         </div>
-        <p id="status-message">Consultando el estado de la extensión…</p>
-        <p id="compatibility-failure" class="process-alert" hidden></p>
-        <p id="compatibility-drift" class="compatibility-drift" hidden></p>
-        <dl class="diagnostic-grid">
-          <div><dt>WhatsApp Web</dt><dd id="whatsapp-page">—</dd></div>
-          <div><dt>Sesión</dt><dd id="whatsapp-session">—</dd></div>
-          <div><dt>Interfaz</dt><dd id="whatsapp-interface">—</dd></div>
-          <div><dt>Multimedia</dt><dd id="whatsapp-multimedia">—</dd></div>
-        </dl>
+        <p id="status-message">Consultando la conexión con WhatsApp Web…</p>
+
         <details class="technical-details">
-          <summary>Capabilities técnicas</summary>
-          <ul id="capability-list" class="capability-list"></ul>
+          <summary>Detalles técnicos y soporte</summary>
+          <p id="compatibility-failure" class="process-alert" hidden></p>
+          <p id="compatibility-drift" class="compatibility-drift" hidden></p>
+          <dl class="diagnostic-grid">
+            <div><dt>WhatsApp Web</dt><dd id="whatsapp-page">—</dd></div>
+            <div><dt>Sesión</dt><dd id="whatsapp-session">—</dd></div>
+            <div><dt>Interfaz</dt><dd id="whatsapp-interface">—</dd></div>
+            <div><dt>Multimedia</dt><dd id="whatsapp-multimedia">—</dd></div>
+          </dl>
+          <details class="technical-details">
+            <summary>Compatibilidad técnica</summary>
+            <ul id="capability-list" class="capability-list"></ul>
+          </details>
+          <div class="compatibility-harness">
+            <label for="compatibility-fault">Simulación de compatibilidad (desarrollo)</label>
+            <select id="compatibility-fault">
+              <option value="none">Sin simulación</option>
+              <option value="primary_strategy_unavailable">Primario falla, usar fallback</option>
+              <option value="attachment_capability_break">Adjuntos sin estrategias</option>
+              <option value="next_health_check_break">Pausar en el próximo health check</option>
+            </select>
+            <button id="arm-compatibility-fault" class="button button--secondary" type="button">Aplicar escenario</button>
+            <small>Herramienta de desarrollo. La Web App no puede activarla.</small>
+          </div>
         </details>
-        <div class="compatibility-harness">
-          <label for="compatibility-fault">Simulación de compatibilidad (desarrollo)</label>
-          <select id="compatibility-fault">
-            <option value="none">Sin simulación</option>
-            <option value="primary_strategy_unavailable">Primario falla, usar fallback</option>
-            <option value="attachment_capability_break">Adjuntos sin estrategias → ROJO</option>
-            <option value="next_health_check_break">Pausar en el próximo health check</option>
-          </select>
-          <button id="arm-compatibility-fault" class="button button--secondary" type="button">Aplicar escenario</button>
-          <small>Solo afecta controles iniciados desde este popup; la Web-App no puede activarlo.</small>
-        </div>
       </section>
 
       <section id="campaign-card" class="card campaign-card" aria-live="polite">
         <div class="campaign-heading">
           <div>
-            <span class="eyebrow">Campaña activa</span>
+            <span class="eyebrow">Campaña</span>
             <h2 id="campaign-name">Sin campaña recibida</h2>
           </div>
           <strong id="campaign-status" class="campaign-status">—</strong>
@@ -81,80 +85,89 @@
       <section id="incident-card" class="card incident-card" aria-live="polite" hidden>
         <div class="incident-heading">
           <div>
-            <span class="eyebrow">Incidente técnico</span>
-            <h2 id="incident-title">ERROR</h2>
+            <span class="eyebrow">Atención</span>
+            <h2>Necesita revisión</h2>
           </div>
-          <strong id="incident-category" class="incident-category">—</strong>
         </div>
-        <dl class="incident-grid">
-          <div><dt>Campaña</dt><dd id="incident-campaign">—</dd></div>
-          <div><dt>Contacto</dt><dd id="incident-contact">—</dd></div>
-          <div><dt>Contacto técnico</dt><dd id="incident-recipient-id">—</dd></div>
-          <div><dt>Teléfono</dt><dd id="incident-phone">—</dd></div>
-          <div><dt>Paso</dt><dd id="incident-step">—</dd></div>
-          <div><dt>Intentos</dt><dd id="incident-attempts">—</dd></div>
-          <div><dt>Último confirmado</dt><dd id="incident-last-confirmed">—</dd></div>
-          <div><dt>Semáforo</dt><dd id="incident-overall">—</dd></div>
-          <div class="incident-grid__wide"><dt>Capability</dt><dd id="incident-capability">—</dd></div>
-          <div class="incident-grid__wide"><dt>Resultado</dt><dd id="incident-result">—</dd></div>
-        </dl>
-        <button id="generate-report" class="button button--danger button--wide" type="button">Generar reporte para Codex</button>
-        <small>El reporte se genera y se sanea localmente. No se envía automáticamente.</small>
-      </section>
-
-      <section class="card">
-        <div class="section-heading">
-          <span class="eyebrow">Modo manual</span>
-          <h2>Motor de un contacto</h2>
-          <p>Probá texto, una imagen + texto o tres imágenes + texto. Cada archivo se envía y verifica por separado.</p>
-        </div>
-        <form id="test-form" novalidate>
-          <label for="phone">Teléfono internacional</label>
-          <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="+5491112345678" required />
-          <small>Incluí <b>+</b> y el código de país. La extensión no asume ningún país.</small>
-
-          <label for="images">Imágenes en orden</label>
-          <input id="images" name="images" type="file" accept="image/*" multiple />
-          <small id="image-count">0 / 3 imágenes</small>
-
-          <label for="message">Mensaje de prueba</label>
-          <textarea id="message" name="message" rows="4" maxlength="4096" placeholder="Texto opcional si seleccionaste imágenes"></textarea>
-
-          <label for="fault-injection">Inyección de fallos (solo desarrollo)</label>
-          <select id="fault-injection" name="fault-injection">
-            <option value="none">Sin fallos simulados</option>
-            <option value="image-2-fail-once">Imagen 2 falla una vez</option>
-            <option value="image-2-fail-always">Imagen 2 falla tres veces</option>
-            <option value="image-2-timeout-once">Timeout de imagen 2</option>
-            <option value="image-2-attachment-fail-once">Adjunto de imagen 2 falla</option>
-            <option value="image-2-preview-fail-once">Preview de imagen 2 falla</option>
-            <option value="image-2-ambiguous">Verificación de imagen 2 queda ambigua</option>
-            <option value="image-1-missing">Imagen 1 temporal perdida</option>
-          </select>
-          <div class="form-footer">
-            <span id="character-count">0 / 4096</span>
-            <button id="send-button" class="button button--primary" type="submit">Procesar contacto de prueba</button>
+        <p id="incident-result">La campaña quedó protegida hasta poder continuar de forma segura.</p>
+        <details class="technical-details">
+          <summary>Detalles técnicos</summary>
+          <div class="incident-heading">
+            <strong id="incident-title">PAUSA</strong>
+            <strong id="incident-category" class="incident-category">—</strong>
           </div>
-        </form>
+          <dl class="incident-grid">
+            <div><dt>Campaña</dt><dd id="incident-campaign">—</dd></div>
+            <div><dt>Contacto</dt><dd id="incident-contact">—</dd></div>
+            <div><dt>ID de correlación</dt><dd id="incident-recipient-id">—</dd></div>
+            <div><dt>Teléfono</dt><dd id="incident-phone">—</dd></div>
+            <div><dt>Paso</dt><dd id="incident-step">—</dd></div>
+            <div><dt>Intentos</dt><dd id="incident-attempts">—</dd></div>
+            <div><dt>Último confirmado</dt><dd id="incident-last-confirmed">—</dd></div>
+            <div><dt>Compatibilidad</dt><dd id="incident-overall">—</dd></div>
+            <div class="incident-grid__wide"><dt>Capability</dt><dd id="incident-capability">—</dd></div>
+          </dl>
+        </details>
+        <button id="generate-report" class="button button--secondary button--wide" type="button">Generar reporte para soporte</button>
+        <small>El reporte se genera y sanea localmente. No se envía automáticamente.</small>
       </section>
 
-      <section class="card process-card" aria-live="polite">
-        <span class="eyebrow">Checkpoint del contacto</span>
-        <p id="process-summary" class="empty-result">Todavía no hay un contacto procesado por el motor del Prompt 2.</p>
-        <ul id="process-steps" class="process-steps"></ul>
-        <p id="process-alert" class="process-alert" hidden></p>
-        <button id="resume-button" class="button button--secondary button--wide" type="button" hidden>Reanudar desde checkpoint</button>
-        <form id="reselect-form" class="reselect-form" hidden>
-          <label for="reselect-images">Volver a seleccionar imágenes faltantes</label>
-          <input id="reselect-images" type="file" accept="image/*" multiple />
-          <button id="reselect-button" class="button button--secondary" type="submit">Restaurar imágenes</button>
-        </form>
-      </section>
+      <details class="technical-details card">
+        <summary>Herramientas de prueba y soporte</summary>
+        <section>
+          <div class="section-heading">
+            <span class="eyebrow">Modo manual</span>
+            <h2>Prueba de un contacto</h2>
+            <p>Herramienta de soporte para probar texto e imágenes de forma controlada.</p>
+          </div>
+          <form id="test-form" novalidate>
+            <label for="phone">Teléfono internacional</label>
+            <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="+5491112345678" required />
+            <small>Esta herramienta técnica exige código de país. Las campañas normales reciben el número ya normalizado desde Flor Mía.</small>
 
-      <section class="card result-card" aria-live="polite">
-        <span class="eyebrow">Compatibilidad Prompt 1</span>
-        <div id="last-result" class="empty-result">Todavía no se ejecutó la prueba heredada de texto.</div>
-      </section>
+            <label for="images">Imágenes en orden</label>
+            <input id="images" name="images" type="file" accept="image/*" multiple />
+            <small id="image-count">0 / 3 imágenes</small>
+
+            <label for="message">Mensaje de prueba</label>
+            <textarea id="message" name="message" rows="4" maxlength="4096" placeholder="Texto opcional si seleccionaste imágenes"></textarea>
+
+            <label for="fault-injection">Simulación de fallos (desarrollo)</label>
+            <select id="fault-injection" name="fault-injection">
+              <option value="none">Sin fallos simulados</option>
+              <option value="image-2-fail-once">Imagen 2 falla una vez</option>
+              <option value="image-2-fail-always">Imagen 2 falla tres veces</option>
+              <option value="image-2-timeout-once">Timeout de imagen 2</option>
+              <option value="image-2-attachment-fail-once">Adjunto de imagen 2 falla</option>
+              <option value="image-2-preview-fail-once">Preview de imagen 2 falla</option>
+              <option value="image-2-ambiguous">Verificación de imagen 2 queda ambigua</option>
+              <option value="image-1-missing">Imagen 1 temporal perdida</option>
+            </select>
+            <div class="form-footer">
+              <span id="character-count">0 / 4096</span>
+              <button id="send-button" class="button button--primary" type="submit">Procesar contacto de prueba</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="process-card" aria-live="polite">
+          <span class="eyebrow">Estado técnico del contacto</span>
+          <p id="process-summary" class="empty-result">Todavía no hay una prueba manual activa.</p>
+          <ul id="process-steps" class="process-steps"></ul>
+          <p id="process-alert" class="process-alert" hidden></p>
+          <button id="resume-button" class="button button--secondary button--wide" type="button" hidden>Reanudar de forma segura</button>
+          <form id="reselect-form" class="reselect-form" hidden>
+            <label for="reselect-images">Volver a seleccionar imágenes faltantes</label>
+            <input id="reselect-images" type="file" accept="image/*" multiple />
+            <button id="reselect-button" class="button button--secondary" type="submit">Restaurar imágenes</button>
+          </form>
+        </section>
+
+        <section class="result-card" aria-live="polite">
+          <span class="eyebrow">Último resultado técnico</span>
+          <div id="last-result" class="empty-result">Todavía no se ejecutó una prueba manual.</div>
+        </section>
+      </details>
 
       <p id="ui-error" class="ui-error" role="alert" hidden></p>
     </main>
