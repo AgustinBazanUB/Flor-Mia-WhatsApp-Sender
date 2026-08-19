@@ -58,10 +58,10 @@ jobs:
             description="Vitest: success"
           else
             state=failure
-            failing=$(node -e 'const fs=require("fs"); try { const r=JSON.parse(fs.readFileSync("/tmp/vitest.json","utf8")); const names=(r.testResults||[]).filter(x=>x.status==="failed").map(x=>String(x.name||"").split("/").pop()).filter(Boolean).slice(0,2); process.stdout.write(names.join(",")||"unknown"); } catch { process.stdout.write("unknown"); }')
+            failing=$(node -e 'const fs=require("fs"); try { const r=JSON.parse(fs.readFileSync("/tmp/vitest.json","utf8")); const assertions=(r.testResults||[]).flatMap(t=>(t.assertionResults||[]).filter(a=>a.status==="failed").map(a=>String(a.fullName||[...(a.ancestorTitles||[]),a.title].filter(Boolean).join(" ")))); const names=assertions.filter(Boolean).slice(0,2); process.stdout.write(names.join(" | ")||"unknown"); } catch { process.stdout.write("unknown"); }')
             description="Vitest: $failing"
           fi
-          failing_slug=$(printf '%s' "$failing" | tr ' /,.' '----' | tr -cd 'A-Za-z0-9_-' | cut -c1-80)
+          failing_slug=$(printf '%s' "$failing" | tr ' /,.|:()' '----------' | tr -cd 'A-Za-z0-9_-' | cut -c1-85)
           description=$(printf '%s' "$description" | cut -c1-135)
           context="verify/tests-$failing_slug"
           payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
