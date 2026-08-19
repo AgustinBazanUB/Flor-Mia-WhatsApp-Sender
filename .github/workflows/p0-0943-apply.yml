@@ -1,0 +1,745 @@
+name: apply-0.9.4.3-post-click
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply P0 post-click repair
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          def read(path): return Path(path).read_text()
+          def write(path, text): Path(path).write_text(text)
+          def between(path, start, end, replacement):
+              text = read(path)
+              a = text.index(start)
+              b = text.index(end, a)
+              write(path, text[:a] + replacement + text[b:])
+          def replace(path, old, new):
+              text = read(path)
+              if old not in text:
+                  raise SystemExit(f'missing replacement marker in {path}: {old[:100]!r}')
+              write(path, text.replace(old, new, 1))
+
+          # selectors.ts — preserve exact message semantics and recover stable IDs from ancestors.
+          p = 'src/whatsapp/selectors.ts'
+          replace(p,
+          '''function normalizeMessageText(value: string): string {\n  return value.replace(/\\u200e|\\u200f/g, "").replace(/\\s+/g, " ").trim();\n}\n''',
+          '''function normalizeMessageText(value: string): string {\n  return value\n    .replace(/\\r\\n?/g, "\\n")\n    .replace(/[\\u200e\\u200f]/g, "")\n    .replace(/\\u00a0/g, " ");\n}\n''')
+          start = 'export function outgoingMessages(root: ParentNode = document): OutgoingMessageSnapshot[] {'
+          end = 'export function outgoingMediaMessages(root: ParentNode = document): OutgoingMediaSnapshot[] {'
+          new_block = r'''export function outgoingMessages(root: ParentNode = document): OutgoingMessageSnapshot[] {
+  const selector = ".message-out, [data-id^='true_'], [data-testid='msg-container']";
+  const candidates: HTMLElement[] = [];
+  if (root instanceof HTMLElement && root.matches(selector)) candidates.push(root);
+  if ("querySelectorAll" in root) candidates.push(...root.querySelectorAll<HTMLElement>(selector));
+  const seen = new Set<HTMLElement>();
+  const result: OutgoingMessageSnapshot[] = [];
+  for (const candidate of candidates) {
+    const bubble = candidate.classList.contains("message-out")
+      ? candidate
+      : candidate.querySelector<HTMLElement>(".message-out") ?? candidate.closest<HTMLElement>(".message-out") ?? candidate;
+    const stableContainer = bubble.closest<HTMLElement>("[data-id^='true_']")
+      ?? (candidate.matches("[data-id^='true_']") ? candidate : candidate.closest<HTMLElement>("[data-id^='true_']"));
+    const dataId = stableContainer?.getAttribute("data-id") ?? "";
+    const isOutgoing = bubble.classList.contains("message-out") || dataId.startsWith("true_");
+    if (!isOutgoing || seen.has(bubble)) continue;
+    seen.add(bubble);
+    const textElement = bubble.querySelector<HTMLElement>("[data-testid='msg-text'], .selectable-text") ?? bubble;
+    const stableIdentity = dataId || bubble.id || "";
+    result.push({
+      identity: stableIdentity || `observation-outgoing-${result.length}-${normalizeMessageText(textElement.textContent ?? "").length}`,
+      stableIdentity: Boolean(stableIdentity),
+      text: normalizeMessageText(textElement.textContent ?? ""),
+      element: bubble
+    });
+  }
+  return result;
+}
+
+'''
+          between(p, start, end, new_block)
+
+          # send-text.ts — causal observer is armed before the durable checkpoint/click.
+          write('src/whatsapp/send-text.ts', r'''import { ERROR_CODES, ExtensionError, toExtensionError } from "../shared/errors";
+import { capabilityResolutionError, capabilityUnavailableError } from "../compatibility/diagnostic-error";
+import { maskPhone } from "../shared/phone";
+import type { TextTestResult, TextVerification } from "../shared/state";
+import {
+  canonicalMessageText,
+  findComposer,
+  findInvalidContactDialog,
+  findSendButton,
+  outgoingMessages,
+  resolveCapability,
+  type OutgoingMessageSnapshot
+} from "./selectors";
+import { waitForCondition } from "./wait";
+import { requireConversationContext } from "./conversation-context";
+
+const POST_CLICK_VERIFICATION_BUDGET_MS = 6_000;
+const STRONG_ID_GRACE_MS = 100;
+
+async function contactIdForPhone(phoneDigits: string): Promise<string> {
+  const data = new TextEncoder().encode(`flor-mia-test-contact:${phoneDigits}`);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  const id = [...new Uint8Array(digest)].slice(0, 10).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `contact-${id}`;
+}
+
+export function normalizeComposerLineEndings(value: string): string {
+  return value.replace(/\r\n?/g, "\n");
+}
+
+function composerTextRepresentations(composer: HTMLElement): string[] {
+  const values = [composer.innerText, composer.textContent]
+    .filter((value): value is string => typeof value === "string")
+    .map(normalizeComposerLineEndings);
+  return [...new Set(values)];
+}
+
+export type ComposerPreparationState = "empty" | "prepared" | "conflict";
+
+export function classifyComposerContent(existingText: string, expectedText: string): ComposerPreparationState {
+  const existing = normalizeComposerLineEndings(existingText);
+  const expected = normalizeComposerLineEndings(expectedText);
+  if (!canonicalMessageText(existing).trim()) return "empty";
+  return existing === expected ? "prepared" : "conflict";
+}
+
+function classifyComposerElementContent(composer: HTMLElement, expectedText: string): ComposerPreparationState {
+  const expected = normalizeComposerLineEndings(expectedText);
+  const representations = composerTextRepresentations(composer);
+  if (representations.some((value) => value === expected)) return "prepared";
+  if (representations.every((value) => !canonicalMessageText(value).trim())) return "empty";
+  return "conflict";
+}
+
+async function waitForPreparedComposer(expected: string, fallbackComposer: HTMLElement, timeoutMs = 1_000): Promise<HTMLElement | null> {
+  return waitForCondition(() => {
+    const live = findComposer()?.element ?? (fallbackComposer.isConnected ? fallbackComposer : null);
+    if (!live) return null;
+    return classifyComposerElementContent(live, expected) === "prepared" ? live : null;
+  }, { timeoutMs, description: "que WhatsApp estabilice el texto preparado en el composer" }).catch(() => null);
+}
+
+export async function prepareComposerTextForSend(composer: HTMLElement, message: string): Promise<"inserted" | "reused"> {
+  const expected = normalizeComposerLineEndings(message);
+  const state = classifyComposerElementContent(composer, expected);
+  if (state === "prepared") return "reused";
+  if (state === "conflict") {
+    throw new ExtensionError(ERROR_CODES.invalidInput, "La conversación tiene un borrador diferente. Vacialo manualmente antes de continuar para no sobrescribirlo.", {
+      recoverable: true, details: { sendAttempted: false, draftConflict: true }
+    });
+  }
+  composer.focus();
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(composer);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, expected);
+  let prepared = await waitForPreparedComposer(expected, composer, inserted ? 800 : 50);
+  if (!prepared) {
+    const liveComposer = findComposer()?.element ?? composer;
+    liveComposer.focus();
+    liveComposer.replaceChildren(document.createTextNode(expected));
+    const event = typeof InputEvent === "function"
+      ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: expected })
+      : new Event("input", { bubbles: true });
+    liveComposer.dispatchEvent(event);
+    prepared = await waitForPreparedComposer(expected, liveComposer, 1_000);
+  }
+  if (!prepared) {
+    throw capabilityUnavailableError(resolveCapability("composer", document, { required: true }).discovery,
+      "WhatsApp localizó el composer, pero no conservó exactamente el texto preparado por la campaña.");
+  }
+  return "inserted";
+}
+
+export function scheduleConversationNavigation(phoneDigits: string): void {
+  const target = new URL("/send", "https://web.whatsapp.com");
+  target.searchParams.set("phone", phoneDigits);
+  target.searchParams.set("type", "phone_number");
+  target.searchParams.set("app_absent", "0");
+  window.setTimeout(() => window.location.assign(target.toString()), 0);
+}
+
+function messageRoot(): HTMLElement {
+  return document.querySelector<HTMLElement>("#main [data-testid='conversation-panel-messages']")
+    ?? document.getElementById("main")
+    ?? document.body;
+}
+
+function isComposerConsumed(): boolean {
+  const composer = findComposer()?.element;
+  if (!composer) return true;
+  return !composerTextRepresentations(composer).some((value) => canonicalMessageText(value).trim());
+}
+
+type ObserverOutcome = {
+  kind: "strong" | "causal" | "unverified";
+  snapshot?: OutgoingMessageSnapshot;
+  sendClickAt: string;
+  firstOutgoingMutationAt: string | null;
+  confirmedAt: string | null;
+  verificationTimeoutAt: string | null;
+  elapsedMs: number;
+  mutationCount: number;
+  candidateCount: number;
+  newOutgoingObserved: boolean;
+  exactTextObserved: boolean;
+};
+
+function armOutgoingVerification(input: {
+  root: HTMLElement;
+  expectedText: string;
+  expectedPhoneDigits: string;
+  timeoutMs: number;
+}): { baselineIds: string[]; markClicked: () => void; cancel: () => void; wait: Promise<ObserverOutcome> } {
+  const expected = canonicalMessageText(input.expectedText);
+  const baseline = outgoingMessages(input.root);
+  const baselineNodes = new WeakSet<HTMLElement>(baseline.map((item) => item.element));
+  const baselineIds = new Set(baseline.filter((item) => item.stableIdentity).map((item) => item.identity));
+  const baselineExactCount = baseline.filter((item) => item.text === expected).length;
+  let clicked = false;
+  let sendClickAtMs = 0;
+  let sendClickAt = "";
+  let firstOutgoingMutationAt: string | null = null;
+  let mutationCount = 0;
+  let candidateCount = 0;
+  let newOutgoingObserved = false;
+  let exactTextObserved = false;
+  let settled = false;
+  let causalTimer: ReturnType<typeof setTimeout> | null = null;
+  let resolveWait!: (value: ObserverOutcome) => void;
+  let rejectWait!: (error: unknown) => void;
+
+  const wait = new Promise<ObserverOutcome>((resolve, reject) => { resolveWait = resolve; rejectWait = reject; });
+  const budget = Math.min(POST_CLICK_VERIFICATION_BUDGET_MS, Math.max(20, input.timeoutMs));
+  const cleanup = (): void => {
+    observer.disconnect();
+    globalThis.clearTimeout(timeoutTimer);
+    if (causalTimer) globalThis.clearTimeout(causalTimer);
+  };
+  const metrics = (kind: ObserverOutcome["kind"], snapshot?: OutgoingMessageSnapshot): ObserverOutcome => {
+    const now = Date.now();
+    return {
+      kind,
+      ...(snapshot ? { snapshot } : {}),
+      sendClickAt,
+      firstOutgoingMutationAt,
+      confirmedAt: kind === "unverified" ? null : new Date().toISOString(),
+      verificationTimeoutAt: kind === "unverified" ? new Date().toISOString() : null,
+      elapsedMs: Math.max(0, now - sendClickAtMs),
+      mutationCount,
+      candidateCount,
+      newOutgoingObserved,
+      exactTextObserved
+    };
+  };
+  const finish = (value: ObserverOutcome): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolveWait(value);
+  };
+  const failAfterClick = (error: unknown): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    const normalized = toExtensionError(error);
+    rejectWait(new ExtensionError(normalized.code, normalized.message, {
+      recoverable: normalized.recoverable,
+      cause: error,
+      details: { ...(normalized.details ?? {}), sendAttempted: true, verificationOutcome: "ambiguous_critical" }
+    }));
+  };
+  const currentMatchingNew = (): OutgoingMessageSnapshot[] => outgoingMessages(input.root).filter((item) =>
+    !baselineNodes.has(item.element) && item.text === expected);
+  const tryCandidate = (snapshot: OutgoingMessageSnapshot): void => {
+    if (!clicked || baselineNodes.has(snapshot.element)) return;
+    newOutgoingObserved = true;
+    if (!firstOutgoingMutationAt) firstOutgoingMutationAt = new Date().toISOString();
+    try { requireConversationContext(input.expectedPhoneDigits); } catch (error) { failAfterClick(error); return; }
+    if (snapshot.text !== expected) return;
+    exactTextObserved = true;
+    if (snapshot.stableIdentity && !baselineIds.has(snapshot.identity)) {
+      finish(metrics("strong", snapshot));
+      return;
+    }
+    const exactCount = outgoingMessages(input.root).filter((item) => item.text === expected).length;
+    if (exactCount <= baselineExactCount || causalTimer) return;
+    causalTimer = globalThis.setTimeout(() => {
+      causalTimer = null;
+      if (settled) return;
+      try { requireConversationContext(input.expectedPhoneDigits); } catch (error) { failAfterClick(error); return; }
+      const candidates = currentMatchingNew();
+      const strong = candidates.find((item) => item.stableIdentity && !baselineIds.has(item.identity));
+      finish(metrics(strong ? "strong" : "causal", strong ?? candidates[0] ?? snapshot));
+    }, Math.min(STRONG_ID_GRACE_MS, Math.max(1, budget)));
+  };
+  const processNode = (node: Node): void => {
+    if (!(node instanceof HTMLElement)) return;
+    for (const snapshot of outgoingMessages(node)) {
+      candidateCount += 1;
+      tryCandidate(snapshot);
+      if (settled) return;
+    }
+  };
+  const observer = new MutationObserver((records) => {
+    if (!clicked || settled) return;
+    mutationCount += records.length;
+    for (const record of records) {
+      if (record.type === "attributes") processNode(record.target);
+      for (const node of record.addedNodes) processNode(node);
+      if (settled) return;
+    }
+  });
+  observer.observe(input.root, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-id", "id"] });
+  const timeoutTimer = globalThis.setTimeout(() => {
+    if (!clicked || settled) return;
+    try { requireConversationContext(input.expectedPhoneDigits); } catch (error) { failAfterClick(error); return; }
+    finish(metrics("unverified"));
+  }, budget);
+
+  return {
+    baselineIds: [...baselineIds],
+    markClicked: () => {
+      observer.takeRecords();
+      clicked = true;
+      sendClickAtMs = Date.now();
+      sendClickAt = new Date(sendClickAtMs).toISOString();
+    },
+    cancel: () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+    },
+    wait
+  };
+}
+
+function verificationFromObservation(observation: ObserverOutcome, expectedLength: number): TextVerification {
+  const composerConsumed = isComposerConsumed();
+  const common = {
+    sent: true,
+    observedAt: observation.confirmedAt ?? observation.verificationTimeoutAt ?? new Date().toISOString(),
+    matchedTextLength: observation.exactTextObserved ? expectedLength : undefined,
+    stableIdObserved: Boolean(observation.snapshot?.stableIdentity),
+    newOutgoingObserved: observation.newOutgoingObserved,
+    exactTextObserved: observation.exactTextObserved,
+    composerConsumed,
+    recipientStillVerified: true,
+    sendAttempted: true,
+    verificationElapsedMs: observation.elapsedMs,
+    observerMutationCount: observation.mutationCount,
+    candidateOutgoingCount: observation.candidateCount,
+    sendClickAt: observation.sendClickAt,
+    firstOutgoingMutationAt: observation.firstOutgoingMutationAt ?? undefined,
+    verificationTimeoutAt: observation.verificationTimeoutAt ?? undefined
+  } satisfies Partial<TextVerification>;
+  if (observation.kind === "strong") {
+    return {
+      ...common,
+      confirmed: true,
+      outcome: "confirmed_strong",
+      confidence: "strong",
+      method: "new-outgoing-message-stable-dom",
+      messageElementId: observation.snapshot?.identity,
+      strongConfirmedAt: observation.confirmedAt ?? undefined
+    };
+  }
+  if (observation.kind === "causal") {
+    return {
+      ...common,
+      confirmed: true,
+      outcome: "confirmed_causal",
+      confidence: "causal",
+      method: "new-outgoing-node-after-click",
+      causalConfirmedAt: observation.confirmedAt ?? undefined
+    };
+  }
+  return {
+    ...common,
+    confirmed: false,
+    outcome: "sent_unverified",
+    confidence: "unverified",
+    method: "send-click-unverified"
+  };
+}
+
+export async function sendAndVerifyText(input: {
+  operationId: string;
+  phoneDigits: string;
+  message: string;
+  timeoutMs?: number;
+  checkpointRequired?: boolean;
+}, lifecycle: { beforeSend?: (baselineOutgoingIds: string[]) => Promise<void> } = {}): Promise<TextTestResult> {
+  const { operationId, phoneDigits, message, timeoutMs = 30_000 } = input;
+  const startedAt = new Date().toISOString();
+  requireConversationContext(phoneDigits);
+  const invalidDialog = findInvalidContactDialog();
+  if (invalidDialog) throw new ExtensionError(ERROR_CODES.contactUnavailable, "WhatsApp informó que el número no es válido o no está disponible.", { details: { selectorStrategy: invalidDialog.strategy } });
+
+  const composerMatch = await waitForCondition(() => {
+    const invalid = findInvalidContactDialog();
+    if (invalid) throw new ExtensionError(ERROR_CODES.contactUnavailable, "El número no está disponible en WhatsApp.");
+    return findComposer();
+  }, { timeoutMs, description: "el campo de escritura de la conversación" }).catch((error: unknown) => {
+    const normalized = toExtensionError(error);
+    if (normalized.code === ERROR_CODES.contactUnavailable) throw normalized;
+    throw capabilityResolutionError(resolveCapability("composer", document, { required: true }).discovery,
+      "La capability del composer dejó de estar disponible.", error);
+  });
+
+  await prepareComposerTextForSend(composerMatch.element, message);
+  const sendButton = await waitForCondition(() => findSendButton(), {
+    timeoutMs: Math.min(timeoutMs, 10_000), description: "la acción de enviar texto"
+  }).catch((error: unknown) => {
+    throw capabilityResolutionError(resolveCapability("text_send_action", document, { required: true }).discovery,
+      "Se agotaron las estrategias para localizar la acción de envío de texto.", error);
+  });
+  if (sendButton.element.disabled || sendButton.element.getAttribute("aria-disabled") === "true") {
+    throw capabilityUnavailableError(resolveCapability("text_send_action", document, { required: true }).discovery,
+      "La acción de envío de texto fue localizada, pero no está disponible.");
+  }
+
+  const verification = armOutgoingVerification({ root: messageRoot(), expectedText: message, expectedPhoneDigits: phoneDigits, timeoutMs });
+  try {
+    await lifecycle.beforeSend?.(verification.baselineIds);
+    requireConversationContext(phoneDigits);
+    const liveComposer = findComposer()?.element;
+    if (!liveComposer || classifyComposerElementContent(liveComposer, message) !== "prepared") {
+      throw new ExtensionError(ERROR_CODES.verificationFailed,
+        "El contenido del composer cambió antes del envío. Se canceló el click para evitar enviar texto incorrecto.",
+        { recoverable: true, details: { sendAttempted: false, expectedLength: message.length } });
+    }
+    verification.markClicked();
+    sendButton.element.click();
+  } catch (error) {
+    verification.cancel();
+    throw error;
+  }
+
+  const observation = await verification.wait;
+  requireConversationContext(phoneDigits);
+  const verified = verificationFromObservation(observation, canonicalMessageText(message).length);
+  const completedAt = new Date().toISOString();
+  return {
+    success: true,
+    operationId,
+    contactId: await contactIdForPhone(phoneDigits),
+    maskedPhone: maskPhone(`+${phoneDigits}`),
+    step: "text",
+    startedAt,
+    completedAt,
+    verification: verified
+  };
+}
+''')
+
+          # Public TextVerification contract.
+          p = 'src/shared/state.ts'
+          start = 'export interface TextVerification {'
+          end = 'export interface TextTestResult {'
+          block = '''export interface TextVerification {\n  confirmed: boolean;\n  sent: boolean;\n  outcome: "confirmed_strong" | "confirmed_causal" | "sent_unverified" | "none";\n  confidence: "strong" | "causal" | "unverified" | "none";\n  method: "new-outgoing-message-stable-dom" | "new-outgoing-node-after-click" | "send-click-unverified" | "none";\n  observedAt?: string;\n  matchedTextLength?: number;\n  messageElementId?: string;\n  stableIdObserved?: boolean;\n  newOutgoingObserved?: boolean;\n  exactTextObserved?: boolean;\n  composerConsumed?: boolean;\n  recipientStillVerified?: boolean;\n  sendAttempted?: boolean;\n  verificationElapsedMs?: number;\n  observerMutationCount?: number;\n  candidateOutgoingCount?: number;\n  sendClickAt?: string;\n  firstOutgoingMutationAt?: string;\n  strongConfirmedAt?: string;\n  causalConfirmedAt?: string;\n  verificationTimeoutAt?: string;\n}\n\n'''
+          between(p, start, end, block)
+
+          # Engine types: sent_unverified is a terminal execution outcome but retains existing terminal step status.
+          p = 'src/engine/types.ts'
+          replace(p, '  outcome: "confirmed" | "not_sent" | "ambiguous";\n  method: string;',
+                    '  outcome: "confirmed" | "sent_unverified" | "not_sent" | "ambiguous";\n  confidence?: "strong" | "causal" | "unverified";\n  method: string;')
+          replace(p, '  result: "started" | "confirmed" | "failed" | "ambiguous" | "not_sent" | "missing_resource";',
+                    '  result: "started" | "confirmed" | "sent_unverified" | "failed" | "ambiguous" | "not_sent" | "missing_resource";')
+          replace(p, 'export type StepExecutionResult =\n  | { outcome: "confirmed"; verification: StepVerification }\n  | { outcome: "ambiguous"; verification: StepVerification; error?: SerializedExtensionError }',
+                    'export type StepExecutionResult =\n  | { outcome: "confirmed"; verification: StepVerification }\n  | { outcome: "sent_unverified"; verification: StepVerification }\n  | { outcome: "ambiguous"; verification: StepVerification; error?: SerializedExtensionError }')
+
+          # Contact adapter maps causal/strong to confirmed and timeout-with-click to terminal sent_unverified.
+          p = 'src/background/contact-adapter.ts'
+          start = '  async sendText(step: TextContactStep, context: StepExecutionContext): Promise<StepExecutionResult> {'
+          end = '  async reconcile(step: ContactStep, context: StepExecutionContext): Promise<StepReconciliationResult> {'
+          block = r'''  async sendText(step: TextContactStep, context: StepExecutionContext): Promise<StepExecutionResult> {
+    try {
+      const result = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappSendText, {
+        operationId: step.operationId,
+        phoneDigits: context.checkpoint.contact.phoneDigits,
+        message: step.text,
+        timeoutMs: context.timeoutMs,
+        checkpointRequired: true
+      }, this.requireBoundTabId());
+      if (!result.success || result.verification.sent !== true) {
+        throw new ExtensionError(ERROR_CODES.verificationFailed, "WhatsApp no confirmó la ejecución del envío de texto.");
+      }
+      const details = {
+        verificationOutcome: result.verification.outcome,
+        verificationConfidence: result.verification.confidence,
+        verificationElapsedMs: result.verification.verificationElapsedMs ?? null,
+        stableIdObserved: result.verification.stableIdObserved === true,
+        newOutgoingObserved: result.verification.newOutgoingObserved === true,
+        exactTextObserved: result.verification.exactTextObserved === true,
+        composerConsumed: result.verification.composerConsumed === true,
+        recipientStillVerified: result.verification.recipientStillVerified === true,
+        sendAttempted: true,
+        observerMutationCount: result.verification.observerMutationCount ?? 0,
+        candidateOutgoingCount: result.verification.candidateOutgoingCount ?? 0,
+        sendClickAt: result.verification.sendClickAt ?? null,
+        firstOutgoingMutationAt: result.verification.firstOutgoingMutationAt ?? null,
+        strongConfirmedAt: result.verification.strongConfirmedAt ?? null,
+        causalConfirmedAt: result.verification.causalConfirmedAt ?? null,
+        verificationTimeoutAt: result.verification.verificationTimeoutAt ?? null
+      };
+      if (result.verification.outcome === "sent_unverified") {
+        return {
+          outcome: "sent_unverified",
+          verification: {
+            outcome: "sent_unverified",
+            confidence: "unverified",
+            method: result.verification.method,
+            observedAt: result.verification.observedAt ?? result.completedAt,
+            sendAttempted: true,
+            details
+          }
+        };
+      }
+      if (!result.verification.confirmed) {
+        throw new ExtensionError(ERROR_CODES.verificationFailed, "WhatsApp no confirmó el texto saliente.", {
+          details: { ...details, sendAttempted: true }
+        });
+      }
+      return {
+        outcome: "confirmed",
+        verification: {
+          outcome: "confirmed",
+          confidence: result.verification.confidence === "strong" ? "strong" : "causal",
+          method: result.verification.method,
+          observedAt: result.verification.observedAt ?? result.completedAt,
+          sendAttempted: true,
+          ...(result.verification.messageElementId ? { outgoingMessageId: result.verification.messageElementId } : {}),
+          details
+        }
+      };
+    } catch (error) {
+      return executionError(error);
+    }
+  }
+
+'''
+          between(p, start, end, block)
+
+          # ContactEngine terminalizes SENT_UNVERIFIED without marking lastConfirmedStepId.
+          p = 'src/engine/contact-engine.ts'
+          marker = '  if (result.outcome === "ambiguous") {'
+          insertion = '''  if (result.outcome === "sent_unverified") {\n    let next = withStep(checkpoint, step.id, (current) => ({\n      ...current,\n      status: "confirmed",\n      completedAt: timestamp,\n      verification: result.verification,\n      error: undefined\n    }));\n    const terminal = next.steps.find((item) => item.id === step.id)!;\n    next = appendHistory(next, technicalRecord(next, terminal, "sent_unverified", timestamp, {\n      verificationMethod: result.verification.method\n    }));\n    return persist({ ...next, status: "running" });\n  }\n'''
+          text = read(p)
+          idx = text.index(marker, text.index('async function applyExecutionResult'))
+          write(p, text[:idx] + insertion + text[idx:])
+
+          # Campaign recipient/public counters.
+          p = 'src/campaign/campaign-types.ts'
+          replace(p, '  failure?: CampaignRecipientFailure;\n}', '  failure?: CampaignRecipientFailure;\n  deliveryConfidence?: "confirmed" | "unverified";\n}')
+          replace(p, '  sent: number;\n  failed: number;\n  total: number;', '  sent: number;\n  confirmedSent: number;\n  unverifiedSent: number;\n  failed: number;\n  total: number;')
+          replace(p, '  sent: number;\n  failed: number;\n  durationMs: number;', '  sent: number;\n  confirmedSent: number;\n  unverifiedSent: number;\n  failed: number;\n  durationMs: number;')
+          replace(p, '  failed?: number;\n  processed?: number;', '  failed?: number;\n  processed?: number;\n  confirmedSent?: number;\n  unverifiedSent?: number;')
+
+          write('src/campaign/progress.ts', '''import type { CampaignProgress, CampaignState } from "./campaign-types";\n\nexport function calculateCampaignProgress(processed: number, total: number): CampaignProgress {\n  const safeTotal = Math.max(0, Math.floor(total));\n  const safeProcessed = Math.min(safeTotal, Math.max(0, Math.floor(processed)));\n  return { completed: safeProcessed, total: safeTotal, percentage: safeTotal === 0 ? 0 : Number(((safeProcessed / safeTotal) * 100).toFixed(2)) };\n}\n\nexport function campaignRecipientCounters(campaign: CampaignState): {\n  total: number; processed: number; sent: number; confirmedSent: number; unverifiedSent: number; failed: number; remaining: number;\n} {\n  const total = campaign.recipients.length;\n  const sentRecipients = campaign.recipients.filter((recipient) => recipient.status === "completed");\n  const sent = sentRecipients.length;\n  const unverifiedSent = sentRecipients.filter((recipient) => recipient.deliveryConfidence === "unverified").length;\n  const confirmedSent = Math.max(0, sent - unverifiedSent);\n  const failed = campaign.recipients.filter((recipient) => recipient.status === "error").length;\n  const processed = Math.min(total, sent + failed);\n  return { total, processed, sent, confirmedSent, unverifiedSent, failed, remaining: Math.max(0, total - processed) };\n}\n\nexport function progressForCampaign(campaign: CampaignState): CampaignProgress {\n  const counters = campaignRecipientCounters(campaign);\n  return calculateCampaignProgress(counters.processed, counters.total);\n}\n''')
+
+          # CampaignEngine records whether any terminal step was unverified; daily limit still increments once.
+          p = 'src/campaign/campaign-engine.ts'
+          replace(p,
+          '  private async applyCompletedCheckpoint(\n    campaign: CampaignState,\n    recipient: CampaignState["recipients"][number]\n  ): Promise<CampaignState> {',
+          '  private async applyCompletedCheckpoint(\n    campaign: CampaignState,\n    recipient: CampaignState["recipients"][number],\n    checkpoint: ContactProcessCheckpoint\n  ): Promise<CampaignState> {')
+          replace(p,
+          '    const recipients = campaign.recipients.map((item) => item.recipientId === recipient.recipientId\n      ? { ...item, status: "completed" as const, completedAt, error: undefined, failure: undefined }\n      : item);',
+          '    const deliveryConfidence = checkpoint.steps.some((step) => step.verification?.outcome === "sent_unverified") ? "unverified" as const : "confirmed" as const;\n    const recipients = campaign.recipients.map((item) => item.recipientId === recipient.recipientId\n      ? { ...item, status: "completed" as const, completedAt, error: undefined, failure: undefined, deliveryConfidence }\n      : item);')
+          replace(p, '        return this.applyCompletedCheckpoint(campaign, checkpointRecipient);', '        return this.applyCompletedCheckpoint(campaign, checkpointRecipient, checkpoint);')
+          replace(p, '      return this.applyCompletedCheckpoint(campaign, recipient);', '      return this.applyCompletedCheckpoint(campaign, recipient, checkpoint);')
+
+          # Public status/final summary.
+          p = 'src/campaign/public-status.ts'
+          replace(p, '    sent: counters.sent,\n    failed: counters.failed,', '    sent: counters.sent,\n    confirmedSent: counters.confirmedSent,\n    unverifiedSent: counters.unverifiedSent,\n    failed: counters.failed,')
+          # occurs twice (summary then returned status)
+          text = read(p)
+          old = '    sent: counters.sent,\n    failed: counters.failed,'
+          if old in text:
+              text = text.replace(old, '    sent: counters.sent,\n    confirmedSent: counters.confirmedSent,\n    unverifiedSent: counters.unverifiedSent,\n    failed: counters.failed,', 1)
+              write(p, text)
+
+          # Runtime summary/history.
+          p = 'src/background/campaign-runtime.ts'
+          old = '''  if (campaign.status === "completed") {\n    return counters.failed > 0\n      ? `Campaña completada · ${counters.sent} enviados · ${counters.failed} con problemas.`\n      : `Campaña completada: ${counters.sent}/${counters.total} enviados.`;\n  }'''
+          new = '''  if (campaign.status === "completed") {\n    if (counters.unverifiedSent > 0) {\n      return `Campaña completada · ${counters.confirmedSent} confirmados · ${counters.unverifiedSent} enviados sin confirmación · ${counters.failed} con problemas.`;\n    }\n    return counters.failed > 0\n      ? `Campaña completada · ${counters.sent} enviados · ${counters.failed} con problemas.`\n      : `Campaña completada con éxito: ${counters.sent}/${counters.total} enviados.`;\n  }'''
+          replace(p, old, new)
+          replace(p, '      failed: counters.failed,\n      processed: counters.processed,', '      failed: counters.failed,\n      processed: counters.processed,\n      confirmedSent: counters.confirmedSent,\n      unverifiedSent: counters.unverifiedSent,')
+
+          # Sanitized technical report includes post-click confidence/metrics without message text.
+          p = 'src/diagnostics/types.ts'
+          replace(p,
+          '''    verification: {\n      outcome: string;\n      method: string;\n      sendAttempted: boolean;\n    } | null;''',
+          '''    verification: {\n      outcome: string;\n      confidence: string | null;\n      method: string;\n      sendAttempted: boolean;\n      verificationElapsedMs: number | null;\n      stableIdObserved: boolean | null;\n      newOutgoingObserved: boolean | null;\n      exactTextObserved: boolean | null;\n      composerConsumed: boolean | null;\n      recipientStillVerified: boolean | null;\n    } | null;''')
+          p = 'src/diagnostics/sanitizer.ts'
+          replace(p,
+          '''      verification: step.verification ? {\n        outcome: step.verification.outcome,\n        method: sanitizeDiagnosticText(step.verification.method, { maxStringLength: 160 }),\n        sendAttempted: step.verification.sendAttempted\n      } : null,''',
+          '''      verification: step.verification ? {\n        outcome: step.verification.outcome,\n        confidence: step.verification.confidence ?? null,\n        method: sanitizeDiagnosticText(step.verification.method, { maxStringLength: 160 }),\n        sendAttempted: step.verification.sendAttempted,\n        verificationElapsedMs: typeof step.verification.details?.verificationElapsedMs === "number" ? step.verification.details.verificationElapsedMs : null,\n        stableIdObserved: typeof step.verification.details?.stableIdObserved === "boolean" ? step.verification.details.stableIdObserved : null,\n        newOutgoingObserved: typeof step.verification.details?.newOutgoingObserved === "boolean" ? step.verification.details.newOutgoingObserved : null,\n        exactTextObserved: typeof step.verification.details?.exactTextObserved === "boolean" ? step.verification.details.exactTextObserved : null,\n        composerConsumed: typeof step.verification.details?.composerConsumed === "boolean" ? step.verification.details.composerConsumed : null,\n        recipientStillVerified: typeof step.verification.details?.recipientStillVerified === "boolean" ? step.verification.details.recipientStillVerified : null\n      } : null,''')
+
+          # failedTextResult must satisfy the expanded TextVerification shape.
+          p = 'src/background/service-worker.ts'
+          replace(p, '    verification: { confirmed: false, method: "none" },',
+                    '    verification: { confirmed: false, sent: false, outcome: "none", confidence: "none", method: "none", sendAttempted: false },')
+
+          # Version metadata 0.9.4.3.
+          manifest = json.loads(read('manifest.json')); manifest['version'] = '0.9.4.3'; manifest['version_name'] = '0.9.4.3'; write('manifest.json', json.dumps(manifest, indent=2, ensure_ascii=False) + '\n')
+          package = json.loads(read('package.json')); package['version'] = '0.9.4.3'; write('package.json', json.dumps(package, indent=2, ensure_ascii=False) + '\n')
+          lock = json.loads(read('package-lock.json')); lock['version'] = '0.9.4.3'; lock['packages']['']['version'] = '0.9.4.3'; write('package-lock.json', json.dumps(lock, indent=2, ensure_ascii=False) + '\n')
+
+          # Regression tests for strong / causal / unverified / ancestor data-id / old-identical safety.
+          write('tests/send-text.test.ts', r'''// @vitest-environment jsdom
+import { webcrypto } from "node:crypto";
+import { beforeEach, describe, expect, it } from "vitest";
+import { sendAndVerifyText } from "../src/whatsapp/send-text";
+
+beforeEach(() => {
+  document.body.innerHTML = `<div id="main"><header data-jid="5491112345678@c.us"></header><div class="messages"><div class="message-out" data-id="true_old"><span class="selectable-text">Anterior</span></div></div><footer><div contenteditable="true" role="textbox" data-testid="conversation-compose-box-input"></div><button type="button" data-testid="compose-btn-send">Enviar</button></footer></div>`;
+  Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
+  Object.defineProperty(document, "execCommand", { value: () => false, configurable: true });
+});
+
+function composerText(): string { return document.querySelector<HTMLElement>("[contenteditable='true']")?.textContent ?? ""; }
+function appendOutgoing(text: string, id?: string, ancestorId = false): HTMLElement {
+  const bubble = document.createElement("div"); bubble.className = "message-out";
+  const span = document.createElement("span"); span.className = "selectable-text"; span.textContent = text; bubble.append(span);
+  if (id && !ancestorId) bubble.dataset.id = id;
+  if (id && ancestorId) { const wrapper = document.createElement("div"); wrapper.dataset.id = id; wrapper.append(bubble); document.querySelector(".messages")!.append(wrapper); }
+  else document.querySelector(".messages")!.append(bubble);
+  return bubble;
+}
+
+describe("post-click text verification 0.9.4.3", () => {
+  it("CONFIRMED_STRONG: new exact outgoing with stable id", async () => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText(), "true_new"));
+    const result = await sendAndVerifyText({ operationId: "strong", phoneDigits: "5491112345678", message: "Hola Flor Mía", timeoutMs: 200 });
+    expect(result.verification).toMatchObject({ confirmed: true, sent: true, outcome: "confirmed_strong", confidence: "strong", method: "new-outgoing-message-stable-dom", messageElementId: "true_new" });
+  });
+
+  it("detects a stable data-id on an ancestor of .message-out", async () => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText(), "true_ancestor", true));
+    const result = await sendAndVerifyText({ operationId: "ancestor", phoneDigits: "5491112345678", message: "Ancestro", timeoutMs: 200 });
+    expect(result.verification).toMatchObject({ outcome: "confirmed_strong", messageElementId: "true_ancestor" });
+  });
+
+  it("CONFIRMED_CAUSAL: new exact outgoing without stable id", async () => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText()));
+    const result = await sendAndVerifyText({ operationId: "causal", phoneDigits: "5491112345678", message: "Sin ID", timeoutMs: 250 });
+    expect(result.verification).toMatchObject({ confirmed: true, sent: true, outcome: "confirmed_causal", confidence: "causal", method: "new-outgoing-node-after-click", newOutgoingObserved: true, exactTextObserved: true });
+  });
+
+  it("does not confirm an old identical bubble", async () => {
+    document.querySelector(".selectable-text")!.textContent = "Repetido";
+    const result = await sendAndVerifyText({ operationId: "old-only", phoneDigits: "5491112345678", message: "Repetido", timeoutMs: 40 });
+    expect(result.verification).toMatchObject({ confirmed: false, sent: true, outcome: "sent_unverified", confidence: "unverified" });
+  });
+
+  it("old identical + new identical confirms only the new causal node", async () => {
+    document.querySelector(".selectable-text")!.textContent = "Repetido";
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing("Repetido"));
+    const result = await sendAndVerifyText({ operationId: "repeat-new", phoneDigits: "5491112345678", message: "Repetido", timeoutMs: 200 });
+    expect(result.verification.outcome).toBe("confirmed_causal");
+  });
+
+  it("elevates causal evidence when data-id appears milliseconds later", async () => {
+    document.querySelector("button")!.addEventListener("click", () => {
+      const bubble = appendOutgoing(composerText());
+      window.setTimeout(() => { bubble.dataset.id = "true_late"; }, 10);
+    });
+    const result = await sendAndVerifyText({ operationId: "late-id", phoneDigits: "5491112345678", message: "ID tardío", timeoutMs: 250 });
+    expect(result.verification).toMatchObject({ outcome: "confirmed_strong", messageElementId: "true_late" });
+  });
+
+  it.each(["Hola, esto es una prueba 👋", "Árbol, pingüino, acción y corazón ❤️", "Línea uno\nLínea dos\nLínea tres", "Símbolos: ¿¡!?#%&/()[]{}—… € $ @"])("matches exact text including unicode and multiline", async (message) => {
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText()));
+    const result = await sendAndVerifyText({ operationId: `exact-${message.length}`, phoneDigits: "5491112345678", message, timeoutMs: 250 });
+    expect(result.verification.confirmed).toBe(true);
+  });
+
+  it("composer empty by itself never confirms; it becomes SENT_UNVERIFIED", async () => {
+    document.querySelector("button")!.addEventListener("click", () => { document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = ""; });
+    const result = await sendAndVerifyText({ operationId: "empty-only", phoneDigits: "5491112345678", message: "Sin bubble", timeoutMs: 40 });
+    expect(result.verification).toMatchObject({ outcome: "sent_unverified", composerConsumed: true });
+  });
+
+  it("fails closed if recipient changes after click", async () => {
+    document.querySelector("button")!.addEventListener("click", () => {
+      document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us");
+      appendOutgoing("Hola Flor Mía");
+    });
+    await expect(sendAndVerifyText({ operationId: "wrong-after", phoneDigits: "5491112345678", message: "Hola Flor Mía", timeoutMs: 100 }))
+      .rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED", details: { sendAttempted: true } });
+  });
+
+  it("preserves a different user draft and never clicks", async () => {
+    document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = "Borrador del usuario";
+    let clicks = 0; document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
+    await expect(sendAndVerifyText({ operationId: "draft", phoneDigits: "5491112345678", message: "Nuevo", timeoutMs: 50 })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(clicks).toBe(0);
+  });
+
+  it("revalidates after durable checkpoint and cancels before click on chat change", async () => {
+    let clicks = 0; document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
+    await expect(sendAndVerifyText({ operationId: "checkpoint-change", phoneDigits: "5491112345678", message: "No enviar", timeoutMs: 50 }, {
+      beforeSend: async () => { document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us"); }
+    })).rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
+    expect(clicks).toBe(0);
+  });
+});
+''')
+
+          # Campaign recovery fixture: add terminal unverified recipient semantics and new counter fields.
+          p = 'tests/campaign-recovery.test.ts'
+          replace(p, 'type Outcome = "complete" | "timeout";', 'type Outcome = "complete" | "timeout" | "unverified";')
+          old = '''    return {\n      ...checkpoint,\n      status: "completed",\n      currentStepId: null,\n      lastConfirmedStepId: checkpoint.steps.at(-1)?.id ?? null,\n      steps: confirmedSteps(checkpoint.steps),\n      completedAt: NOW.toISOString()\n    };'''
+          new = '''    if (this.outcomes.get(checkpoint.contact.contactId) === "unverified") {\n      return {\n        ...checkpoint,\n        status: "completed",\n        currentStepId: null,\n        lastConfirmedStepId: null,\n        steps: checkpoint.steps.map((step) => ({ ...step, status: "confirmed" as const, attempts: 1, completedAt: NOW.toISOString(), verification: { outcome: "sent_unverified" as const, confidence: "unverified" as const, method: "send-click-unverified", observedAt: NOW.toISOString(), sendAttempted: true } })),\n        completedAt: NOW.toISOString()\n      };\n    }\n    return {\n      ...checkpoint,\n      status: "completed",\n      currentStepId: null,\n      lastConfirmedStepId: checkpoint.steps.at(-1)?.id ?? null,\n      steps: confirmedSteps(checkpoint.steps),\n      completedAt: NOW.toISOString()\n    };'''
+          replace(p, old, new)
+          write(p, read(p).replace('{ total: 2, processed: 2, sent: 1, failed: 1, remaining: 0 }', '{ total: 2, processed: 2, sent: 1, confirmedSent: 1, unverifiedSent: 0, failed: 1, remaining: 0 }').replace('{ total: 100, processed: 100, sent: 97, failed: 3, remaining: 0 }', '{ total: 100, processed: 100, sent: 97, confirmedSent: 97, unverifiedSent: 0, failed: 3, remaining: 0 }'))
+          insert_at = read(p).index('  it("opens the circuit')
+          extra = '''  it("treats SENT_UNVERIFIED as terminal sent, increments daily limit and completes without retry", async () => {\n    const test = setup(1);\n    test.runner.outcomes.set("contact-1", "unverified");\n    await test.engine.start("campaign-recovery");\n    const finished = await test.engine.advance("campaign-recovery");\n    expect(finished.status).toBe("completed");\n    expect(finished.recipients[0]).toMatchObject({ status: "completed", deliveryConfidence: "unverified" });\n    expect(campaignRecipientCounters(finished)).toEqual({ total: 1, processed: 1, sent: 1, confirmedSent: 0, unverifiedSent: 1, failed: 0, remaining: 0 });\n    expect(test.daily.state.completedToday).toBe(1);\n  });\n\n  it("completes two contacts with one confirmed and one unverified", async () => {\n    const test = setup(2);\n    test.runner.outcomes.set("contact-2", "unverified");\n    await test.engine.start("campaign-recovery");\n    await test.engine.advance("campaign-recovery");\n    const finished = await test.engine.advance("campaign-recovery");\n    expect(finished.status).toBe("completed");\n    expect(campaignRecipientCounters(finished)).toEqual({ total: 2, processed: 2, sent: 2, confirmedSent: 1, unverifiedSent: 1, failed: 0, remaining: 0 });\n    expect(test.runner.calls).toEqual(["contact-1", "contact-2"]);\n  });\n\n'''
+          text = read(p); write(p, text[:insert_at] + extra + text[insert_at:])
+
+          # Contact engine regression: sent_unverified is terminal and never reconciled/retried.
+          write('tests/sent-unverified-contact.test.ts', '''import { describe, expect, it } from "vitest";\nimport { processContact } from "../src/engine/contact-engine";\nimport { createContactCheckpoint } from "../src/engine/steps";\nimport type { ContactAdapter, ContactCheckpointRepository, ContactProcessCheckpoint } from "../src/engine/types";\n\nclass Store implements ContactCheckpointRepository {\n  active: ContactProcessCheckpoint | null = null;\n  async loadActive() { return this.active; }\n  async saveActive(value: ContactProcessCheckpoint) { this.active = value; return value; }\n  async clearActive() { this.active = null; }\n}\n\ndescribe("SENT_UNVERIFIED contact safety", () => {\n  it("terminalizes the step and never executes it twice", async () => {\n    const store = new Store();\n    let sends = 0; let reconciles = 0;\n    const adapter: ContactAdapter = {\n      async openConversation() {},\n      async sendImage() { throw new Error("not used"); },\n      async sendText() { sends += 1; return { outcome: "sent_unverified", verification: { outcome: "sent_unverified", confidence: "unverified", method: "send-click-unverified", observedAt: new Date().toISOString(), sendAttempted: true } }; },\n      async reconcile() { reconciles += 1; return { outcome: "ambiguous", verification: { outcome: "ambiguous", method: "unexpected", observedAt: new Date().toISOString(), sendAttempted: true } }; }\n    };\n    const cp = createContactCheckpoint({ campaignId: "c", campaignName: "C", contact: { contactId: "r", phoneDigits: "5491112345678", maskedPhone: "+54*******5678" }, images: [], text: "Hola" });\n    const first = await processContact(cp, { store, adapter, sleep: async () => undefined });\n    expect(first.status).toBe("completed");\n    expect(first.steps[0]).toMatchObject({ status: "confirmed", verification: { outcome: "sent_unverified", sendAttempted: true } });\n    const second = await processContact(first, { store, adapter, sleep: async () => undefined });\n    expect(second.status).toBe("completed");\n    expect(sends).toBe(1);\n    expect(reconciles).toBe(0);\n  });\n});\n''')
+
+          # Update release metadata test automatically follows package/manifest values.
+          PY
+      - name: Install
+        run: npm ci
+      - name: Verify 0.9.4.3
+        run: npm run verify
+      - name: Check built version
+        run: node -e "const m=require('./dist/manifest.json'); if(m.version!=='0.9.4.3') process.exit(1); console.log(m.version)"
+      - name: Commit repaired release and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/p0-0943-apply.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: confirm post-click sends safely in 0.9.4.3"
+          git push origin main
