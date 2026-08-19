@@ -9,7 +9,7 @@ permissions:
   statuses: write
 
 jobs:
-  publish-p0-handshake:
+  publish-p0-product:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Publish verified P0 repair with phase tracing
+      - name: Publish verified product commits
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -29,7 +29,7 @@ jobs:
         run: |
           post() {
             state="$1"; phase="$2"; desc="$3"
-            payload=$(jq -n --arg state "$state" --arg context "p0/publish-$phase" --arg description "$desc" '{state:$state,context:$context,description:$description}')
+            payload=$(jq -n --arg state "$state" --arg context "p0/product-$phase" --arg description "$desc" '{state:$state,context:$context,description:$description}')
             curl --fail-with-body --silent --show-error \
               --request POST \
               --header "Authorization: Bearer $GH_TOKEN" \
@@ -38,12 +38,12 @@ jobs:
               --data "$payload" >/dev/null
           }
           fail() {
-            phase="$1"; code="$2"
-            post failure "$phase" "P0 publish failed at $phase"
+            phase="$1"; code="$2"; detail="${3:-P0 product publish failed at $phase}"
+            post failure "$phase" "$detail"
             exit "$code"
           }
 
-          post pending start "P0 publish started"
+          post pending start "P0 product publish started"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -59,23 +59,22 @@ jobs:
           git commit -m "chore: release 0.9.4.1" || fail commit-version $?
           post success commits "Logical product commits created"
 
-          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml || fail cleanup $?
-          git rm scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py scripts/fix-p0-test-tab-type.py .github/workflows/p0-handshake-fix.yml || fail cleanup $?
-          git add .github/workflows/verify.yml
-          git commit -m "chore: remove one-shot handshake repair helper" || fail cleanup $?
-          post success cleanup "Normal CI restored and helpers removed"
-
-          post pending npm-ci "Installing locked dependencies"
+          # Validate the exact product tree while removing diagnostic helpers only from the working tree.
+          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
+          rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py scripts/fix-p0-test-tab-type.py .github/workflows/p0-handshake-fix.yml
           npm ci --no-audit --no-fund || fail npm-ci $?
-          post success npm-ci "npm ci passed"
-
-          post pending verify "Running npm run verify"
           npm run verify || fail verify $?
-          post success verify "npm run verify passed"
+          node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`expected 0.9.4.1 got ${m.version}`);process.exit(1)}' || fail dist-version $?
+          post success verify "Product tree verify passed"
 
-          node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`expected 0.9.4.1 got ${m.version}`);process.exit(1)}; console.log(`dist version=${m.version}`)' || fail dist-version $?
-          post success dist-version "dist manifest is 0.9.4.1"
-
-          git push origin HEAD:main || fail push $?
-          post success push "Verified commits pushed to main"
-          post success start "P0 publish completed"
+          set +e
+          push_output=$(git push origin HEAD:main 2>&1)
+          push_code=$?
+          set -e
+          echo "$push_output"
+          if [ "$push_code" -ne 0 ]; then
+            detail=$(printf '%s' "$push_output" | tail -n 2 | tr '\n\r' '  ' | cut -c1-130)
+            fail push "$push_code" "$detail"
+          fi
+          post success push "Product commits pushed to main"
+          post success start "P0 product publish completed"
