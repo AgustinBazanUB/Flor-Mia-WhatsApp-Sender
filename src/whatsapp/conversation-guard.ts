@@ -17,6 +17,10 @@ export function notePotentialManualConversationNavigation(): void {
   trustedNavigationEpoch += 1;
 }
 
+export function resetConversationGuardForTesting(): void {
+  trustedNavigationEpoch = 0;
+}
+
 export function installConversationInteractionGuard(root: Document = document): () => void {
   if (installed) return () => undefined;
   installed = true;
