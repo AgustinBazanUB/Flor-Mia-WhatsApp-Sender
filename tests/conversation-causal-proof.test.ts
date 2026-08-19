@@ -20,8 +20,15 @@ const causal = (overrides: Partial<CausalNavigationContext> = {}): CausalNavigat
   ...overrides
 });
 
-function namedConversation(name = "Cliente guardado"): void {
-  document.body.innerHTML = `<div id="main"><header>${name}</header><footer><div role="textbox" contenteditable="true"></div></footer></div>`;
+function namedConversation(name = "Cliente guardado", presence = "online"): void {
+  document.body.innerHTML = `
+    <div id="main">
+      <header>
+        <span dir="auto" title="${name}">${name}</span>
+        <span data-testid="presence">${presence}</span>
+      </header>
+      <footer><div role="textbox" contenteditable="true"></div></footer>
+    </div>`;
 }
 
 describe("causal conversation proof", () => {
@@ -83,9 +90,17 @@ describe("causal conversation proof", () => {
     expect(() => requireConversationContext(EXPECTED)).toThrow(expect.objectContaining({ code: "CONTACT_CONTEXT_UNVERIFIED" }));
   });
 
-  it("invalidates a causal lease when the conversation fingerprint changes before Send", () => {
+  it("does not invalidate a causal lease when only dynamic presence text changes", () => {
     expect(proveConversationContext(EXPECTED, document, causal())).toMatchObject({ proofLevel: "causal" });
-    document.querySelector("header")!.textContent = "Otro contacto";
+    document.querySelector("[data-testid='presence']")!.textContent = "escribiendo…";
+    expect(requireConversationContext(EXPECTED)).toMatchObject({ verified: true, proofLevel: "causal" });
+  });
+
+  it("invalidates a causal lease when the stable contact identity changes before Send", () => {
+    expect(proveConversationContext(EXPECTED, document, causal())).toMatchObject({ proofLevel: "causal" });
+    const title = document.querySelector<HTMLElement>("header [title]")!;
+    title.setAttribute("title", "Otro contacto");
+    title.textContent = "Otro contacto";
     expect(() => requireConversationContext(EXPECTED)).toThrow(expect.objectContaining({ code: "CONTACT_CONTEXT_UNVERIFIED" }));
   });
 });
