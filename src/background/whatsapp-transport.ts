@@ -30,6 +30,8 @@ async function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<vo
 }
 
 export class WhatsAppTransport {
+  private readonly inFlightPreflights = new Map<string, Promise<unknown>>();
+
   async findTab(): Promise<chrome.tabs.Tab | null> {
     const tabs = await chrome.tabs.query({ url: "https://web.whatsapp.com/*" });
     return tabs.find((tab) => typeof tab.id === "number") ?? null;
@@ -53,20 +55,20 @@ export class WhatsAppTransport {
     }
   }
 
-  async send<T extends InternalMessageType>(
+  private async sendOnce<T extends InternalMessageType>(
     type: T,
     payload: InternalRequestMap[T],
-    tabId?: number
+    targetTabId: number,
+    validateBoundTab: boolean
   ): Promise<InternalResponseMap[T]> {
-    const targetTabId = tabId ?? (await this.requireTab()).id;
-    if (tabId !== undefined) await this.requireTabId(targetTabId);
+    if (validateBoundTab) await this.requireTabId(targetTabId);
     const request = createInternalRequest("service-worker", type, payload);
     let response: InternalResponse<InternalResponseMap[T]> | undefined;
     try {
       response = await chrome.tabs.sendMessage(targetTabId, request) as InternalResponse<InternalResponseMap[T]> | undefined;
     } catch (error) {
       let boundTabExists = false;
-      if (tabId !== undefined) {
+      if (validateBoundTab) {
         try { await this.requireTabId(targetTabId); boundTabExists = true; } catch { boundTabExists = false; }
       } else {
         boundTabExists = Boolean(await this.findTab());
@@ -88,6 +90,30 @@ export class WhatsAppTransport {
       );
     }
     return response.data;
+  }
+
+  async send<T extends InternalMessageType>(
+    type: T,
+    payload: InternalRequestMap[T],
+    tabId?: number
+  ): Promise<InternalResponseMap[T]> {
+    const targetTabId = tabId ?? (await this.requireTab()).id;
+    if (type !== INTERNAL_MESSAGE_TYPES.whatsappPreflight) {
+      return this.sendOnce(type, payload, targetTabId, tabId !== undefined);
+    }
+
+    // Un PING/health-check puede coincidir con otro preflight idéntico mientras WhatsApp
+    // todavía responde. Compartimos solamente el trabajo del Content Script; cada caller
+    // conserva después su propia evaluación/persistencia. Requests distintos no se mezclan.
+    const key = `${targetTabId}:${JSON.stringify(payload)}`;
+    const existing = this.inFlightPreflights.get(key);
+    if (existing) return existing as Promise<InternalResponseMap[T]>;
+    const pending = this.sendOnce(type, payload, targetTabId, tabId !== undefined)
+      .finally(() => {
+        if (this.inFlightPreflights.get(key) === pending) this.inFlightPreflights.delete(key);
+      });
+    this.inFlightPreflights.set(key, pending);
+    return pending;
   }
 
   async sendWhenContentReady<T extends InternalMessageType>(
