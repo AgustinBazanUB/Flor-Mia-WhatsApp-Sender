@@ -128,7 +128,8 @@ export class WhatsAppTransport {
       return await this.send(type, payload, tabId);
     } catch (error) {
       if (!(error instanceof ExtensionError) || error.code !== ERROR_CODES.interfaceLoading) throw error;
-      await this.waitForContent(tabId, timeoutMs, signal);
+      if (signal) await this.waitForContent(tabId, timeoutMs, signal);
+      else await this.waitForContent(tabId, timeoutMs);
       throwIfAborted(signal);
       return this.send(type, payload, tabId);
     }
