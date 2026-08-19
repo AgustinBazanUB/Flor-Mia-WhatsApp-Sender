@@ -5,82 +5,49 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
   statuses: write
 
 jobs:
-  diagnose-p0-verify:
+  diagnose-p0-typecheck:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
-      - name: Checkout current main
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Node.js 20
-        uses: actions/setup-node@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Patch clean and diagnose verification phases
+      - name: Patch and report first TypeScript error
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          status() {
-            state="$1"; phase="$2"; desc="$3"
-            payload=$(jq -n --arg state "$state" --arg context "p0/diag-$phase" --arg description "$desc" '{state:$state,context:$context,description:$description}')
-            curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-              --data "$payload" >/dev/null
-          }
-          capture_fail() {
-            phase="$1"; code="$2"; log="$3"
-            status failure "$phase" "P0 failed at $phase"
-            git reset --hard "$GITHUB_SHA"
-            {
-              echo "PHASE=$phase"
-              echo "EXIT=$code"
-              echo "--- OUTPUT ---"
-              cat "$log"
-            } > p0-verify-failure.log
-            git add p0-verify-failure.log
-            git commit -m "diag: capture P0 $phase failure"
-            git push origin HEAD:main
-            exit "$code"
-          }
-          run_phase() {
-            phase="$1"; shift
-            log="/tmp/p0-$phase.log"
-            status pending "$phase" "Running $phase"
-            set +e
-            "$@" >"$log" 2>&1
-            code=$?
-            set -e
-            cat "$log"
-            if [ "$code" -ne 0 ]; then capture_fail "$phase" "$code" "$log"; fi
-            status success "$phase" "$phase passed"
-          }
-
           python3 scripts/apply-p0-text.py
           git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
           rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py .github/workflows/p0-handshake-fix.yml
-
-          run_phase npm-ci npm ci
-          run_phase typecheck npm run typecheck
-          run_phase lint npm run lint
-          run_phase tests npm test
-          run_phase build npm run build
-          run_phase validate-build npm run validate:build
-          run_phase dist-version node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1") process.exit(1); console.log(m.version)'
-
-          status success all "All P0 verification phases passed"
+          npm ci >/tmp/npm-ci.log 2>&1
+          set +e
+          npm run typecheck >/tmp/typecheck.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/typecheck.log
+          if [ "$code" -eq 0 ]; then
+            state=success
+            summary=typecheck-passed
+          else
+            state=failure
+            summary=$(grep -E 'error TS[0-9]+' /tmp/typecheck.log | head -n 1 || true)
+            if [ -z "$summary" ]; then summary=$(tail -n 1 /tmp/typecheck.log); fi
+            summary=$(printf '%s' "$summary" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-110)
+          fi
+          context="p0/typecheck-$summary"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$summary" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload" >/dev/null
+          exit "$code"
