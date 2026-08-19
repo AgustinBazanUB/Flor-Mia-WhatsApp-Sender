@@ -299,7 +299,7 @@ describe("TechnicalReportV1", () => {
     expect(result.report.compatibility.currentDiscovery).not.toBeNull();
     expect(result.report.compatibility.lastKnownGood).toHaveProperty("media_send_action");
     expect(result.report.checkpoint?.currentStepId).toBe("image-2");
-    expect(result.report.campaign?.progress).toEqual({ completed: 1, total: 3, percentage: 33.33 });
+    expect(result.report.campaign?.progress).toEqual({ completed: 2, total: 3, percentage: 66.67 });
     expect(result.report.trace).toHaveLength(1);
     expect(result.report.serviceWorkerRecovery?.checkpointPresent).toBe(true);
     expect(result.report.environment.whatsappUrl).toBe("https://web.whatsapp.com/send");
