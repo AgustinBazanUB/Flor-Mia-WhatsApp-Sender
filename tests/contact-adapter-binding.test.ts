@@ -9,9 +9,10 @@ import { ERROR_CODES, ExtensionError } from "../src/shared/errors";
 
 const NOW = "2026-08-16T12:00:00.000Z";
 
-function green() {
+function green(contentInstanceId = "content-new") {
   return {
     ...createUnavailablePreflight("GREEN", {}, { pageDetected: true, contentScriptConnected: true }),
+    contentInstanceId,
     documentReady: true,
     sessionReady: true,
     mainInterfaceReady: true,
@@ -19,6 +20,10 @@ function green() {
     overallStatus: "GREEN" as const,
     status: "ready" as const
   };
+}
+
+function navigation(contentInstanceId = "content-old") {
+  return { navigationStarted: true as const, requestedNavigationAt: NOW, contentInstanceId };
 }
 
 function checkpoint() {
@@ -51,8 +56,8 @@ describe("active WhatsApp tab binding", () => {
       waitForContent: async () => green(),
       send: async (type: InternalMessageType, _payload: unknown, tabId?: number) => {
         calls.push({ type, tabId });
-        if (type === "WA_OPEN_CONVERSATION") return { navigationStarted: true };
-        if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "structured-recipient-id", checkedAt: NOW };
+        if (type === "WA_OPEN_CONVERSATION") return navigation();
+        if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
         if (type === "WA_SEND_IMAGE") return { success: true, verification: { outcome: "confirmed", method: "fake", observedAt: NOW, sendAttempted: true } };
         if (type === "WA_SEND_TEXT") return { success: true, completedAt: NOW, verification: { confirmed: true, method: "new-outgoing-message-dom" } };
         return { outcome: "confirmed", verification: { outcome: "confirmed", method: "fake", observedAt: NOW, sendAttempted: true } };
@@ -73,6 +78,59 @@ describe("active WhatsApp tab binding", () => {
     expect(calls.map((call) => call.tabId)).toEqual([11, 11, 11, 11, 11]);
   });
 
+  it("passes the old content generation to the handshake and the fresh one to conversation proof", async () => {
+    const waitOptions: unknown[] = [];
+    let proofPayload: Record<string, unknown> | null = null;
+    const fakeTransport = {
+      requireTab: async () => ({ id: 11, url: "https://web.whatsapp.com/" }),
+      requireTabId: async (id: number) => ({ id, url: "https://web.whatsapp.com/" }),
+      waitForContent: async (_tabId: number, _timeout: number, _signal: AbortSignal | undefined, options: unknown) => {
+        waitOptions.push(options);
+        return green("content-new");
+      },
+      send: async (type: InternalMessageType, payload: unknown) => {
+        if (type === "WA_OPEN_CONVERSATION") return navigation("content-old");
+        if (type === "WA_PROVE_CONVERSATION") {
+          proofPayload = payload as Record<string, unknown>;
+          return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
+        }
+        throw new Error("unexpected");
+      }
+    };
+    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, fakeTransport as unknown as WhatsAppTransport);
+    await adapter.openConversation(checkpoint().contact, 100);
+
+    expect(waitOptions).toEqual([{ previousContentInstanceId: "content-old", purpose: "content_handshake" }]);
+    expect(proofPayload).toMatchObject({ expectedContentInstanceId: "content-new" });
+  });
+
+  it("retries only handshake/proof after a transient receiver gap instead of navigating the same contact twice", async () => {
+    let navigations = 0;
+    let waits = 0;
+    const fakeTransport = {
+      requireTab: async () => ({ id: 11, url: "https://web.whatsapp.com/" }),
+      requireTabId: async (id: number) => ({ id, url: "https://web.whatsapp.com/" }),
+      waitForContent: async () => {
+        waits += 1;
+        if (waits === 1) throw new ExtensionError(ERROR_CODES.interfaceLoading, "receiver changing");
+        return green("content-new");
+      },
+      send: async (type: InternalMessageType) => {
+        if (type === "WA_OPEN_CONVERSATION") { navigations += 1; return navigation("content-old"); }
+        if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
+        throw new Error("unexpected");
+      }
+    };
+    const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, fakeTransport as unknown as WhatsAppTransport);
+    const contact = checkpoint().contact;
+
+    await expect(adapter.openConversation(contact, 20)).rejects.toMatchObject({ code: "INTERFACE_LOADING" });
+    await adapter.openConversation(contact, 100);
+
+    expect(navigations).toBe(1);
+    expect(waits).toBe(2);
+  });
+
   it("persists the tab id before navigation and reuses it after a simulated Service Worker restart", async () => {
     const state = checkpoint();
     const store = memoryCheckpoints(state);
@@ -83,8 +141,8 @@ describe("active WhatsApp tab binding", () => {
       requireTabId: async (id: number) => { requiredIds.push(id); return { id, url: "https://web.whatsapp.com/" }; },
       waitForContent: async () => green(),
       send: async (type: InternalMessageType) => type === "WA_OPEN_CONVERSATION"
-        ? { navigationStarted: true }
-        : { verified: true, evidence: "structured-recipient-id", checkedAt: NOW }
+        ? navigation()
+        : { verified: true, evidence: "header-recipient-id", checkedAt: NOW }
     };
 
     const firstAdapter = new ChromeWhatsAppContactAdapter(
@@ -119,7 +177,7 @@ describe("active WhatsApp tab binding", () => {
         throw new ExtensionError(ERROR_CODES.whatsappNotOpen, "closed");
       },
       waitForContent: async () => green(),
-      send: async () => ({ navigationStarted: true })
+      send: async () => navigation()
     };
     const recoveredAdapter = new ChromeWhatsAppContactAdapter(
       { getImage: async () => null },
@@ -143,8 +201,8 @@ describe("active WhatsApp tab binding", () => {
       waitForContent: async () => green(),
       send: async (type: InternalMessageType) => {
         if (!boundOpen) throw new ExtensionError(ERROR_CODES.whatsappNotOpen, "closed");
-        if (type === "WA_OPEN_CONVERSATION") return { navigationStarted: true };
-        return { verified: true, evidence: "structured-recipient-id", checkedAt: NOW };
+        if (type === "WA_OPEN_CONVERSATION") return navigation();
+        return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
       }
     };
     const adapter = new ChromeWhatsAppContactAdapter({ getImage: async () => null }, fakeTransport as unknown as WhatsAppTransport);
@@ -167,8 +225,8 @@ describe("active WhatsApp tab binding", () => {
       waitForContent: async () => green(),
       send: async (type: InternalMessageType, _payload: unknown, tabId?: number) => {
         expect(tabId).toBe(11);
-        if (type === "WA_OPEN_CONVERSATION") return { navigationStarted: true };
-        if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "structured-recipient-id", checkedAt: NOW };
+        if (type === "WA_OPEN_CONVERSATION") return navigation();
+        if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
         if (type === "WA_SEND_TEXT") {
           textAttempts += 1;
           if (textAttempts === 1) throw new ExtensionError(ERROR_CODES.interfaceLoading, "reloading");
