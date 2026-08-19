@@ -9,6 +9,7 @@ import type {
   CompatibilityOverallStatus,
   CompatibilityState,
   PreflightLevel,
+  PreflightPurpose,
   WhatsAppCapability
 } from "../compatibility/types";
 import type { DiagnosticIncident, ServiceWorkerRecoveryInfo } from "../diagnostics/types";
@@ -20,6 +21,9 @@ export interface WhatsAppPreflightResult {
   checkedAt: string;
   pageDetected: boolean;
   contentScriptConnected: boolean;
+  contentInstanceId: string | null;
+  purpose: PreflightPurpose;
+  diagnosticComposerMutationDetected: boolean;
   documentReady: boolean;
   sessionReady: boolean;
   mainInterfaceReady: boolean;
