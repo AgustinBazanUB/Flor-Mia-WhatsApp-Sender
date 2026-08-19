@@ -83,7 +83,9 @@ export function validateCampaignInput(value: unknown): ValidatedCampaign {
   const campaignId = requiredText(value.campaignId, "campaignId", MAX_CAMPAIGN_ID_LENGTH);
   const campaignName = requiredText(value.campaignName, "campaignName", MAX_CAMPAIGN_NAME_LENGTH);
   const createdBy = requiredText(value.createdBy, "createdBy", MAX_CREATED_BY_LENGTH);
-  const message = typeof value.message === "string" ? value.message.trim() : "";
+  // El contenido pertenece al usuario: no se trimmea ni se normaliza. Sólo usamos trim()
+  // más abajo para decidir si una campaña sin imágenes tiene contenido significativo.
+  const message = typeof value.message === "string" ? value.message : "";
   if (!Array.isArray(value.recipients) || value.recipients.length === 0) {
     throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña necesita al menos un destinatario.");
   }
@@ -92,8 +94,6 @@ export function validateCampaignInput(value: unknown): ValidatedCampaign {
   }
   const recipients = value.recipients.map((item, index): ValidatedCampaignRecipient => {
     if (!isRecord(item)) throw new ExtensionError(ERROR_CODES.invalidInput, `El destinatario ${index + 1} no es válido.`);
-    // La Web-App entrega `whatsappPhone` ya internacionalizado, sin prefijo `+`.
-    // Aceptarlo aquí no implica asumir país: todos los dígitos deben venir explícitos.
     const normalized = normalizePhone(requiredText(item.phone, `recipients[${index}].phone`, MAX_PHONE_INPUT_LENGTH), { allowDigitsOnly: true });
     const source = item.source;
     if (source !== "flor_mia" && source !== "excel") {
@@ -155,6 +155,6 @@ export function validateCampaignInput(value: unknown): ValidatedCampaign {
   const totalRecipients = Number(value.totalRecipients);
   if (imageCount !== images.length) throw new ExtensionError(ERROR_CODES.invalidInput, "imageCount no coincide con las imágenes recibidas.");
   if (totalRecipients !== recipients.length) throw new ExtensionError(ERROR_CODES.invalidInput, "totalRecipients no coincide con los destinatarios recibidos.");
-  if (!message && images.length === 0) throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña necesita texto o imágenes.");
+  if (!message.trim() && images.length === 0) throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña necesita texto o imágenes.");
   return { campaignId, campaignName, createdBy, recipients, message, imageCount, imageOrder, images, totalRecipients };
 }
