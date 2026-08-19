@@ -2,22 +2,19 @@ import { DEFAULT_PREFLIGHT_REQUIREMENTS, requiredCapabilities } from "../compati
 import type {
   CapabilityDiscovery,
   CapabilityState,
-  PreflightProbeImage,
   WhatsAppCapability,
   WhatsAppPreflightRequest
 } from "../compatibility/types";
 import type { WhatsAppPreflightResult } from "../shared/state";
 import {
-  canonicalMessageText,
-  findAttachButton,
   findComposer,
-  findImageFileInput,
-  findMediaPreviewCloseButton,
   findQrCode,
   resolveCapability,
   type CapabilityResolverOptions
 } from "./selectors";
 import { waitForCondition, waitForDocumentReady, type DocumentReadySignal } from "./wait";
+
+export const CONTENT_INSTANCE_ID = globalThis.crypto?.randomUUID?.() ?? `wa-content-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 const ALL_CAPABILITIES: WhatsAppCapability[] = [
   "whatsapp_page",
@@ -35,6 +32,17 @@ const ALL_CAPABILITIES: WhatsAppCapability[] = [
   "outgoing_text_evidence",
   "outgoing_media_evidence"
 ];
+
+const CONVERSATION_CONTEXT_CAPABILITIES = new Set<WhatsAppCapability>([
+  "composer",
+  "attachment_action",
+  "image_file_input",
+  "media_preview",
+  "media_send_action",
+  "text_send_action",
+  "outgoing_text_evidence",
+  "outgoing_media_evidence"
+]);
 
 function syntheticDiscovery(
   capability: WhatsAppCapability,
@@ -94,160 +102,38 @@ function markContextRequired(discovery: CapabilityDiscovery, message: string): C
   return { ...discovery, state: "requires_context", message };
 }
 
-function dispatchComposerInput(composer: HTMLElement, data: string | null): void {
-  const event = typeof InputEvent === "function"
-    ? new InputEvent("input", { bubbles: true, inputType: data ? "insertText" : "deleteContentBackward", data })
-    : new Event("input", { bubbles: true });
-  composer.dispatchEvent(event);
+function discoverTextSendAction(required: boolean, request: WhatsAppPreflightRequest): CapabilityDiscovery {
+  const discovery = resolveCapability("text_send_action", document, resolverOptions("text_send_action", required, request)).discovery;
+  if (discovery.state === "available" || !required) return discovery;
+  return markContextRequired(
+    discovery,
+    "La acción de envío de texto se valida durante el step real, después de insertar el contenido real de campaña. El preflight no modifica el composer."
+  );
 }
 
-async function discoverTextSendAction(
-  composer: HTMLElement | null,
-  required: boolean,
-  request: WhatsAppPreflightRequest
-): Promise<CapabilityDiscovery> {
-  const options = resolverOptions("text_send_action", required, request);
-  const initial = resolveCapability("text_send_action", document, options).discovery;
-  if (!required || initial.state === "available" || !composer || request.level === "lightweight") {
-    return initial.state === "unavailable" && !composer
-      ? markContextRequired(initial, "La acción de texto requiere una conversación abierta.")
-      : initial;
-  }
-  if (canonicalMessageText(composer.textContent ?? "")) {
-    return markContextRequired(initial, "No se modificó el borrador existente para ejecutar el diagnóstico.");
-  }
-  const originalChildren = [...composer.childNodes];
-  try {
-    composer.replaceChildren(document.createTextNode("Diagnóstico Flor Mía"));
-    dispatchComposerInput(composer, "Diagnóstico Flor Mía");
-    return await waitForCondition(
-      () => resolveCapability("text_send_action", document, options).match,
-      { timeoutMs: Math.min(request.timeoutMs ?? 8_000, 2_000), description: "la acción de texto sin accionar envío" }
-    ).then(() => resolveCapability("text_send_action", document, options).discovery).catch(() => initial);
-  } finally {
-    composer.replaceChildren(...originalChildren);
-    dispatchComposerInput(composer, null);
-  }
-}
-
-function setProbeImage(input: HTMLInputElement, probe: PreflightProbeImage): boolean {
-  if (typeof DataTransfer !== "function") return false;
-  try {
-    const binary = atob(probe.dataBase64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    if (bytes.byteLength !== probe.size) return false;
-    const transfer = new DataTransfer();
-    transfer.items.add(new File([bytes], probe.name, { type: probe.type, lastModified: Date.now() }));
-    input.files = transfer.files;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    return input.files?.item(0)?.size === probe.size;
-  } catch {
-    return false;
-  }
-}
-
-function clearProbeInput(input: HTMLInputElement): void {
-  input.value = "";
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-}
-
-async function dismissProbePreview(preview: HTMLElement, input: HTMLInputElement): Promise<boolean> {
-  const close = findMediaPreviewCloseButton(preview) ?? findMediaPreviewCloseButton();
-  close?.element.click();
-  if (!close) clearProbeInput(input);
-  const closed = await waitForCondition(
-    () => !preview.isConnected || preview.hidden || preview.getAttribute("aria-hidden") === "true",
-    { timeoutMs: 2_000, description: "el cierre seguro del preview de diagnóstico" }
-  ).then(() => true).catch(() => false);
-  clearProbeInput(input);
-  return closed;
-}
-
-function discoverMediaSendAction(
-  preview: HTMLElement,
-  options: CapabilityResolverOptions
-): CapabilityDiscovery {
-  const scoped = resolveCapability("media_send_action", preview, options);
-  if (scoped.match) return scoped.discovery;
-  return resolveCapability("media_send_action", document, options).discovery;
-}
-
-async function discoverMediaContext(
+function discoverMediaContext(
   required: Set<WhatsAppCapability>,
   request: WhatsAppPreflightRequest,
   discoveries: Partial<Record<WhatsAppCapability, CapabilityDiscovery>>
-): Promise<void> {
-  const previewOptions = resolverOptions("media_preview", required.has("media_preview"), request);
-  const sendOptions = resolverOptions("media_send_action", required.has("media_send_action"), request);
-  let previewResolution = resolveCapability("media_preview", document, previewOptions);
-  if (previewResolution.match) {
-    discoveries.media_preview = previewResolution.discovery;
-    discoveries.media_send_action = discoverMediaSendAction(previewResolution.match.element, sendOptions);
-    return;
-  }
-  const requiresFullMediaProbe = required.has("image_file_input")
-    || required.has("media_preview")
-    || required.has("media_send_action");
-  if (!requiresFullMediaProbe || !request.probeImage || request.level !== "full") {
-    discoveries.media_preview = markContextRequired(previewResolution.discovery, "Se necesita un preview real para verificar esta capability sin enviar.");
-    const send = resolveCapability("media_send_action", document, sendOptions).discovery;
-    discoveries.media_send_action = markContextRequired(send, "La acción multimedia solamente se verifica dentro de un preview real.");
-    return;
-  }
+): void {
+  const preview = resolveCapability("media_preview", document, resolverOptions("media_preview", required.has("media_preview"), request));
+  discoveries.media_preview = preview.match
+    ? preview.discovery
+    : markContextRequired(preview.discovery, "El preview multimedia se valida únicamente con la imagen real durante el step de envío.");
 
-  let inputResolution = resolveCapability<HTMLInputElement>(
-    "image_file_input",
-    document,
-    resolverOptions("image_file_input", required.has("image_file_input"), request)
-  );
-  const existingInput = inputResolution.match;
-  const attach = findAttachButton();
-  attach?.element.click();
-  const fileInput = existingInput ?? await waitForCondition(
-    () => findImageFileInput(),
-    { timeoutMs: Math.min(request.timeoutMs ?? 8_000, 3_000), description: "el input de imagen para diagnóstico" }
-  ).catch(() => null);
-  inputResolution = resolveCapability<HTMLInputElement>(
-    "image_file_input",
-    document,
-    resolverOptions("image_file_input", required.has("image_file_input"), request)
-  );
-  discoveries.image_file_input = inputResolution.discovery;
-  if (!fileInput || !setProbeImage(fileInput.element, request.probeImage)) {
-    if (fileInput) clearProbeInput(fileInput.element);
-    attach?.element.click();
-    discoveries.media_preview = { ...previewResolution.discovery, message: "No fue posible preparar un preview técnico sin enviar contenido." };
-    discoveries.media_send_action = markContextRequired(
-      resolveCapability("media_send_action", document, sendOptions).discovery,
-      "La acción multimedia no pudo verificarse porque el preview técnico no estuvo disponible."
-    );
+  if (preview.match) {
+    const scoped = resolveCapability("media_send_action", preview.match.element, resolverOptions("media_send_action", required.has("media_send_action"), request));
+    const fallback = scoped.match
+      ? scoped
+      : resolveCapability("media_send_action", document, resolverOptions("media_send_action", required.has("media_send_action"), request));
+    discoveries.media_send_action = fallback.discovery;
     return;
   }
-
-  previewResolution = await waitForCondition(
-    () => resolveCapability("media_preview", document, previewOptions).match,
-    { timeoutMs: Math.min(request.timeoutMs ?? 8_000, 5_000), description: "el preview técnico sin envío" }
-  ).then(() => resolveCapability("media_preview", document, previewOptions)).catch(() => previewResolution);
-  if (!previewResolution.match) {
-    clearProbeInput(fileInput.element);
-    attach?.element.click();
-    discoveries.media_preview = previewResolution.discovery;
-    discoveries.media_send_action = markContextRequired(
-      resolveCapability("media_send_action", document, sendOptions).discovery,
-      "El preview no apareció; la acción multimedia no se probó."
-    );
-    return;
-  }
-  const send = discoverMediaSendAction(previewResolution.match.element, sendOptions);
-  const safelyDismissed = await dismissProbePreview(previewResolution.match.element, fileInput.element);
-  discoveries.media_preview = safelyDismissed
-    ? previewResolution.discovery
-    : { ...previewResolution.discovery, state: "unavailable", message: "El preview se detectó, pero no pudo cerrarse de forma segura." };
-  discoveries.media_send_action = safelyDismissed
-    ? send
-    : { ...send, state: "unavailable", message: "La prueba multimedia no pudo restaurar la interfaz con seguridad." };
+  const send = resolveCapability("media_send_action", document, resolverOptions("media_send_action", required.has("media_send_action"), request)).discovery;
+  discoveries.media_send_action = markContextRequired(
+    send,
+    "La acción multimedia se valida dentro de un preview real; el preflight automático no adjunta archivos ni abre previews artificiales."
+  );
 }
 
 function hasSemanticWhatsAppSurface(): boolean {
@@ -263,6 +149,7 @@ export async function runWhatsAppPreflight(
   const level = request.level ?? "full";
   const requirements = request.requirements ?? DEFAULT_PREFLIGHT_REQUIREMENTS;
   const required = requiredCapabilities(requirements, level);
+  if (request.targetedCapability) required.add(request.targetedCapability);
   const pageDetected = window.location.origin === "https://web.whatsapp.com";
   let readinessSignal: DocumentReadySignal | null = document.readyState === "interactive" || document.readyState === "complete"
     ? "ready-state"
@@ -287,14 +174,11 @@ export async function runWhatsAppPreflight(
     ).catch(() => null);
   }
 
-  // La lista de chats puede seguir disponible mientras /send?phone=... todavía está
-  // cargando el panel de conversación. Si la campaña necesita composer, no debemos
-  // clasificar ese estado transitorio como incompatibilidad: esperamos el contexto
-  // que realmente exige la campaña, sin hacer click ni degradar la validación.
-  if (pageDetected && documentReady && required.has("composer") && !findQrCode() && !findComposer()) {
+  const requiresConversationContext = [...required].some((capability) => CONVERSATION_CONTEXT_CAPABILITIES.has(capability));
+  if (pageDetected && documentReady && requiresConversationContext && !findQrCode() && !findComposer()) {
     await waitForCondition(
       () => findQrCode() || findComposer(),
-      { timeoutMs, description: "la conversación activa y su campo de escritura" }
+      { timeoutMs, description: "una conversación activa para el diagnóstico manual solicitado" }
     ).catch(() => null);
   }
 
@@ -312,7 +196,7 @@ export async function runWhatsAppPreflight(
     session: syntheticDiscovery("session", sessionReady ? "available" : "unavailable", required.has("session"), "preflight.session", "sesión autenticada sin QR", sessionReady ? "La sesión está iniciada." : qrDetected ? "WhatsApp requiere inicio de sesión manual." : "La sesión todavía no puede confirmarse.", sessionReady ? "session.main-interface-without-qr" : undefined),
     main_interface: main.discovery,
     open_conversation: syntheticDiscovery("open_conversation", sessionReady ? "available" : "unavailable", required.has("open_conversation"), "conversation.open", "navegación segura /send sin envío", sessionReady ? "La navegación a un destinatario explícito está disponible." : "Se necesita una sesión iniciada.", sessionReady ? "navigation.send-url" : undefined, "location"),
-    composer: composer.match ? composer.discovery : markContextRequired(composer.discovery, "El composer requiere una conversación abierta."),
+    composer: composer.match ? composer.discovery : markContextRequired(composer.discovery, "El composer se valida después de abrir y probar la conversación correcta."),
     attachment_action: resolveCapability("attachment_action", document, resolverOptions("attachment_action", required.has("attachment_action"), request)).discovery,
     image_file_input: resolveCapability("image_file_input", document, resolverOptions("image_file_input", required.has("image_file_input"), request)).discovery,
     outgoing_text_evidence: resolveCapability("outgoing_text_evidence", document, resolverOptions("outgoing_text_evidence", required.has("outgoing_text_evidence"), request)).discovery,
@@ -322,12 +206,12 @@ export async function runWhatsAppPreflight(
   if (!composer.match) {
     for (const capability of ["attachment_action", "image_file_input", "outgoing_text_evidence", "outgoing_media_evidence"] as const) {
       if (discoveries[capability]?.state === "unavailable") {
-        discoveries[capability] = markContextRequired(discoveries[capability]!, "Esta capability requiere una conversación abierta.");
+        discoveries[capability] = markContextRequired(discoveries[capability]!, "Esta capability se valida dentro de una conversación real ya probada.");
       }
     }
   }
-  discoveries.text_send_action = await discoverTextSendAction(composer.match?.element ?? null, required.has("text_send_action"), request);
-  await discoverMediaContext(required, request, discoveries);
+  discoveries.text_send_action = discoverTextSendAction(required.has("text_send_action"), request);
+  discoverMediaContext(required, request, discoveries);
 
   for (const capability of ALL_CAPABILITIES) {
     if (discoveries[capability]) continue;
@@ -346,7 +230,7 @@ export async function runWhatsAppPreflight(
   const overallStatus: WhatsAppPreflightResult["overallStatus"] = criticalFailures.length === 0 ? "GREEN" : "RED";
   let status: WhatsAppPreflightResult["status"] = overallStatus === "GREEN" ? "ready" : "incompatible";
   let message = overallStatus === "GREEN"
-    ? "Todas las capabilities críticas para esta campaña están disponibles."
+    ? "WhatsApp está conectado y las capacidades no destructivas necesarias están disponibles. Las acciones de envío se validarán con el contenido real."
     : "WhatsApp Web no es compatible actualmente con una o más funciones necesarias.";
   if (!pageDetected) {
     status = "unavailable";
@@ -363,6 +247,9 @@ export async function runWhatsAppPreflight(
     checkedAt,
     pageDetected,
     contentScriptConnected: true,
+    contentInstanceId: CONTENT_INSTANCE_ID,
+    purpose: request.purpose ?? "unspecified",
+    diagnosticComposerMutationDetected: false,
     documentReady,
     sessionReady,
     mainInterfaceReady,
