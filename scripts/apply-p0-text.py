@@ -48,6 +48,30 @@ transport = extract("transportSource", "`;\n\nconst openConversationSource = Str
 open_conversation = extract("openConversationSource", "`;\n\nfunction patchCore()")
 lifecycle_tests = extract("lifecycleTestSource", "`;\n\nfunction patchTests()")
 transport = transport.replace("chrome.tabs.TabStatus | null", 'chrome.tabs.Tab["status"] | null')
+
+handshake_marker = '    const handshakeAt = new Date().toISOString();'
+handshake_guard = '''    const handshakeContentInstanceId = handshake.contentInstanceId;
+    if (!handshakeContentInstanceId) {
+      throw new ExtensionError(ERROR_CODES.protocolError, "El Content Script nuevo no informó su generación después de la navegación.", {
+        recoverable: false,
+        details: { stage: "content_handshake", navigationRequestId: pending.navigationRequestId }
+      });
+    }
+    const handshakeAt = new Date().toISOString();'''
+if handshake_marker not in open_conversation:
+    raise RuntimeError("missing handshake marker in contact adapter source")
+open_conversation = open_conversation.replace(handshake_marker, handshake_guard, 1)
+open_conversation = open_conversation.replace(
+    '      newContentGeneration: handshake.contentInstanceId ?? null,',
+    '      newContentGeneration: handshakeContentInstanceId,',
+    1,
+)
+open_conversation = open_conversation.replace(
+    '        expectedContentInstanceId: handshake.contentInstanceId,',
+    '        expectedContentInstanceId: handshakeContentInstanceId,',
+    1,
+)
+
 old_event_helper = '''function event<T extends (...args: any[]) => void>() {
   const listeners = new Set<T>();
   return {
@@ -153,6 +177,12 @@ sw_new = '''    const openDeadlineMs = Date.now() + 40_000;
       purpose: "content_handshake",
       navigationRequestId
     });
+    if (!handshake.contentInstanceId) {
+      throw new ExtensionError(ERROR_CODES.protocolError, "El Content Script nuevo no informó su generación después de la navegación.", {
+        recoverable: false,
+        details: { stage: "content_handshake", navigationRequestId }
+      });
+    }
     const readiness = await whatsappTransport.waitForSemanticReady(tab.id, remainingOpenBudget(), undefined, {
       expectedContentInstanceId: handshake.contentInstanceId,
       navigationRequestId
