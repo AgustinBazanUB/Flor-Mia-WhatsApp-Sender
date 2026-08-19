@@ -1,15 +1,23 @@
 import { createContactCheckpoint } from "../engine/steps";
-import type { ContactCheckpointRepository, ContactProcessCheckpoint } from "../engine/types";
+import type { ContactCheckpointRepository, ContactProcessCheckpoint, ContactStep } from "../engine/types";
 import { ERROR_CODES, ExtensionError } from "../shared/errors";
+import { createId } from "../shared/ids";
 import { assertCampaignTransition } from "./campaign-state-machine";
 import type {
   CampaignBlockReason,
   CampaignRepository,
   CampaignState,
-  DailyLimitRepository
+  DailyLimitRepository,
+  DailyLimitState
 } from "./campaign-types";
 import { COMPATIBILITY_ERROR_CODES } from "../compatibility/diagnostic-error";
 import { hasUnresolvedSendEvidence } from "../engine/checkpoint-safety";
+import {
+  campaignContactFailureClass,
+  campaignFailureRecord,
+  checkpointTechnicalError,
+  LOCAL_FAILURE_CIRCUIT_THRESHOLD
+} from "./failure-policy";
 
 export type CampaignCompletionFaultPoint =
   | "after_contact_completed"
@@ -59,8 +67,7 @@ function checkpointBlock(checkpoint: ContactProcessCheckpoint, at: string): {
   reason: CampaignBlockReason;
   recipientStatus: CampaignState["recipients"][number]["status"];
 } {
-  const currentStepError = checkpoint.steps.find((step) => step.id === checkpoint.currentStepId)?.error;
-  const technicalError = checkpoint.error ?? currentStepError;
+  const technicalError = checkpointTechnicalError(checkpoint);
   if (checkpoint.status === "images_required") {
     return {
       status: "images_required",
@@ -68,7 +75,7 @@ function checkpointBlock(checkpoint: ContactProcessCheckpoint, at: string): {
       reason: block("images_required", "Faltan imágenes temporales para continuar la campaña.", at, true, technicalError)
     };
   }
-  if (checkpoint.pauseReason === "verification_pending") {
+  if (checkpoint.pauseReason === "verification_pending" || hasUnresolvedSendEvidence(checkpoint)) {
     return {
       status: "paused",
       recipientStatus: "paused",
@@ -137,6 +144,50 @@ function checkpointBlock(checkpoint: ContactProcessCheckpoint, at: string): {
   };
 }
 
+function terminalRecipient(status: CampaignState["recipients"][number]["status"]): boolean {
+  return status === "completed" || status === "error";
+}
+
+function resetFailureCircuit(campaign: CampaignState, at: string): CampaignState["failureCircuit"] {
+  return {
+    signature: null,
+    consecutive: 0,
+    threshold: campaign.failureCircuit?.threshold ?? LOCAL_FAILURE_CIRCUIT_THRESHOLD,
+    updatedAt: at
+  };
+}
+
+function retryCheckpoint(checkpoint: ContactProcessCheckpoint, at: string): ContactProcessCheckpoint {
+  if (hasUnresolvedSendEvidence(checkpoint)) {
+    throw new ExtensionError(ERROR_CODES.ambiguousResult, "No se puede reintentar mientras el último envío siga siendo ambiguo.", {
+      recoverable: true
+    });
+  }
+  const steps = checkpoint.steps.map((step): ContactStep => {
+    if (step.status === "confirmed") return { ...step };
+    return {
+      ...step,
+      status: "pending",
+      attempts: 0,
+      verification: undefined,
+      error: undefined,
+      completedAt: undefined
+    } as ContactStep;
+  });
+  return {
+    ...checkpoint,
+    status: "pending",
+    pauseReason: undefined,
+    currentStepId: null,
+    openConversationFailures: 0,
+    openConversationAttempts: 0,
+    error: undefined,
+    completedAt: undefined,
+    steps,
+    updatedAt: at
+  };
+}
+
 export class CampaignEngine {
   private readonly now: () => Date;
 
@@ -175,6 +226,36 @@ export class CampaignEngine {
     await this.dependencies.completionFault?.(point);
   }
 
+  private waitAfterProcessed(
+    campaign: CampaignState,
+    processedInBatch: number,
+    daily: DailyLimitState,
+    at: string
+  ): Partial<CampaignState> {
+    if (campaign.stopRequested) return { status: "stopped", wait: null, stoppedAt: at };
+    if (campaign.pauseRequested) return { status: "paused", wait: null };
+    if (daily.remaining <= 0) {
+      return {
+        status: "daily_limit_reached",
+        wait: null,
+        blockReason: block("daily_limit_reached", "El contacto activo finalizó; el siguiente queda bloqueado por el límite diario.", at, true)
+      };
+    }
+    const batchBoundary = processedInBatch >= campaign.policy.contactsPerBatch;
+    const delayMs = batchBoundary ? campaign.policy.delayBetweenBatchesMs : campaign.policy.delayBetweenContactsMs;
+    const scheduledAt = this.now();
+    return {
+      status: batchBoundary ? "waiting_batch" : "waiting_contact",
+      batchNumber: batchBoundary ? campaign.batchNumber + 1 : campaign.batchNumber,
+      contactsCompletedInBatch: batchBoundary ? 0 : processedInBatch,
+      wait: {
+        kind: batchBoundary ? "between_batches" : "between_contacts",
+        scheduledAt: scheduledAt.toISOString(),
+        until: new Date(scheduledAt.getTime() + delayMs).toISOString()
+      }
+    };
+  }
+
   private async applyCompletedCheckpoint(
     campaign: CampaignState,
     recipient: CampaignState["recipients"][number]
@@ -188,51 +269,89 @@ export class CampaignEngine {
     await this.completionFault("after_daily_increment");
     const completedAt = this.now().toISOString();
     const recipients = campaign.recipients.map((item) => item.recipientId === recipient.recipientId
-      ? { ...item, status: "completed" as const, completedAt, error: undefined }
+      ? { ...item, status: "completed" as const, completedAt, error: undefined, failure: undefined }
       : item);
-    const allCompleted = recipients.every((item) => item.status === "completed");
-    const completedInBatch = campaign.contactsCompletedInBatch + 1;
+    const allProcessed = recipients.every((item) => terminalRecipient(item.status));
+    const processedInBatch = campaign.contactsCompletedInBatch + 1;
     const basePatch: Partial<CampaignState> = {
       recipients,
       dailyLimit: daily,
       lastCompletedContactId: recipient.recipientId,
       activeContactId: null,
-      currentRecipientIndex: allCompleted ? null : recipient.position - 1,
-      contactsCompletedInBatch: completedInBatch,
-      blockReason: null
+      currentRecipientIndex: allProcessed ? null : recipient.position - 1,
+      contactsCompletedInBatch: processedInBatch,
+      blockReason: null,
+      failureCircuit: resetFailureCircuit(campaign, completedAt)
     };
-    let terminalPatch: Partial<CampaignState>;
-    if (allCompleted) {
-      terminalPatch = { status: "completed", wait: null, completedAt };
-    } else if (campaign.stopRequested) {
-      terminalPatch = { status: "stopped", wait: null, stoppedAt: completedAt };
-    } else if (campaign.pauseRequested) {
-      terminalPatch = { status: "paused", wait: null };
-    } else if (daily.remaining <= 0) {
-      terminalPatch = {
-        status: "daily_limit_reached",
-        wait: null,
-        blockReason: block("daily_limit_reached", "El contacto activo finalizó; el siguiente queda bloqueado por el límite diario.", completedAt, true)
-      };
-    } else {
-      const batchBoundary = completedInBatch >= campaign.policy.contactsPerBatch;
-      const delayMs = batchBoundary ? campaign.policy.delayBetweenBatchesMs : campaign.policy.delayBetweenContactsMs;
-      const scheduledAt = this.now();
-      terminalPatch = {
-        status: batchBoundary ? "waiting_batch" : "waiting_contact",
-        batchNumber: batchBoundary ? campaign.batchNumber + 1 : campaign.batchNumber,
-        contactsCompletedInBatch: batchBoundary ? 0 : completedInBatch,
-        wait: {
-          kind: batchBoundary ? "between_batches" : "between_contacts",
-          scheduledAt: scheduledAt.toISOString(),
-          until: new Date(scheduledAt.getTime() + delayMs).toISOString()
-        }
-      };
-    }
+    const terminalPatch: Partial<CampaignState> = allProcessed
+      ? { status: "completed", wait: null, completedAt }
+      : this.waitAfterProcessed(campaign, processedInBatch, daily, completedAt);
     await this.completionFault("before_campaign_save");
     const saved = await this.save(campaign, { ...basePatch, ...terminalPatch });
     await this.completionFault("after_campaign_save");
     await this.completionFault("before_checkpoint_clear");
+    await this.dependencies.contactCheckpoints.clearActive();
+    return saved;
+  }
+
+  private async applySafeFailedCheckpoint(
+    campaign: CampaignState,
+    recipient: CampaignState["recipients"][number],
+    checkpoint: ContactProcessCheckpoint
+  ): Promise<CampaignState> {
+    const failedAt = this.now().toISOString();
+    const failure = campaignFailureRecord(checkpoint, failedAt);
+    if (failure.sendAttempted || failure.ambiguous) {
+      throw new ExtensionError(ERROR_CODES.ambiguousResult, "El contacto conserva evidencia de envío y no puede marcarse como fallido seguro.", {
+        recoverable: false
+      });
+    }
+    const technicalError = checkpointTechnicalError(checkpoint);
+    const recipients = campaign.recipients.map((item) => item.recipientId === recipient.recipientId
+      ? {
+          ...item,
+          status: "error" as const,
+          completedAt: failedAt,
+          error: technicalError,
+          failure: { ...failure, retryEligible: true }
+        }
+      : item);
+    const previousCircuit = campaign.failureCircuit;
+    const consecutive = previousCircuit?.signature === failure.signature ? previousCircuit.consecutive + 1 : 1;
+    const threshold = previousCircuit?.threshold ?? LOCAL_FAILURE_CIRCUIT_THRESHOLD;
+    const failureCircuit = { signature: failure.signature, consecutive, threshold, updatedAt: failedAt };
+    const allProcessed = recipients.every((item) => terminalRecipient(item.status));
+    const processedInBatch = campaign.contactsCompletedInBatch + 1;
+    let terminalPatch: Partial<CampaignState>;
+    if (campaign.stopRequested) {
+      terminalPatch = { status: "stopped", wait: null, stoppedAt: failedAt, blockReason: null };
+    } else if (campaign.pauseRequested) {
+      terminalPatch = { status: "paused", wait: null, blockReason: block("manual_pause", "La campaña quedó pausada en una frontera segura.", failedAt, true) };
+    } else if (consecutive >= threshold) {
+      terminalPatch = {
+        status: "paused",
+        wait: null,
+        blockReason: block(
+          "repeated_contact_failures",
+          `${consecutive} contactos consecutivos tuvieron el mismo problema técnico. La campaña se pausó para evitar fallar masivamente.`,
+          failedAt,
+          true,
+          technicalError
+        )
+      };
+    } else if (allProcessed) {
+      terminalPatch = { status: "completed", wait: null, completedAt: failedAt, blockReason: null };
+    } else {
+      terminalPatch = this.waitAfterProcessed(campaign, processedInBatch, campaign.dailyLimit, failedAt);
+    }
+    const saved = await this.save(campaign, {
+      recipients,
+      activeContactId: null,
+      currentRecipientIndex: allProcessed ? null : recipient.position - 1,
+      contactsCompletedInBatch: processedInBatch,
+      failureCircuit,
+      ...terminalPatch
+    });
     await this.dependencies.contactCheckpoints.clearActive();
     return saved;
   }
@@ -282,7 +401,7 @@ export class CampaignEngine {
       throw new ExtensionError(ERROR_CODES.imageMissing, "La campaña requiere restaurar sus imágenes antes de reanudarse.");
     }
     if (campaign.status === "error") {
-      throw new ExtensionError(ERROR_CODES.campaignStopped, "La campaña tiene un error no recuperable y no puede reanudarse automáticamente.", { recoverable: false });
+      throw new ExtensionError(ERROR_CODES.campaignStopped, "Usá Reintentar cuando el error sea recuperable; Reanudar no reinicia presupuestos de error.", { recoverable: true });
     }
     const daily = await this.dependencies.dailyLimit.load(campaign.policy.dailyContactLimit, this.now());
     if (campaign.activeContactId === null && daily.remaining <= 0) {
@@ -303,6 +422,97 @@ export class CampaignEngine {
       wait: pendingWait
     });
     return pendingWait ? campaign : this.save(campaign, { status: "running" });
+  }
+
+  async retry(campaignId: string): Promise<CampaignState> {
+    let campaign = await this.requireCampaign(campaignId);
+    if (campaign.status === "stopped" || campaign.status === "completed") {
+      throw new ExtensionError(ERROR_CODES.invalidInput, "Esta campaña no admite Reintentar. Usá Reintentar fallidos cuando haya terminado con problemas.");
+    }
+    const at = this.now().toISOString();
+    const checkpoint = await this.dependencies.contactCheckpoints.loadActive();
+    if (checkpoint?.campaignId === campaignId) {
+      const retried = retryCheckpoint(checkpoint, at);
+      await this.dependencies.contactCheckpoints.saveActive(retried);
+      const activeId = campaign.activeContactId ?? checkpoint.contact.contactId;
+      campaign = await this.save(campaign, {
+        status: "running",
+        activeContactId: activeId,
+        currentRecipientIndex: campaign.recipients.findIndex((item) => item.recipientId === activeId),
+        recipients: campaign.recipients.map((item) => item.recipientId === activeId
+          ? { ...item, status: "active", error: undefined, failure: undefined }
+          : item),
+        pauseRequested: false,
+        stopRequested: false,
+        blockReason: null,
+        wait: null,
+        failureCircuit: resetFailureCircuit(campaign, at)
+      });
+      return campaign;
+    }
+
+    const failedRecipient = [...campaign.recipients].reverse().find((item) =>
+      item.status === "error" && item.failure?.retryEligible === true && !item.failure.ambiguous && !item.failure.sendAttempted);
+    if (!failedRecipient) {
+      throw new ExtensionError(ERROR_CODES.invalidInput, "No hay un contacto fallido que pueda reintentarse sin riesgo de duplicado.");
+    }
+    return this.save(campaign, {
+      status: "running",
+      recipients: campaign.recipients.map((item) => item.recipientId === failedRecipient.recipientId
+        ? { ...item, status: "pending", completedAt: undefined, error: undefined, failure: undefined }
+        : item),
+      activeContactId: null,
+      currentRecipientIndex: null,
+      pauseRequested: false,
+      stopRequested: false,
+      blockReason: null,
+      wait: null,
+      runToken: createId("campaign-run"),
+      retryCycle: (campaign.retryCycle ?? 0) + 1,
+      completedAt: undefined,
+      failureCircuit: resetFailureCircuit(campaign, at)
+    });
+  }
+
+  async retryFailed(campaignId: string): Promise<CampaignState> {
+    const campaign = await this.requireCampaign(campaignId);
+    if (campaign.status !== "completed") {
+      throw new ExtensionError(ERROR_CODES.invalidInput, "Reintentar fallidos sólo está disponible al finalizar una campaña.");
+    }
+    const checkpoint = await this.dependencies.contactCheckpoints.loadActive();
+    if (checkpoint?.campaignId === campaignId && hasUnresolvedSendEvidence(checkpoint)) {
+      throw new ExtensionError(ERROR_CODES.ambiguousResult, "Existe un envío ambiguo pendiente. No se reintentará automáticamente.");
+    }
+    const retryableIds = new Set(campaign.recipients
+      .filter((item) => item.status === "error" && item.failure?.retryEligible === true && !item.failure.ambiguous && !item.failure.sendAttempted)
+      .map((item) => item.recipientId));
+    if (retryableIds.size === 0) {
+      throw new ExtensionError(ERROR_CODES.invalidInput, "No hay destinatarios fallidos con evidencia suficiente para un reintento seguro.");
+    }
+    if (checkpoint?.campaignId === campaignId) await this.dependencies.contactCheckpoints.clearActive();
+    const at = this.now().toISOString();
+    const daily = await this.dependencies.dailyLimit.load(campaign.policy.dailyContactLimit, this.now());
+    const recipients = campaign.recipients.map((item) => retryableIds.has(item.recipientId)
+      ? { ...item, status: "pending" as const, completedAt: undefined, error: undefined, failure: undefined }
+      : item);
+    return this.save(campaign, {
+      status: daily.remaining <= 0 ? "daily_limit_reached" : "running",
+      recipients,
+      dailyLimit: daily,
+      activeContactId: null,
+      currentRecipientIndex: null,
+      pauseRequested: false,
+      stopRequested: false,
+      blockReason: daily.remaining <= 0
+        ? block("daily_limit_reached", "Se alcanzó el límite diario; los fallidos quedaron preparados para otro momento.", at, true)
+        : null,
+      wait: null,
+      contactsCompletedInBatch: 0,
+      runToken: createId("campaign-run"),
+      retryCycle: (campaign.retryCycle ?? 0) + 1,
+      completedAt: undefined,
+      failureCircuit: resetFailureCircuit(campaign, at)
+    });
   }
 
   async requestStop(campaignId: string): Promise<CampaignState> {
@@ -338,8 +548,13 @@ export class CampaignEngine {
     if (campaign.status === "waiting_batch" || campaign.status === "waiting_contact") return campaign;
     if (["received", "paused", "daily_limit_reached", "images_required", "error"].includes(campaign.status)) return campaign;
     if (checkpoint && checkpoint.campaignId === campaign.campaignId) {
+      const failureClass = campaignContactFailureClass(checkpoint);
+      const activeRecipient = campaign.recipients.find((recipient) => recipient.recipientId === campaign.activeContactId);
+      if (failureClass === "local_safe" && activeRecipient && checkpointTechnicalError(checkpoint)) {
+        return this.applySafeFailedCheckpoint(campaign, activeRecipient, checkpoint);
+      }
       const blocked = checkpointBlock(checkpoint, this.now().toISOString());
-      if (checkpoint.status === "images_required" || checkpoint.status === "paused" || checkpoint.status === "failed") {
+      if (["images_required", "paused", "failed"].includes(checkpoint.status)) {
         return this.save(campaign, {
           status: blocked.status,
           pauseRequested: blocked.status === "paused",
@@ -355,7 +570,7 @@ export class CampaignEngine {
       pauseRequested: true,
       blockReason: block(
         "service_worker_restarted",
-        "La campaña quedó pausada después de recargar la extensión. Comprobá la conexión y reanudá cuando estés listo.",
+        "La campaña quedó pausada después de recargar la extensión. Comprobá la conexión y usá Reintentar si el checkpoint confirma que todavía no se envió nada.",
         this.now().toISOString(),
         true
       )
@@ -442,7 +657,7 @@ export class CampaignEngine {
         activeContactId: recipient.recipientId,
         currentRecipientIndex: recipient.position - 1,
         recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
-          ? { ...item, status: "active", startedAt: item.startedAt ?? startedAt, error: undefined }
+          ? { ...item, status: "active", startedAt: item.startedAt ?? startedAt, error: undefined, failure: undefined }
           : item)
       });
     } else if (recipient.status !== "active") {
@@ -492,7 +707,7 @@ export class CampaignEngine {
         status: "paused",
         pauseRequested: false,
         recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
-          ? { ...item, status: "paused", error: checkpoint.error }
+          ? { ...item, status: "paused", error: checkpointTechnicalError(checkpoint) }
           : item),
         blockReason: blocked.reason
       });
@@ -516,12 +731,33 @@ export class CampaignEngine {
         blockReason: block("manual_pause", "La campaña quedó pausada en una frontera segura del contacto.", this.now().toISOString(), true)
       });
     }
+
+    const failureClass = campaignContactFailureClass(checkpoint);
+    if (failureClass === "local_safe") {
+      return this.applySafeFailedCheckpoint(campaign, recipient, checkpoint);
+    }
+    if (failureClass === "partial_send") {
+      return this.save(campaign, {
+        status: "paused",
+        pauseRequested: false,
+        recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
+          ? { ...item, status: "paused", error: checkpointTechnicalError(checkpoint) }
+          : item),
+        blockReason: block(
+          "contact_paused",
+          "Parte del contenido ya fue confirmado para este contacto. Reintentar sólo puede continuar los pasos pendientes; nunca se repetirán los confirmados.",
+          this.now().toISOString(),
+          true,
+          checkpointTechnicalError(checkpoint)
+        )
+      });
+    }
     const blocked = checkpointBlock(checkpoint, this.now().toISOString());
     return this.save(campaign, {
       status: blocked.status,
       pauseRequested: blocked.reason.code === "whatsapp_ui_changed",
       recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
-        ? { ...item, status: blocked.recipientStatus, error: checkpoint.error }
+        ? { ...item, status: blocked.recipientStatus, error: checkpointTechnicalError(checkpoint) }
         : item),
       blockReason: blocked.reason
     });
