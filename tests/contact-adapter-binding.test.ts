@@ -22,8 +22,8 @@ function green(contentInstanceId = "content-new") {
   };
 }
 
-function navigation(contentInstanceId = "content-old") {
-  return { navigationStarted: true as const, requestedNavigationAt: NOW, contentInstanceId };
+function navigation(contentInstanceId = "content-old", navigationRequestId = "navigation-test") {
+  return { navigationStarted: true as const, requestedNavigationAt: NOW, contentInstanceId, navigationRequestId };
 }
 
 function checkpoint() {
@@ -54,9 +54,12 @@ describe("active WhatsApp tab binding", () => {
       requireTab: async () => { discoveryCalls += 1; return { id: 11, url: "https://web.whatsapp.com/" }; },
       requireTabId: async (id: number) => ({ id, url: "https://web.whatsapp.com/" }),
       waitForContent: async () => green(),
-      send: async (type: InternalMessageType, _payload: unknown, tabId?: number) => {
+      send: async (type: InternalMessageType, payload: unknown, tabId?: number) => {
         calls.push({ type, tabId });
-        if (type === "WA_OPEN_CONVERSATION") return navigation();
+        if (type === "WA_OPEN_CONVERSATION") {
+          const navigationRequestId = (payload as { navigationRequestId: string }).navigationRequestId;
+          return navigation("content-old", navigationRequestId);
+        }
         if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
         if (type === "WA_SEND_IMAGE") return { success: true, verification: { outcome: "confirmed", method: "fake", observedAt: NOW, sendAttempted: true } };
         if (type === "WA_SEND_TEXT") return { success: true, completedAt: NOW, verification: { confirmed: true, method: "new-outgoing-message-dom" } };
@@ -89,7 +92,10 @@ describe("active WhatsApp tab binding", () => {
         return green("content-new");
       },
       send: async (type: InternalMessageType, payload: unknown) => {
-        if (type === "WA_OPEN_CONVERSATION") return navigation("content-old");
+        if (type === "WA_OPEN_CONVERSATION") {
+          const navigationRequestId = (payload as { navigationRequestId: string }).navigationRequestId;
+          return navigation("content-old", navigationRequestId);
+        }
         if (type === "WA_PROVE_CONVERSATION") {
           proofPayload = payload as Record<string, unknown>;
           return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
@@ -115,8 +121,12 @@ describe("active WhatsApp tab binding", () => {
         if (waits === 1) throw new ExtensionError(ERROR_CODES.interfaceLoading, "receiver changing");
         return green("content-new");
       },
-      send: async (type: InternalMessageType) => {
-        if (type === "WA_OPEN_CONVERSATION") { navigations += 1; return navigation("content-old"); }
+      send: async (type: InternalMessageType, payload: unknown) => {
+        if (type === "WA_OPEN_CONVERSATION") {
+          navigations += 1;
+          const navigationRequestId = (payload as { navigationRequestId: string }).navigationRequestId;
+          return navigation("content-old", navigationRequestId);
+        }
         if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
         throw new Error("unexpected");
       }
@@ -140,9 +150,9 @@ describe("active WhatsApp tab binding", () => {
       requireTab: async () => { discoveryCalls += 1; return { id: discoveryCalls === 1 ? 11 : 22, url: "https://web.whatsapp.com/" }; },
       requireTabId: async (id: number) => { requiredIds.push(id); return { id, url: "https://web.whatsapp.com/" }; },
       waitForContent: async () => green(),
-      send: async (type: InternalMessageType) => type === "WA_OPEN_CONVERSATION"
-        ? navigation()
-        : { verified: true, evidence: "header-recipient-id", checkedAt: NOW }
+      send: async (type: InternalMessageType, payload: unknown) => type === "WA_OPEN_CONVERSATION"
+        ? navigation("content-old", (payload as { navigationRequestId: string }).navigationRequestId)
+        : { verified: true, proofLevel: "strong", evidence: "header-recipient-id", checkedAt: NOW }
     };
 
     const firstAdapter = new ChromeWhatsAppContactAdapter(
@@ -177,7 +187,7 @@ describe("active WhatsApp tab binding", () => {
         throw new ExtensionError(ERROR_CODES.whatsappNotOpen, "closed");
       },
       waitForContent: async () => green(),
-      send: async () => navigation()
+      send: async (_type: InternalMessageType, payload: unknown) => navigation("content-old", (payload as { navigationRequestId: string }).navigationRequestId)
     };
     const recoveredAdapter = new ChromeWhatsAppContactAdapter(
       { getImage: async () => null },
@@ -199,9 +209,12 @@ describe("active WhatsApp tab binding", () => {
         return { id: 11, url: "https://web.whatsapp.com/" };
       },
       waitForContent: async () => green(),
-      send: async (type: InternalMessageType) => {
+      send: async (type: InternalMessageType, payload: unknown) => {
         if (!boundOpen) throw new ExtensionError(ERROR_CODES.whatsappNotOpen, "closed");
-        if (type === "WA_OPEN_CONVERSATION") return navigation();
+        if (type === "WA_OPEN_CONVERSATION") {
+          const navigationRequestId = (payload as { navigationRequestId: string }).navigationRequestId;
+          return navigation("content-old", navigationRequestId);
+        }
         return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
       }
     };
@@ -223,9 +236,12 @@ describe("active WhatsApp tab binding", () => {
       requireTab: async () => { discoveryCalls += 1; return { id: 11, url: "https://web.whatsapp.com/" }; },
       requireTabId: async (id: number) => ({ id, url: "https://web.whatsapp.com/" }),
       waitForContent: async () => green(),
-      send: async (type: InternalMessageType, _payload: unknown, tabId?: number) => {
+      send: async (type: InternalMessageType, payload: unknown, tabId?: number) => {
         expect(tabId).toBe(11);
-        if (type === "WA_OPEN_CONVERSATION") return navigation();
+        if (type === "WA_OPEN_CONVERSATION") {
+          const navigationRequestId = (payload as { navigationRequestId: string }).navigationRequestId;
+          return navigation("content-old", navigationRequestId);
+        }
         if (type === "WA_PROVE_CONVERSATION") return { verified: true, evidence: "header-recipient-id", checkedAt: NOW };
         if (type === "WA_SEND_TEXT") {
           textAttempts += 1;
