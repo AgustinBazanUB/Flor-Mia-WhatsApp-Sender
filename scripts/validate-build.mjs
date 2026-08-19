@@ -20,12 +20,16 @@ for (const path of required) await access(resolve("dist", path));
 const manifest = JSON.parse(await readFile(resolve("dist", "manifest.json"), "utf8"));
 const sourceManifest = JSON.parse(await readFile(resolve("manifest.json"), "utf8"));
 const packageMetadata = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+const packageLock = JSON.parse(await readFile(resolve("package-lock.json"), "utf8"));
 const popupHtml = await readFile(resolve("dist", "popup/index.html"), "utf8");
 const optimisticControls = await readFile(resolve("dist", "popup/optimistic-controls.js"), "utf8");
 if (manifest.manifest_version !== 3) throw new Error("El build no contiene Manifest V3.");
 if (manifest.version !== sourceManifest.version) throw new Error("La versión del build no coincide con manifest.json.");
 if (manifest.version_name !== sourceManifest.version_name) throw new Error("El nombre de versión del build no coincide con manifest.json.");
 if (sourceManifest.version !== packageMetadata.version) throw new Error("package.json y manifest.json deben declarar la misma versión.");
+if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) {
+  throw new Error("package-lock.json, package.json y manifest.json deben declarar la misma versión.");
+}
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
 const optimisticPosition = popupHtml.indexOf(optimisticScript);
