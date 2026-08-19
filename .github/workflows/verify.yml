@@ -88,13 +88,25 @@ jobs:
         shell: bash
         run: |
           outcomes="typecheck=$TYPECHECK_OUTCOME lint=$LINT_OUTCOME tests=$TESTS_OUTCOME build=$BUILD_OUTCOME validate=$VALIDATE_OUTCOME"
-          if [ "$TYPECHECK_OUTCOME" = "success" ] && [ "$LINT_OUTCOME" = "success" ] && [ "$TESTS_OUTCOME" = "success" ] && [ "$BUILD_OUTCOME" = "success" ] && [ "$VALIDATE_OUTCOME" = "success" ]; then
+          state=failure
+          phase=unknown
+          if [ "$TYPECHECK_OUTCOME" = "failure" ]; then
+            phase=typecheck
+          elif [ "$LINT_OUTCOME" = "failure" ]; then
+            phase=lint
+          elif [ "$TESTS_OUTCOME" = "failure" ]; then
+            phase=tests
+          elif [ "$BUILD_OUTCOME" = "failure" ]; then
+            phase=build
+          elif [ "$VALIDATE_OUTCOME" = "failure" ]; then
+            phase=validate-build
+          elif [ "$TYPECHECK_OUTCOME" = "success" ] && [ "$LINT_OUTCOME" = "success" ] && [ "$TESTS_OUTCOME" = "success" ] && [ "$BUILD_OUTCOME" = "success" ] && [ "$VALIDATE_OUTCOME" = "success" ]; then
             state=success
-          else
-            state=failure
+            phase=success
           fi
           description=$(printf '%s' "$outcomes" | cut -c1-135)
-          payload=$(jq -n --arg state "$state" --arg context "verify/phase" --arg description "$description" '{state:$state,context:$context,description:$description}')
+          context="verify/phase-$phase"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
