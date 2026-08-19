@@ -154,10 +154,13 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
       { campaignId, ...(request.sequence === undefined ? {} : { expectedSequence: request.sequence }) },
       request.requestId
     );
+    const responsePayload = request.type === WEB_APP_MESSAGE_TYPES.deleteRequest
+      ? { ...(status as unknown as Record<string, unknown>), emitterReleased: true }
+      : status as unknown as Record<string, unknown>;
     post(responseEnvelope(
       request,
       messageTypeForStatus(status, request.type),
-      status as unknown as Record<string, unknown>,
+      responsePayload,
       { campaignId: status.campaignId, sequence: status.sequence }
     ));
     return;
