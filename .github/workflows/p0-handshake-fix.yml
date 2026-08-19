@@ -43,6 +43,10 @@ jobs:
           node scripts/apply-p0-handshake-fix.mjs version
           git add manifest.json package.json package-lock.json
           git commit -m "chore: release 0.9.4.1"
+      - name: Remove one-shot repair helper from final tree
+        run: |
+          git rm scripts/apply-p0-handshake-fix.mjs .github/workflows/p0-handshake-fix.yml
+          git commit -m "chore: remove one-shot handshake repair helper"
       - name: Install locked dependencies
         run: npm ci
       - name: Verify complete extension
