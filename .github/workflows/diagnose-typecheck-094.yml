@@ -1,0 +1,41 @@
+name: diagnose typecheck 0.9.4
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Capture typecheck
+        shell: bash
+        run: npm run typecheck > /tmp/typecheck.txt 2>&1 || true
+      - name: Publish first error
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          first=$(grep -m1 -E 'error TS[0-9]+' /tmp/typecheck.txt || true)
+          if [ -z "$first" ]; then
+            state=success
+            slug=success
+          else
+            state=failure
+            slug=$(printf '%s' "$first" | sed -E 's#^([^(:]+).*error (TS[0-9]+).*#\1-\2#' | tr '/: ' '---' | tr -cd 'A-Za-z0-9_.-' | cut -c1-90)
+          fi
+          payload=$(jq -n --arg state "$state" --arg context "verify/typecheck-$slug" --arg description "${first:-Typecheck success}" '{state:$state,context:$context,description:($description|.[0:135])}')
+          curl --fail-with-body --silent --show-error --request POST --header "Authorization: Bearer $GH_TOKEN" --header "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" --data "$payload"
