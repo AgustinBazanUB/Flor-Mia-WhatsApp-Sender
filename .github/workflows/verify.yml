@@ -8,9 +8,9 @@ permissions:
   statuses: write
 
 jobs:
-  verify-p0-final-tree:
+  diagnose-p0-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Patch, clean and verify every phase
+      - name: Patch and report first failing test
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -27,8 +27,8 @@ jobs:
         shell: bash
         run: |
           post() {
-            state="$1"; phase="$2"; desc="$3"
-            payload=$(jq -n --arg state "$state" --arg context "p0/full-$phase" --arg description "$desc" '{state:$state,context:$context,description:$description}')
+            state="$1"; context="$2"; desc="$3"
+            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$desc" '{state:$state,context:$context,description:$description}')
             curl --fail-with-body --silent --show-error \
               --request POST \
               --header "Authorization: Bearer $GH_TOKEN" \
@@ -36,40 +36,24 @@ jobs:
               "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
               --data "$payload" >/dev/null
           }
-          run_phase() {
-            phase="$1"; shift
-            log="/tmp/p0-$phase.log"
-            post pending "$phase" "Running $phase"
-            set +e
-            "$@" >"$log" 2>&1
-            code=$?
-            set -e
-            cat "$log"
-            if [ "$code" -ne 0 ]; then
-              post failure "$phase" "$phase failed"
-              first=$(grep -E 'error TS[0-9]+|error |FAIL|failed|Error:' "$log" | head -n 1 || true)
-              if [ -z "$first" ]; then first=$(tail -n 1 "$log"); fi
-              slug=$(printf '%s' "$first" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-95)
-              post failure "$phase-$slug" "$slug"
-              exit "$code"
-            fi
-            post success "$phase" "$phase passed"
-          }
-
-          post pending start "P0 full verification started"
+          post pending p0/tests-start "P0 test diagnostic started"
           python3 scripts/apply-p0-text.py
           python3 scripts/fix-p0-test-tab-type.py
-          post success patch "P0 source and regression patches applied"
-
           git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
           rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py scripts/fix-p0-test-tab-type.py .github/workflows/p0-handshake-fix.yml
-          post success cleanup "Final working tree excludes repair helpers"
-
-          run_phase npm-ci npm ci --no-audit --no-fund
-          run_phase typecheck npm run typecheck
-          run_phase lint npm run lint
-          run_phase tests npm test
-          run_phase build npm run build
-          run_phase validate-build npm run validate:build
-          run_phase dist-version node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`Error: expected 0.9.4.1 got ${m.version}`);process.exit(1)}; console.log(`dist version=${m.version}`)'
-          post success start "P0 full verification completed"
+          npm ci --no-audit --no-fund >/tmp/npm-ci.log 2>&1
+          set +e
+          npm run test -- --reporter=json --outputFile=/tmp/vitest.json >/tmp/tests.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/tests.log
+          if [ "$code" -eq 0 ]; then
+            post success p0/tests-result "Vitest passed"
+            post success p0/tests-start "P0 tests completed"
+            exit 0
+          fi
+          failing=$(node -e 'const fs=require("fs"); try { const r=JSON.parse(fs.readFileSync("/tmp/vitest.json","utf8")); const a=(r.testResults||[]).flatMap(t=>(t.assertionResults||[]).filter(x=>x.status==="failed").map(x=>String(x.fullName||[...(x.ancestorTitles||[]),x.title].filter(Boolean).join(" ")))); process.stdout.write(a[0]||"unknown"); } catch { process.stdout.write("unknown"); }')
+          slug=$(printf '%s' "$failing" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-105)
+          post failure "p0/tests-$slug" "$slug"
+          post failure p0/tests-result "Vitest failed"
+          exit "$code"
