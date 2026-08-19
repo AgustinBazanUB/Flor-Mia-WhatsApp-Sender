@@ -17,37 +17,43 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Patch and report first TypeScript error
+      - name: Patch and report TypeScript status
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          python3 scripts/apply-p0-text.py
+          post() {
+            state="$1"; context="$2"; desc="$3"
+            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$desc" '{state:$state,context:$context,description:$description}')
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+              --data "$payload" >/dev/null
+          }
+          post pending p0/typecheck-start "P0 typecheck job started"
+          python3 scripts/apply-p0-text.py || { post failure p0/typecheck-patch "P0 text patch failed"; exit 1; }
+          post success p0/typecheck-patch "P0 text patch applied"
           git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
           rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py .github/workflows/p0-handshake-fix.yml
-          npm ci >/tmp/npm-ci.log 2>&1
+          npm ci >/tmp/npm-ci.log 2>&1 || { post failure p0/typecheck-npm-ci "npm ci failed"; cat /tmp/npm-ci.log; exit 1; }
+          post success p0/typecheck-npm-ci "npm ci passed"
           set +e
           npm run typecheck >/tmp/typecheck.log 2>&1
           code=$?
           set -e
           cat /tmp/typecheck.log
           if [ "$code" -eq 0 ]; then
-            state=success
-            summary=typecheck-passed
-          else
-            state=failure
-            summary=$(grep -E 'error TS[0-9]+' /tmp/typecheck.log | head -n 1 || true)
-            if [ -z "$summary" ]; then summary=$(tail -n 1 /tmp/typecheck.log); fi
-            summary=$(printf '%s' "$summary" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-110)
+            post success p0/typecheck-result "TypeScript passed"
+            post success p0/typecheck-start "P0 typecheck completed"
+            exit 0
           fi
-          context="p0/typecheck-$summary"
-          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$summary" '{state:$state,context:$context,description:$description}')
-          curl --fail-with-body --silent --show-error \
-            --request POST \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-            --data "$payload" >/dev/null
+          first=$(grep -E 'error TS[0-9]+' /tmp/typecheck.log | head -n 1 || true)
+          if [ -z "$first" ]; then first=$(tail -n 1 /tmp/typecheck.log); fi
+          slug=$(printf '%s' "$first" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-105)
+          post failure "p0/typecheck-$slug" "$slug"
+          post failure p0/typecheck-result "TypeScript failed"
           exit "$code"
