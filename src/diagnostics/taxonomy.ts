@@ -15,6 +15,7 @@ const CATEGORY_BY_CODE: Partial<Record<ExtensionErrorCode, DiagnosticErrorCatego
   [ERROR_CODES.whatsappNotOpen]: "TEMPORARY_WHATSAPP_ERROR",
   [ERROR_CODES.invalidContact]: "CONTACT_ERROR",
   [ERROR_CODES.contactUnavailable]: "CONTACT_ERROR",
+  [ERROR_CODES.contactContextUnverified]: "CONTACT_ERROR",
   [ERROR_CODES.sessionNotReady]: "AUTH_ERROR",
   [ERROR_CODES.capabilityUnavailable]: "WHATSAPP_UI_CHANGED",
   [ERROR_CODES.whatsappUiChanged]: "WHATSAPP_UI_CHANGED",
@@ -44,6 +45,7 @@ export function classifyDiagnosticError(
   if (context.campaignBlockCode === "daily_limit_reached") return "DAILY_LIMIT";
   if (context.campaignBlockCode === "images_required" || context.pauseReason === "images_required") return "RESOURCE_ERROR";
   if (context.campaignBlockCode === "contact_ambiguous" || context.pauseReason === "verification_pending") return "AMBIGUOUS_SEND_RESULT";
+  if (context.pauseReason === "open_conversation_failed") return "CONTACT_ERROR";
   if (context.campaignBlockCode === "whatsapp_session_closed") return "AUTH_ERROR";
   if (context.campaignBlockCode === "whatsapp_tab_closed") return "CONNECTION_ERROR";
   if (context.campaignBlockCode === "whatsapp_reloading") return "TEMPORARY_WHATSAPP_ERROR";
