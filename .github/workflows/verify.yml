@@ -21,102 +21,24 @@ jobs:
         with:
           node-version: 20
           cache: npm
-
       - name: Install locked dependencies
-        id: install
-        continue-on-error: true
         run: npm ci
-      - name: Typecheck
-        id: typecheck
-        if: steps.install.outcome == 'success'
-        continue-on-error: true
-        run: npm run typecheck
-      - name: Lint
-        id: lint
-        if: steps.install.outcome == 'success'
-        continue-on-error: true
-        run: npm run lint
-      - name: Tests
-        id: tests
-        if: steps.install.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          npm run test -- --reporter=verbose 2>&1 | tee test-output.txt
-          code=${PIPESTATUS[0]}
-          exit "$code"
-      - name: Build
-        id: build
-        if: steps.install.outcome == 'success'
-        continue-on-error: true
-        run: npm run build
-      - name: Validate build
-        id: validate
-        if: steps.build.outcome == 'success'
-        continue-on-error: true
-        run: npm run validate:build
-      - name: Required aggregate verify command
-        id: aggregate
-        if: steps.install.outcome == 'success'
-        continue-on-error: true
+      - name: Verify
+        id: verify
         run: npm run verify
-
-      - name: Publish phase statuses
+      - name: Publish aggregate verify status
         if: always() && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
-          INSTALL: ${{ steps.install.outcome }}
-          TYPECHECK: ${{ steps.typecheck.outcome }}
-          LINT: ${{ steps.lint.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
-          BUILD: ${{ steps.build.outcome }}
-          VALIDATE: ${{ steps.validate.outcome }}
-          AGGREGATE: ${{ steps.aggregate.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
         run: |
-          publish_status() {
-            context="$1"
-            outcome="$2"
-            description="$3"
-            if [ "$outcome" = "success" ]; then state=success; else state=failure; fi
-            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
-            curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-              --data "$payload"
-          }
-          test_detail="verify/tests: $TESTS"
-          if [ "$TESTS" != "success" ] && [ -f test-output.txt ]; then
-            detail=$(grep -E -m1 '(^| )FAIL |Test Files ' test-output.txt | tr '\n' ' ' | cut -c1-115 || true)
-            if [ -n "$detail" ]; then test_detail="$detail"; fi
-          fi
-          publish_status "verify/install" "$INSTALL" "verify/install: $INSTALL"
-          publish_status "verify/typecheck" "$TYPECHECK" "verify/typecheck: $TYPECHECK"
-          publish_status "verify/lint" "$LINT" "verify/lint: $LINT"
-          publish_status "verify/tests" "$TESTS" "$test_detail"
-          publish_status "verify/build" "$BUILD" "verify/build: $BUILD"
-          publish_status "verify/validate-build" "$VALIDATE" "verify/validate-build: $VALIDATE"
-          publish_status "verify/npm" "$AGGREGATE" "npm run verify: $AGGREGATE"
-
-      - name: Fail workflow when verification failed
-        if: always()
-        env:
-          INSTALL: ${{ steps.install.outcome }}
-          TYPECHECK: ${{ steps.typecheck.outcome }}
-          LINT: ${{ steps.lint.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
-          BUILD: ${{ steps.build.outcome }}
-          VALIDATE: ${{ steps.validate.outcome }}
-          AGGREGATE: ${{ steps.aggregate.outcome }}
-        run: |
-          test "$INSTALL" = success \
-            && test "$TYPECHECK" = success \
-            && test "$LINT" = success \
-            && test "$TESTS" = success \
-            && test "$BUILD" = success \
-            && test "$VALIDATE" = success \
-            && test "$AGGREGATE" = success
+          if [ "$VERIFY" = "success" ]; then state=success; else state=failure; fi
+          payload=$(jq -n --arg state "$state" --arg context "verify/npm" --arg description "npm run verify: $VERIFY" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
