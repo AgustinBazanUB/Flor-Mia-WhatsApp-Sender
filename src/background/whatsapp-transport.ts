@@ -7,6 +7,7 @@ import {
   type InternalResponse,
   type InternalResponseMap
 } from "../shared/protocol";
+import type { PreflightPurpose } from "../compatibility/types";
 import type { WhatsAppPreflightResult } from "../shared/state";
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -27,6 +28,11 @@ async function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<vo
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+export interface ContentReadinessOptions {
+  previousContentInstanceId?: string;
+  purpose?: PreflightPurpose;
 }
 
 export class WhatsAppTransport {
@@ -75,8 +81,11 @@ export class WhatsAppTransport {
       }
       throw new ExtensionError(
         boundTabExists ? ERROR_CODES.interfaceLoading : ERROR_CODES.whatsappNotOpen,
-        boundTabExists ? "WhatsApp Web se está recargando o su Content Script todavía no responde." : "La pestaña de WhatsApp Web vinculada fue cerrada.",
-        { cause: error }
+        boundTabExists ? "WhatsApp Web está cambiando de documento y el Content Script todavía no hizo handshake." : "La pestaña de WhatsApp Web vinculada fue cerrada.",
+        {
+          cause: error,
+          details: boundTabExists ? { stage: "content_handshake", transientReceiverUnavailable: true } : undefined
+        }
       );
     }
     if (!response?.ok || response.data === undefined) {
@@ -102,9 +111,6 @@ export class WhatsAppTransport {
       return this.sendOnce(type, payload, targetTabId, tabId !== undefined);
     }
 
-    // Un PING/health-check puede coincidir con otro preflight idéntico mientras WhatsApp
-    // todavía responde. Compartimos solamente el trabajo del Content Script; cada caller
-    // conserva después su propia evaluación/persistencia. Requests distintos no se mezclan.
     const key = `${targetTabId}:${JSON.stringify(payload)}`;
     const existing = this.inFlightPreflights.get(key);
     if (existing) return existing as Promise<InternalResponseMap[T]>;
@@ -128,38 +134,49 @@ export class WhatsAppTransport {
       return await this.send(type, payload, tabId);
     } catch (error) {
       if (!(error instanceof ExtensionError) || error.code !== ERROR_CODES.interfaceLoading) throw error;
-      if (signal) await this.waitForContent(tabId, timeoutMs, signal);
-      else await this.waitForContent(tabId, timeoutMs);
+      if (signal) await this.waitForContent(tabId, timeoutMs, signal, { purpose: "content_handshake" });
+      else await this.waitForContent(tabId, timeoutMs, undefined, { purpose: "content_handshake" });
       throwIfAborted(signal);
       return this.send(type, payload, tabId);
     }
   }
 
-  async waitForContent(tabId: number, timeoutMs: number, signal?: AbortSignal): Promise<WhatsAppPreflightResult> {
+  async waitForContent(
+    tabId: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    options: ContentReadinessOptions = {}
+  ): Promise<WhatsAppPreflightResult> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown;
     let lastResult: WhatsAppPreflightResult | null = null;
+    let probes = 0;
     while (Date.now() < deadline) {
       throwIfAborted(signal);
+      probes += 1;
       try {
-        // Este loop sólo necesita saber si la pestaña/sesión y la superficie base están listas.
-        // Antes se ejecutaba el preflight FULL por defecto en cada vuelta, incluyendo probes y
-        // scans de capabilities que no aportaban seguridad a la navegación.
         const result = await this.send(INTERNAL_MESSAGE_TYPES.whatsappPreflight, {
           timeoutMs: Math.min(1_000, Math.max(250, deadline - Date.now())),
           level: "lightweight",
+          purpose: options.purpose ?? "content_handshake",
           requirements: { needsText: false, needsImages: false }
         }, tabId);
         lastResult = result;
-        if (result.documentReady && (result.operational || result.qrDetected)) return result;
+        const generationIsFresh = !options.previousContentInstanceId
+          || Boolean(result.contentInstanceId && result.contentInstanceId !== options.previousContentInstanceId);
+        if (generationIsFresh && result.documentReady && (result.operational || result.qrDetected)) return result;
       } catch (error) {
         lastError = error;
       }
       if (Date.now() < deadline) await abortableDelay(Math.min(300, Math.max(1, deadline - Date.now())), signal);
     }
-    throw new ExtensionError(ERROR_CODES.timeout, "WhatsApp Web no quedó listo después de abrir la conversación.", {
+    throw new ExtensionError(ERROR_CODES.timeout, "WhatsApp Web no completó el handshake después de abrir la conversación.", {
       cause: lastError,
       details: lastResult ? {
+        stage: "content_handshake",
+        probes,
+        previousGenerationRequired: Boolean(options.previousContentInstanceId),
+        freshGenerationObserved: Boolean(!options.previousContentInstanceId || (lastResult.contentInstanceId && lastResult.contentInstanceId !== options.previousContentInstanceId)),
         lastStatus: lastResult.status,
         pageDetected: lastResult.pageDetected,
         documentReady: lastResult.documentReady,
@@ -167,7 +184,7 @@ export class WhatsAppTransport {
         mainInterfaceReady: lastResult.mainInterfaceReady,
         qrDetected: lastResult.qrDetected,
         overallStatus: lastResult.overallStatus
-      } : { lastStatus: "no_response" }
+      } : { stage: "content_handshake", probes, lastStatus: "no_response", previousGenerationRequired: Boolean(options.previousContentInstanceId) }
     });
   }
 }
