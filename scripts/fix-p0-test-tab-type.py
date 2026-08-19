@@ -1,7 +1,7 @@
 from pathlib import Path
 
-path = Path("tests/post-navigation-handshake.test.ts")
-source = path.read_text(encoding="utf-8")
+test_path = Path("tests/post-navigation-handshake.test.ts")
+source = test_path.read_text(encoding="utf-8")
 old = '''function chromeFor(sendMessage = vi.fn()) {
   const onUpdated = event<[number, TestTabChangeInfo, chrome.tabs.Tab]>();
   const onRemoved = event<[number]>();
@@ -31,4 +31,19 @@ function chromeFor(sendMessage = vi.fn()) {
 if old not in source:
     raise RuntimeError("expected chromeFor test block was not found")
 source = source.replace(old, new, 1)
-path.write_text(source, encoding="utf-8")
+test_path.write_text(source, encoding="utf-8")
+
+transport_path = Path("src/background/whatsapp-transport.ts")
+transport = transport_path.read_text(encoding="utf-8")
+old_guard = '''    if (!chrome.tabs.onUpdated?.addListener) {
+      await abortableDelay(delayMs, signal);
+      return;
+    }'''
+new_guard = '''    if (typeof chrome === "undefined" || !chrome.tabs?.onUpdated?.addListener) {
+      await abortableDelay(delayMs, signal);
+      return;
+    }'''
+if old_guard not in transport:
+    raise RuntimeError("expected waitForProbeOpportunity fallback was not found")
+transport = transport.replace(old_guard, new_guard, 1)
+transport_path.write_text(transport, encoding="utf-8")
