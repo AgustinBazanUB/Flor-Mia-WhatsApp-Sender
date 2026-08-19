@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WhatsAppTransport } from "../src/background/whatsapp-transport";
 import { ERROR_CODES, ExtensionError } from "../src/shared/errors";
 import { INTERNAL_MESSAGE_TYPES } from "../src/shared/protocol";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("WhatsAppTransport.sendWhenContentReady", () => {
   it("waits for the reloaded content script and retries preflight once", async () => {
@@ -58,5 +63,19 @@ describe("WhatsAppTransport.sendWhenContentReady", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the bound WhatsApp tab valid when Chrome reports it as inactive", async () => {
+    const get = vi.fn().mockResolvedValue({
+      id: 7,
+      url: "https://web.whatsapp.com/",
+      active: false,
+      windowId: 1
+    });
+    vi.stubGlobal("chrome", { tabs: { get } });
+
+    const transport = new WhatsAppTransport();
+    await expect(transport.requireTabId(7)).resolves.toMatchObject({ id: 7, active: false });
+    expect(get).toHaveBeenCalledWith(7);
   });
 });
