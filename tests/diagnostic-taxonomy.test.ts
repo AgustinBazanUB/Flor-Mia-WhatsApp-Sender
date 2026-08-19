@@ -7,6 +7,7 @@ describe("diagnostic error taxonomy", () => {
     [ERROR_CODES.storageError, "EXTENSION_ERROR"],
     [ERROR_CODES.interfaceLoading, "TEMPORARY_WHATSAPP_ERROR"],
     [ERROR_CODES.invalidContact, "CONTACT_ERROR"],
+    [ERROR_CODES.contactContextUnverified, "CONTACT_ERROR"],
     [ERROR_CODES.sessionNotReady, "AUTH_ERROR"],
     [ERROR_CODES.selectorStrategyExhausted, "WHATSAPP_UI_CHANGED"],
     [ERROR_CODES.ambiguousResult, "AMBIGUOUS_SEND_RESULT"],
@@ -29,5 +30,6 @@ describe("diagnostic error taxonomy", () => {
     expect(classifyDiagnosticError(null, { campaignBlockCode: "whatsapp_session_closed" })).toBe("AUTH_ERROR");
     expect(classifyDiagnosticError(null, { campaignBlockCode: "whatsapp_tab_closed" })).toBe("CONNECTION_ERROR");
     expect(classifyDiagnosticError(null, { campaignBlockCode: "whatsapp_reloading" })).toBe("TEMPORARY_WHATSAPP_ERROR");
+    expect(classifyDiagnosticError(null, { pauseReason: "open_conversation_failed" })).toBe("CONTACT_ERROR");
   });
 });
