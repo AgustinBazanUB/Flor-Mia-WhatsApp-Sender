@@ -40,7 +40,12 @@ jobs:
         id: tests
         if: steps.install.outcome == 'success'
         continue-on-error: true
-        run: npm run test
+        shell: bash
+        run: |
+          set +e
+          npm run test -- --reporter=verbose 2>&1 | tee test-output.txt
+          code=${PIPESTATUS[0]}
+          exit "$code"
       - name: Build
         id: build
         if: steps.install.outcome == 'success'
@@ -74,22 +79,28 @@ jobs:
           publish_status() {
             context="$1"
             outcome="$2"
+            description="$3"
             if [ "$outcome" = "success" ]; then state=success; else state=failure; fi
-            description="$context: $outcome"
+            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
             curl --fail-with-body --silent --show-error \
               --request POST \
               --header "Authorization: Bearer $GH_TOKEN" \
               --header "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-              --data "{\"state\":\"$state\",\"context\":\"$context\",\"description\":\"$description\"}"
+              --data "$payload"
           }
-          publish_status "verify/install" "$INSTALL"
-          publish_status "verify/typecheck" "$TYPECHECK"
-          publish_status "verify/lint" "$LINT"
-          publish_status "verify/tests" "$TESTS"
-          publish_status "verify/build" "$BUILD"
-          publish_status "verify/validate-build" "$VALIDATE"
-          publish_status "verify/npm" "$AGGREGATE"
+          test_detail="verify/tests: $TESTS"
+          if [ "$TESTS" != "success" ] && [ -f test-output.txt ]; then
+            detail=$(grep -E -m1 '(^| )FAIL |Test Files ' test-output.txt | tr '\n' ' ' | cut -c1-115 || true)
+            if [ -n "$detail" ]; then test_detail="$detail"; fi
+          fi
+          publish_status "verify/install" "$INSTALL" "verify/install: $INSTALL"
+          publish_status "verify/typecheck" "$TYPECHECK" "verify/typecheck: $TYPECHECK"
+          publish_status "verify/lint" "$LINT" "verify/lint: $LINT"
+          publish_status "verify/tests" "$TESTS" "$test_detail"
+          publish_status "verify/build" "$BUILD" "verify/build: $BUILD"
+          publish_status "verify/validate-build" "$VALIDATE" "verify/validate-build: $VALIDATE"
+          publish_status "verify/npm" "$AGGREGATE" "npm run verify: $AGGREGATE"
 
       - name: Fail workflow when verification failed
         if: always()
