@@ -48,6 +48,18 @@ transport = extract("transportSource", "`;\n\nconst openConversationSource = Str
 open_conversation = extract("openConversationSource", "`;\n\nfunction patchCore()")
 lifecycle_tests = extract("lifecycleTestSource", "`;\n\nfunction patchTests()")
 transport = transport.replace("chrome.tabs.TabStatus | null", 'chrome.tabs.Tab["status"] | null')
+transport_type_anchor = 'type ContentTransportFailureKind =\n'
+transport_type = '''type TabLifecycleChangeInfo = {
+  status?: chrome.tabs.Tab["status"];
+  url?: string;
+};
+
+type ContentTransportFailureKind =
+'''
+if transport_type_anchor not in transport:
+    raise RuntimeError("missing transport lifecycle type anchor")
+transport = transport.replace(transport_type_anchor, transport_type, 1)
+transport = transport.replace("chrome.tabs.TabChangeInfo", "TabLifecycleChangeInfo")
 
 handshake_marker = '    const handshakeAt = new Date().toISOString();'
 handshake_guard = '''    const handshakeContentInstanceId = handshake.contentInstanceId;
@@ -102,6 +114,19 @@ lifecycle_tests = lifecycle_tests.replace(
     'event<(tabId: number) => void>()',
     'event<[number]>()',
 )
+test_type_anchor = 'import type { WhatsAppPreflightRequest } from "../src/compatibility/types";\n\n'
+test_type_decl = '''import type { WhatsAppPreflightRequest } from "../src/compatibility/types";
+
+type TestTabChangeInfo = {
+  status?: chrome.tabs.Tab["status"];
+  url?: string;
+};
+
+'''
+if test_type_anchor not in lifecycle_tests:
+    raise RuntimeError("missing lifecycle test type anchor")
+lifecycle_tests = lifecycle_tests.replace(test_type_anchor, test_type_decl, 1)
+lifecycle_tests = lifecycle_tests.replace("chrome.tabs.TabChangeInfo", "TestTabChangeInfo")
 
 print("phase=transport")
 write("src/background/whatsapp-transport.ts", transport)
