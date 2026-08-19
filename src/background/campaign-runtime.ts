@@ -156,7 +156,8 @@ export class CampaignRuntime {
     checkpoint: ContactProcessCheckpoint | null
   ): Promise<void> {
     if (campaign.status !== "completed" && campaign.status !== "stopped") return;
-    if (hasUnresolvedSendEvidence(checkpoint?.campaignId === campaign.campaignId ? checkpoint : null)) {
+    const matchingCheckpoint = checkpoint?.campaignId === campaign.campaignId ? checkpoint : null;
+    if (hasUnresolvedSendEvidence(matchingCheckpoint)) {
       throw new ExtensionError(ERROR_CODES.internal, "La campaña terminal conserva un envío ambiguo pendiente de reconciliación.", { recoverable: false });
     }
     const counters = campaignRecipientCounters(campaign);
@@ -167,7 +168,10 @@ export class CampaignRuntime {
       if (!allRecipientsTerminal || campaign.activeContactId !== null || !campaign.completedAt) {
         throw new ExtensionError(ERROR_CODES.internal, "La campaña no puede finalizar porque conserva destinatarios pendientes o activos.", { recoverable: false });
       }
-      if (checkpoint?.campaignId === campaign.campaignId) await this.dependencies.checkpointStore.clearActive();
+      if (matchingCheckpoint && matchingCheckpoint.status !== "completed") {
+        throw new ExtensionError(ERROR_CODES.internal, "La campaña completada conserva un checkpoint de contacto incompleto.", { recoverable: false });
+      }
+      if (matchingCheckpoint) await this.dependencies.checkpointStore.clearActive();
     }
 
     const completedAt = campaign.completedAt ?? campaign.stoppedAt;
@@ -355,9 +359,6 @@ export class CampaignRuntime {
       return this.syncCampaign(current);
     }
 
-    // El protocolo público distingue Reanudar/Reintentar/Reintentar fallidos. Para no
-    // duplicar la cola serial del Service Worker, los tres llegan por CAMPAIGN_RESUME y
-    // el estado persistido decide la operación segura que corresponde.
     const counters = campaignRecipientCounters(current);
     if (current.status === "completed" && counters.failed > 0) {
       await this.requireOperationalPreflight(campaignId);
