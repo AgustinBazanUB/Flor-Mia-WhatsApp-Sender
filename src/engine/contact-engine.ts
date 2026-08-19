@@ -147,7 +147,9 @@ export async function processContact(
   while (!opened && checkpoint.openConversationAttempts < openConversationAttemptLimit) {
     const cancelledBeforeOpen = await stopAtCancelledWait();
     if (cancelledBeforeOpen) return cancelledBeforeOpen;
-    if (await pauseRequested()) return pauseAtSafeBoundary();
+    // Una pausa ya existente puede permitir la navegación segura del chat, pero jamás
+    // avanzar a un click de contenido. Una orden urgente nueva también aborta waits
+    // mediante signal y se aplica antes de navegar si el AbortController ya fue activado.
     checkpoint = await persist({
       ...checkpoint,
       status: "opening_chat",
