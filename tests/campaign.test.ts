@@ -7,6 +7,7 @@ import {
   validateCampaignInput
 } from "../src/shared/campaign";
 import { deserializeCampaign, serializeCampaign } from "../src/shared/serialization";
+import { createContactSteps } from "../src/engine/steps";
 
 function campaign() {
   return {
@@ -32,6 +33,31 @@ describe("campaign contract", () => {
   it("round-trips binary payloads through the runtime-safe representation", () => {
     const decoded = deserializeCampaign(serializeCampaign(campaign()));
     expect([...new Uint8Array(decoded.images[0]!.data)]).toEqual([1, 2, 3]);
+  });
+
+  it.each([
+    "Hola, esto es una prueba 👋",
+    "Árbol, pingüino, acción y corazón ❤️",
+    "Línea uno\nLínea dos\nLínea tres",
+    "  conserva espacios exteriores  ",
+    "Símbolos: ¿¡!?#%&/()[]{}—… € $ @",
+    "x".repeat(4_000)
+  ])("preserves the exact message through validation and text-step creation", (message) => {
+    const validated = validateCampaignInput({ ...campaign(), message });
+    expect(validated.message).toBe(message);
+    const steps = createContactSteps({
+      campaignId: validated.campaignId,
+      campaignName: validated.campaignName,
+      contact: {
+        contactId: validated.recipients[0]!.recipientId,
+        phoneDigits: validated.recipients[0]!.phoneDigits,
+        maskedPhone: validated.recipients[0]!.maskedPhone
+      },
+      images: [],
+      text: validated.message
+    });
+    const textStep = steps.find((step) => step.kind === "text");
+    expect(textStep?.kind === "text" ? textStep.text : null).toBe(message);
   });
 
   it("rejects mismatched counts and malformed international numbers", () => {
