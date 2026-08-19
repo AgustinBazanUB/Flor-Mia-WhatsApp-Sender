@@ -31,7 +31,10 @@ export const INTERNAL_MESSAGE_TYPES = {
   campaignStart: "CAMPAIGN_START",
   campaignPause: "CAMPAIGN_PAUSE",
   campaignResume: "CAMPAIGN_RESUME",
+  campaignRetry: "CAMPAIGN_RETRY",
+  campaignRetryFailed: "CAMPAIGN_RETRY_FAILED",
   campaignStop: "CAMPAIGN_STOP",
+  campaignDelete: "CAMPAIGN_DELETE",
   campaignStatus: "CAMPAIGN_STATUS",
   campaignRestoreImages: "CAMPAIGN_RESTORE_IMAGES",
   whatsappPreflight: "WA_PREFLIGHT",
@@ -62,7 +65,10 @@ export interface InternalRequestMap {
   CAMPAIGN_START: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_PAUSE: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_RESUME: { campaignId: string; expectedSequence?: number };
+  CAMPAIGN_RETRY: { campaignId: string; expectedSequence?: number };
+  CAMPAIGN_RETRY_FAILED: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_STOP: { campaignId: string; expectedSequence?: number };
+  CAMPAIGN_DELETE: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_STATUS: { campaignId?: string };
   CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
   WA_PREFLIGHT: WhatsAppPreflightRequest;
@@ -98,7 +104,10 @@ export interface InternalResponseMap {
   CAMPAIGN_START: CampaignPublicStatus;
   CAMPAIGN_PAUSE: CampaignPublicStatus;
   CAMPAIGN_RESUME: CampaignPublicStatus;
+  CAMPAIGN_RETRY: CampaignPublicStatus;
+  CAMPAIGN_RETRY_FAILED: CampaignPublicStatus;
   CAMPAIGN_STOP: CampaignPublicStatus;
+  CAMPAIGN_DELETE: { campaignId: string; releasedAt: string };
   CAMPAIGN_STATUS: CampaignPublicStatus | null;
   CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
   WA_PREFLIGHT: WhatsAppPreflightResult;
@@ -191,7 +200,10 @@ export const WEB_APP_MESSAGE_TYPES = {
   startRequest: "FLORMIA_CAMPAIGN_START",
   pauseRequest: "FLORMIA_CAMPAIGN_PAUSE",
   resumeRequest: "FLORMIA_CAMPAIGN_RESUME",
+  retryRequest: "FLORMIA_CAMPAIGN_RETRY",
+  retryFailedRequest: "FLORMIA_CAMPAIGN_RETRY_FAILED",
   stopRequest: "FLORMIA_CAMPAIGN_STOP",
+  deleteRequest: "FLORMIA_CAMPAIGN_DELETE",
   statusRequest: "FLORMIA_CAMPAIGN_STATUS_REQUEST"
 } as const;
 
@@ -235,7 +247,10 @@ const webAppInboundTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.startRequest,
   WEB_APP_MESSAGE_TYPES.pauseRequest,
   WEB_APP_MESSAGE_TYPES.resumeRequest,
+  WEB_APP_MESSAGE_TYPES.retryRequest,
+  WEB_APP_MESSAGE_TYPES.retryFailedRequest,
   WEB_APP_MESSAGE_TYPES.stopRequest,
+  WEB_APP_MESSAGE_TYPES.deleteRequest,
   WEB_APP_MESSAGE_TYPES.statusRequest
 ]);
 
@@ -244,7 +259,10 @@ const webAppControlTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.startRequest,
   WEB_APP_MESSAGE_TYPES.pauseRequest,
   WEB_APP_MESSAGE_TYPES.resumeRequest,
-  WEB_APP_MESSAGE_TYPES.stopRequest
+  WEB_APP_MESSAGE_TYPES.retryRequest,
+  WEB_APP_MESSAGE_TYPES.retryFailedRequest,
+  WEB_APP_MESSAGE_TYPES.stopRequest,
+  WEB_APP_MESSAGE_TYPES.deleteRequest
 ]);
 
 const FORBIDDEN_PRODUCTION_KEYS = new Set([
