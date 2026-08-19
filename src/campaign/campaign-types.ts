@@ -38,6 +38,21 @@ export interface DailyLimitState {
   updatedAt: string;
 }
 
+export interface CampaignRecipientFailure {
+  errorCode: string;
+  errorCategory: DiagnosticErrorCategory;
+  operation: string;
+  stage: string;
+  capability: string | null;
+  attempts: number;
+  sendAttempted: boolean;
+  ambiguous: boolean;
+  reconciled: boolean;
+  retryEligible: boolean;
+  signature: string;
+  failedAt: string;
+}
+
 export interface CampaignRecipientState {
   recipientId: string;
   clientId?: string | null;
@@ -50,6 +65,7 @@ export interface CampaignRecipientState {
   startedAt?: string;
   completedAt?: string;
   error?: SerializedExtensionError;
+  failure?: CampaignRecipientFailure;
 }
 
 export interface CampaignImageAsset {
@@ -73,6 +89,7 @@ export type CampaignBlockCode =
   | "contact_ambiguous"
   | "contact_paused"
   | "contact_failed"
+  | "repeated_contact_failures"
   | "whatsapp_reloading"
   | "whatsapp_tab_closed"
   | "whatsapp_session_closed"
@@ -88,6 +105,7 @@ export interface CampaignBlockReason {
 }
 
 export interface CampaignProgress {
+  /** Compatibilidad: representa destinatarios procesados de forma terminal. */
   completed: number;
   total: number;
   percentage: number;
@@ -102,9 +120,17 @@ export interface CampaignPublicDailyLimit {
   updatedAt: string;
 }
 
+export interface CampaignFailureCircuit {
+  signature: string | null;
+  consecutive: number;
+  threshold: number;
+  updatedAt: string;
+}
+
 export interface CampaignState {
   schemaVersion: 1;
   runToken?: string;
+  retryCycle?: number;
   campaignId: string;
   campaignName: string;
   createdBy: string;
@@ -115,6 +141,7 @@ export interface CampaignState {
   currentRecipientIndex: number | null;
   activeContactId: string | null;
   lastCompletedContactId: string | null;
+  /** Sólo destinatarios con todos sus envíos confirmados. */
   completedRecipients: number;
   batchNumber: number;
   contactsCompletedInBatch: number;
@@ -122,6 +149,7 @@ export interface CampaignState {
   stopRequested: boolean;
   wait: CampaignWaitState | null;
   blockReason: CampaignBlockReason | null;
+  failureCircuit?: CampaignFailureCircuit;
   policy: CampaignPolicyConfig;
   dailyLimit: DailyLimitState;
   sequence: number;
@@ -142,7 +170,9 @@ export interface CampaignPublicStatus {
   status: CampaignStatus;
   progress: CampaignProgress;
   progressPercentage: number;
+  processed: number;
   sent: number;
+  failed: number;
   total: number;
   remaining: number;
   currentRecipientIndex: number | null;
@@ -181,6 +211,8 @@ export interface CampaignPublicStatus {
   pauseRequested: boolean;
   stopRequested: boolean;
   sequence: number;
+  retryCycle: number;
+  retryableFailed: number;
   finalSummary: FinalCampaignSummary | null;
 }
 
@@ -188,6 +220,7 @@ export interface FinalCampaignSummary {
   campaignId: string;
   completedAt: string;
   total: number;
+  processed: number;
   sent: number;
   failed: number;
   durationMs: number;
@@ -204,6 +237,9 @@ export interface CampaignHistoryRecord {
   completedAt: string;
   total: number;
   completed: number;
+  failed?: number;
+  processed?: number;
+  retryCycle?: number;
   status: Extract<CampaignStatus, "completed" | "stopped">;
   errorCategory: DiagnosticErrorCategory | null;
   extensionVersion: string;
