@@ -9,7 +9,7 @@ import {
 } from "../shared/protocol";
 import { logger } from "../shared/logger";
 import { maskPhone } from "../shared/phone";
-import { runWhatsAppPreflight } from "../whatsapp/preflight";
+import { CONTENT_INSTANCE_ID, runWhatsAppPreflight } from "../whatsapp/preflight";
 import { scheduleConversationNavigation, sendAndVerifyText } from "../whatsapp/send-text";
 import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
@@ -42,10 +42,15 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       return false;
     }
     const requestedNavigationAt = new Date().toISOString();
-    sendResponse(success<InternalResponseMap["WA_OPEN_CONVERSATION"]>(message.requestId, { navigationStarted: true, requestedNavigationAt }));
+    sendResponse(success<InternalResponseMap["WA_OPEN_CONVERSATION"]>(message.requestId, {
+      navigationStarted: true,
+      requestedNavigationAt,
+      contentInstanceId: CONTENT_INSTANCE_ID
+    }));
     logger.info("whatsapp.navigation_scheduled", {
       operationId: payload.operationId,
       requestedNavigationAt,
+      contentInstanceId: CONTENT_INSTANCE_ID,
       expectedMaskedPhone: maskPhone(`+${payload.phoneDigits}`)
     });
     scheduleConversationNavigation(payload.phoneDigits);
@@ -61,6 +66,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappProveConversation) {
         const payload = message.payload as InternalRequestMap["WA_PROVE_CONVERSATION"];
+        if (payload.expectedContentInstanceId && payload.expectedContentInstanceId !== CONTENT_INSTANCE_ID) {
+          throw new ExtensionError(
+            ERROR_CODES.interfaceLoading,
+            "WhatsApp cambió de documento antes de confirmar el contacto. Se esperará la nueva instancia de forma segura.",
+            {
+              recoverable: true,
+              details: { contentGenerationMismatch: true }
+            }
+          );
+        }
         const proveConversationStartedAt = new Date().toISOString();
         let composerObservedAt: string | null = null;
         const data = await waitForConversationContext(payload.phoneDigits, {
@@ -71,6 +86,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             }
             logger.debug("whatsapp.conversation_proof", {
               operationId: payload.operationId,
+              contentInstanceId: CONTENT_INSTANCE_ID,
               proveConversationStartedAt,
               requestedNavigationAt: payload.requestedNavigationAt ?? null,
               navigationObservedAt: payload.navigationObservedAt ?? null,
@@ -113,4 +129,4 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   return true;
 });
 
-logger.debug("whatsapp.content_ready", { origin: window.location.origin });
+logger.debug("whatsapp.content_ready", { origin: window.location.origin, contentInstanceId: CONTENT_INSTANCE_ID });
