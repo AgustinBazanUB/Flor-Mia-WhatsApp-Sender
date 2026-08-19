@@ -1,5 +1,7 @@
 export interface RetryPolicyConfig {
   maxAttemptsPerStep: number;
+  /** Presupuesto TOTAL de aperturas reales de un contacto, incluso a través de Resume. */
+  maxOpenConversationAttempts?: number;
   backoff: {
     initialDelayMs: number;
     multiplier: number;
@@ -17,6 +19,7 @@ export interface RetryPolicyConfig {
 
 export const DEFAULT_RETRY_POLICY: RetryPolicyConfig = {
   maxAttemptsPerStep: 3,
+  maxOpenConversationAttempts: 2,
   backoff: {
     initialDelayMs: 750,
     multiplier: 1.8,
