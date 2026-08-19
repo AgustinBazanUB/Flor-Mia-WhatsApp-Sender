@@ -12,7 +12,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -21,28 +21,91 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
       - name: Install locked dependencies
+        id: install
+        continue-on-error: true
         run: npm ci
-      - name: Typecheck, lint, test and validate build
+      - name: Typecheck
+        id: typecheck
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run typecheck
+      - name: Lint
+        id: lint
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run lint
+      - name: Tests
+        id: tests
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run test
+      - name: Build
+        id: build
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run build
+      - name: Validate build
+        id: validate
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: npm run validate:build
+      - name: Required aggregate verify command
+        id: aggregate
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
         run: npm run verify
-      - name: Publish verify commit status
+
+      - name: Publish phase statuses
         if: always() && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
-          VERIFY_STATE: ${{ job.status }}
+          INSTALL: ${{ steps.install.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          VALIDATE: ${{ steps.validate.outcome }}
+          AGGREGATE: ${{ steps.aggregate.outcome }}
         run: |
-          if [ "$VERIFY_STATE" = "success" ]; then
-            state=success
-            description="npm run verify passed (tests + build)"
-          else
-            state=failure
-            description="npm run verify failed"
-          fi
-          curl --fail-with-body --silent --show-error \
-            --request POST \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
-            --data "{\"state\":\"$state\",\"context\":\"verify/npm\",\"description\":\"$description\"}"
+          publish_status() {
+            context="$1"
+            outcome="$2"
+            if [ "$outcome" = "success" ]; then state=success; else state=failure; fi
+            description="$context: $outcome"
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+              --data "{\"state\":\"$state\",\"context\":\"$context\",\"description\":\"$description\"}"
+          }
+          publish_status "verify/install" "$INSTALL"
+          publish_status "verify/typecheck" "$TYPECHECK"
+          publish_status "verify/lint" "$LINT"
+          publish_status "verify/tests" "$TESTS"
+          publish_status "verify/build" "$BUILD"
+          publish_status "verify/validate-build" "$VALIDATE"
+          publish_status "verify/npm" "$AGGREGATE"
+
+      - name: Fail workflow when verification failed
+        if: always()
+        env:
+          INSTALL: ${{ steps.install.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          VALIDATE: ${{ steps.validate.outcome }}
+          AGGREGATE: ${{ steps.aggregate.outcome }}
+        run: |
+          test "$INSTALL" = success \
+            && test "$TYPECHECK" = success \
+            && test "$LINT" = success \
+            && test "$TESTS" = success \
+            && test "$BUILD" = success \
+            && test "$VALIDATE" = success \
+            && test "$AGGREGATE" = success
