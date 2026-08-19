@@ -1,3 +1,4 @@
+import { campaignControlKindForTrace, campaignControlRequestedAt } from "../background/control-intent";
 import { sanitizeDiagnosticText } from "../diagnostics/sanitizer";
 import type { TechnicalTraceInput, TechnicalTraceRecord, TechnicalTraceState } from "../diagnostics/types";
 import { ChromeLocalStorageAdapter, type KeyValueStorage } from "./state-store";
@@ -16,6 +17,33 @@ function isTraceState(value: unknown): value is TechnicalTraceState {
   return candidate.schemaVersion === 1 && Array.isArray(candidate.records);
 }
 
+function millisecondsBetween(start: string | null, end: string | null): number | null {
+  if (!start || !end) return null;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  return Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : null;
+}
+
+function controlTiming(input: TechnicalTraceInput): Partial<TechnicalTraceRecord> {
+  const requestedKind = campaignControlKindForTrace(input.campaignId);
+  const actionKind = input.action === "campaign_pause" ? "pause" : input.action === "campaign_stop" ? "stop" : null;
+  if (!actionKind || requestedKind !== actionKind) return {};
+  const requestedAt = campaignControlRequestedAt(input.campaignId);
+  if (!requestedAt) return {};
+  const completedAt = input.timestampEnd ?? null;
+  return {
+    requestedAt,
+    // El listener urgente captura la orden síncronamente; esa captura es el ACK técnico.
+    acknowledgedAt: requestedAt,
+    safeBoundaryReachedAt: completedAt,
+    completedAt,
+    queueWaitMs: millisecondsBetween(requestedAt, input.timestampStart),
+    executionMs: input.durationMs === null ? millisecondsBetween(input.timestampStart, completedAt) : Math.max(0, Math.round(input.durationMs)),
+    totalMs: millisecondsBetween(requestedAt, completedAt),
+    cancelState: completedAt ? "completed" : "requested"
+  };
+}
+
 function normalize(input: TechnicalTraceInput): TechnicalTraceRecord {
   const timestampEnd = input.timestampEnd ?? null;
   const traceId = input.traceId ?? [
@@ -30,6 +58,7 @@ function normalize(input: TechnicalTraceInput): TechnicalTraceRecord {
   ].join(":");
   return {
     ...input,
+    ...controlTiming(input),
     traceId: sanitizeDiagnosticText(traceId, { maxStringLength: 500 }),
     campaignId: sanitizeDiagnosticText(input.campaignId, { maxStringLength: 160 }),
     contactId: input.contactId ? sanitizeDiagnosticText(input.contactId, { maxStringLength: 160 }) : null,
