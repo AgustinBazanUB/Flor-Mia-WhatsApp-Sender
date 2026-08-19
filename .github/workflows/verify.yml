@@ -114,6 +114,41 @@ jobs:
             "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
             --data "$payload"
 
+  diagnose-lint:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Capture ESLint JSON
+        shell: bash
+        run: npm run lint -- --format=json --output-file=/tmp/eslint.json || true
+      - name: Publish first lint violation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          summary=$(node -e 'const fs=require("fs"), path=require("path"); const r=JSON.parse(fs.readFileSync("/tmp/eslint.json","utf8")); const f=r.find(x=>(x.errorCount||0)>0); if(!f){process.stdout.write("success");process.exit(0)} const m=f.messages.find(x=>x.severity===2)||{}; const file=path.basename(f.filePath||"unknown").replace(/[^A-Za-z0-9_.-]/g,"-"); const rule=String(m.ruleId||"unknown").replace(/[^A-Za-z0-9_.-]/g,"-"); process.stdout.write(`${file}-${rule}`)')
+          if [ "$summary" = "success" ]; then state=success; else state=failure; fi
+          context="verify/lint-$summary"
+          payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "First ESLint result: $summary" '{state:$state,context:$context,description:$description}')
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+            --data "$payload"
+
   diagnose-tests:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
