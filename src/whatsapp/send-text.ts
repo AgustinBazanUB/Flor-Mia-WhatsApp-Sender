@@ -24,10 +24,16 @@ export function normalizeComposerLineEndings(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }
 
+function composerTextRepresentations(composer: HTMLElement): string[] {
+  const values = [composer.innerText, composer.textContent]
+    .filter((value): value is string => typeof value === "string")
+    .map(normalizeComposerLineEndings);
+  return [...new Set(values)];
+}
+
 function composerPlainText(composer: HTMLElement): string {
-  const innerText = typeof composer.innerText === "string" ? composer.innerText : "";
-  const raw = innerText || composer.textContent || "";
-  return normalizeComposerLineEndings(raw);
+  const representations = composerTextRepresentations(composer);
+  return representations[0] ?? "";
 }
 
 export type ComposerPreparationState = "empty" | "prepared" | "conflict";
@@ -39,9 +45,28 @@ export function classifyComposerContent(existingText: string, expectedText: stri
   return existing === expected ? "prepared" : "conflict";
 }
 
+function classifyComposerElementContent(composer: HTMLElement, expectedText: string): ComposerPreparationState {
+  const expected = normalizeComposerLineEndings(expectedText);
+  const representations = composerTextRepresentations(composer);
+  if (representations.some((value) => value === expected)) return "prepared";
+  if (representations.every((value) => !canonicalMessageText(value))) return "empty";
+  return "conflict";
+}
+
+async function waitForPreparedComposer(expected: string, timeoutMs = 1_000): Promise<HTMLElement | null> {
+  return waitForCondition(() => {
+    const live = findComposer()?.element;
+    if (!live) return null;
+    return classifyComposerElementContent(live, expected) === "prepared" ? live : null;
+  }, {
+    timeoutMs,
+    description: "que WhatsApp estabilice el texto preparado en el composer"
+  }).catch(() => null);
+}
+
 export async function prepareComposerTextForSend(composer: HTMLElement, message: string): Promise<"inserted" | "reused"> {
   const expected = normalizeComposerLineEndings(message);
-  const state = classifyComposerContent(composerPlainText(composer), expected);
+  const state = classifyComposerElementContent(composer, expected);
   if (state === "prepared") return "reused";
   if (state === "conflict") {
     throw new ExtensionError(
@@ -59,15 +84,20 @@ export async function prepareComposerTextForSend(composer: HTMLElement, message:
   selection?.addRange(range);
 
   const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, expected);
-  if (!inserted || composerPlainText(composer) !== expected) {
-    composer.replaceChildren(document.createTextNode(expected));
+  let prepared = await waitForPreparedComposer(expected, inserted ? 800 : 50);
+
+  if (!prepared) {
+    const liveComposer = findComposer()?.element ?? composer;
+    liveComposer.focus();
+    liveComposer.replaceChildren(document.createTextNode(expected));
     const event = typeof InputEvent === "function"
       ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: expected })
       : new Event("input", { bubbles: true });
-    composer.dispatchEvent(event);
+    liveComposer.dispatchEvent(event);
+    prepared = await waitForPreparedComposer(expected, 1_000);
   }
 
-  if (classifyComposerContent(composerPlainText(composer), expected) !== "prepared") {
+  if (!prepared) {
     throw capabilityUnavailableError(
       resolveCapability("composer", document, { required: true }).discovery,
       "WhatsApp localizó el composer, pero no conservó exactamente el texto preparado por la campaña."
@@ -135,7 +165,8 @@ export async function sendAndVerifyText(input: {
   }
   await lifecycle.beforeSend?.([...beforeIds]);
   requireConversationContext(phoneDigits);
-  if (classifyComposerContent(composerPlainText(composerMatch.element), message) !== "prepared") {
+  const liveComposer = findComposer()?.element;
+  if (!liveComposer || classifyComposerElementContent(liveComposer, message) !== "prepared") {
     throw new ExtensionError(
       ERROR_CODES.verificationFailed,
       "El contenido del composer cambió antes del envío. Se canceló el click para evitar enviar texto incorrecto.",
