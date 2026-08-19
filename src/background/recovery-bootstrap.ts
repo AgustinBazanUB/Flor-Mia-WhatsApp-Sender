@@ -68,14 +68,11 @@ export async function recoverContentScriptsOnce(): Promise<void> {
   const stored = await chrome.storage.local.get(RECOVERY_MARKER_KEY);
   if (stored[RECOVERY_MARKER_KEY] === RECOVERY_MARKER) return;
 
-  await Promise.all([
-    injectIntoTabs([WHATSAPP_PATTERN], "content/whatsapp.js"),
-    injectIntoTabs([...WEB_APP_MATCH_PATTERNS], "content/web-app-bridge.js"),
-  ]);
-
-  await chrome.storage.local.set({ [RECOVERY_MARKER_KEY]: RECOVERY_MARKER });
+  await injectIntoTabs([WHATSAPP_PATTERN], "content/whatsapp.js");
   await new Promise((resolve) => globalThis.setTimeout(resolve, 100));
   await refreshLightweightHealth();
+  await injectIntoTabs([...WEB_APP_MATCH_PATTERNS], "content/web-app-bridge.js");
+  await chrome.storage.local.set({ [RECOVERY_MARKER_KEY]: RECOVERY_MARKER });
 }
 
-void recoverContentScriptsOnce();
+void recoverContentScriptsOnce().catch(() => undefined);
