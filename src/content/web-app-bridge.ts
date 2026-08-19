@@ -89,8 +89,12 @@ function messageTypeForStatus(
   if (["paused", "pause_requested", "daily_limit_reached", "images_required"].includes(status.status)) {
     return WEB_APP_MESSAGE_TYPES.paused;
   }
-  if (requestedType === WEB_APP_MESSAGE_TYPES.resumeRequest) return WEB_APP_MESSAGE_TYPES.resumed;
-  if (requestedType === WEB_APP_MESSAGE_TYPES.startRequest) return WEB_APP_MESSAGE_TYPES.started;
+  if ([WEB_APP_MESSAGE_TYPES.resumeRequest, WEB_APP_MESSAGE_TYPES.retryRequest].includes(requestedType ?? WEB_APP_MESSAGE_TYPES.status)) {
+    return WEB_APP_MESSAGE_TYPES.resumed;
+  }
+  if ([WEB_APP_MESSAGE_TYPES.startRequest, WEB_APP_MESSAGE_TYPES.retryFailedRequest].includes(requestedType ?? WEB_APP_MESSAGE_TYPES.status)) {
+    return WEB_APP_MESSAGE_TYPES.started;
+  }
   return WEB_APP_MESSAGE_TYPES.progress;
 }
 
@@ -132,12 +136,20 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
   }
 
   const campaignId = campaignIdOf(request);
+  // Retry/Retry Failed son controles públicos explícitos. Internamente reutilizan el
+  // canal serializado de Resume: CampaignRuntime distingue el estado real y decide si
+  // corresponde reanudar una pausa normal, resetear un fallo seguro o reabrir sólo
+  // destinatarios fallidos. Delete reutiliza Stop únicamente cuando la campaña ya
+  // está detenida; el primer Stop nunca elimina recursos.
   const controls = {
     [WEB_APP_MESSAGE_TYPES.cancelRequest]: INTERNAL_MESSAGE_TYPES.campaignStop,
     [WEB_APP_MESSAGE_TYPES.startRequest]: INTERNAL_MESSAGE_TYPES.campaignStart,
     [WEB_APP_MESSAGE_TYPES.pauseRequest]: INTERNAL_MESSAGE_TYPES.campaignPause,
     [WEB_APP_MESSAGE_TYPES.resumeRequest]: INTERNAL_MESSAGE_TYPES.campaignResume,
-    [WEB_APP_MESSAGE_TYPES.stopRequest]: INTERNAL_MESSAGE_TYPES.campaignStop
+    [WEB_APP_MESSAGE_TYPES.retryRequest]: INTERNAL_MESSAGE_TYPES.campaignResume,
+    [WEB_APP_MESSAGE_TYPES.retryFailedRequest]: INTERNAL_MESSAGE_TYPES.campaignResume,
+    [WEB_APP_MESSAGE_TYPES.stopRequest]: INTERNAL_MESSAGE_TYPES.campaignStop,
+    [WEB_APP_MESSAGE_TYPES.deleteRequest]: INTERNAL_MESSAGE_TYPES.campaignStop
   } as const;
   if (request.type in controls) {
     const type = controls[request.type as keyof typeof controls];
