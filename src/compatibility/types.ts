@@ -20,6 +20,7 @@ export type CapabilityState = "available" | "unavailable" | "requires_context" |
 export type CompatibilityOverallStatus = "GREEN" | "RED";
 export type CompatibilityChange = "stable" | "drift" | "break" | "unknown";
 export type PreflightLevel = "full" | "lightweight" | "targeted";
+export type PreflightPurpose = "campaign_start" | "health_check" | "content_handshake" | "manual_diagnostic" | "unspecified";
 
 export interface CampaignRequirements {
   needsText: boolean;
@@ -153,7 +154,9 @@ export interface PreflightProbeImage {
 export interface WhatsAppPreflightRequest {
   timeoutMs?: number;
   level?: PreflightLevel;
+  purpose?: PreflightPurpose;
   requirements?: CampaignRequirements;
+  /** @deprecated Automatic preflights must never inject this image into WhatsApp. */
   probeImage?: PreflightProbeImage;
   developmentFault?: CompatibilityDevelopmentFault;
   targetedCapability?: WhatsAppCapability;
