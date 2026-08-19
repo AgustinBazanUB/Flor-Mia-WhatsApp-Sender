@@ -1,0 +1,49 @@
+/* Capa de presentación: conserva códigos/clases técnicas y cambia sólo el lenguaje visible. */
+#extension-status {
+  font-size: 0;
+}
+
+#extension-status::after {
+  content: "Necesita revisión";
+  font-size: 15px;
+}
+
+#extension-status.is-operational::after {
+  content: "Conectado";
+}
+
+.campaign-status {
+  font-size: 0;
+}
+
+.campaign-status::after {
+  font-size: 10px;
+}
+
+.campaign-status.is-received::after { content: "Lista para iniciar"; }
+.campaign-status.is-ready::after { content: "Lista para enviar"; }
+.campaign-status.is-running::after,
+.campaign-status.is-waiting_contact::after,
+.campaign-status.is-waiting_batch::after { content: "En curso"; }
+.campaign-status.is-pause_requested::after { content: "Pausando…"; }
+.campaign-status.is-paused::after,
+.campaign-status.is-daily_limit_reached::after { content: "Pausada"; }
+.campaign-status.is-images_required::after,
+.campaign-status.is-error::after { content: "Necesita revisión"; }
+.campaign-status.is-stopped::after { content: "Detenida"; }
+.campaign-status.is-completed::after { content: "Completada"; }
+
+.technical-details.card {
+  margin-top: 0;
+}
+
+.technical-details[open] > summary {
+  margin-bottom: 10px;
+}
+
+#incident-result {
+  margin: 0;
+  color: #625e54;
+  font-size: 12px;
+  line-height: 1.45;
+}
