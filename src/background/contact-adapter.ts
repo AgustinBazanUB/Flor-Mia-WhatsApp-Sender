@@ -9,6 +9,7 @@ import type {
   TextContactStep
 } from "../engine/types";
 import { ERROR_CODES, ExtensionError, serializeError, toExtensionError } from "../shared/errors";
+import { logger } from "../shared/logger";
 import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
 import { arrayBufferToBase64 } from "../shared/serialization";
 import type { CampaignBlobStore } from "../storage/blob-store";
@@ -47,8 +48,18 @@ function defaultCheckpointStore(): ContactCheckpointRepository | null {
   return new ContactCheckpointStore();
 }
 
+interface PendingConversationOpen {
+  contactId: string;
+  phoneDigits: string;
+  tabId: number;
+  previousContentInstanceId: string;
+  requestedNavigationAt: string;
+  navigationRequestedMs: number;
+}
+
 export class ChromeWhatsAppContactAdapter implements ContactAdapter {
   private whatsappTabId: number | null = null;
+  private pendingConversationOpen: PendingConversationOpen | null = null;
 
   constructor(
     private readonly blobs: Pick<CampaignBlobStore, "getImage">,
@@ -75,20 +86,72 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
     signal?: AbortSignal
   ): Promise<void> {
     if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
+    const operationStartedMs = Date.now();
     const persistedTabId = Number.isInteger(contact.whatsappTabId) ? contact.whatsappTabId! : null;
     const boundTabId = this.whatsappTabId ?? persistedTabId;
     const tab = boundTabId === null
       ? await this.transport.requireTab()
       : await this.transport.requireTabId(boundTabId);
     this.whatsappTabId = tab.id;
-    // Persistimos antes de navegar. Si el Service Worker muere, el checkpoint recuperado
-    // debe reutilizar exactamente esta pestaña o fallar cerrado.
     await this.persistTabBinding(contact, tab.id);
-    const navigation = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
+
+    let pending = this.pendingConversationOpen;
+    if (!pending
+      || pending.contactId !== contact.contactId
+      || pending.phoneDigits !== contact.phoneDigits
+      || pending.tabId !== tab.id) {
+      const navigation = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
+        operationId: `open:${contact.contactId}`,
+        phoneDigits: contact.phoneDigits
+      }, tab.id);
+      pending = {
+        contactId: contact.contactId,
+        phoneDigits: contact.phoneDigits,
+        tabId: tab.id,
+        previousContentInstanceId: navigation.contentInstanceId,
+        requestedNavigationAt: navigation.requestedNavigationAt,
+        navigationRequestedMs: Date.now()
+      };
+      this.pendingConversationOpen = pending;
+      logger.info("whatsapp.open_conversation_stage", {
+        operationId: `open:${contact.contactId}`,
+        stage: "navigation_requested",
+        elapsedMs: Date.now() - operationStartedMs
+      });
+    } else {
+      logger.debug("whatsapp.open_conversation_stage", {
+        operationId: `open:${contact.contactId}`,
+        stage: "reuse_pending_navigation",
+        elapsedMs: Date.now() - operationStartedMs
+      });
+    }
+
+    const handshakeStartedMs = Date.now();
+    let result;
+    try {
+      result = await this.transport.waitForContent(tab.id, timeoutMs, signal, {
+        previousContentInstanceId: pending.previousContentInstanceId,
+        purpose: "content_handshake"
+      });
+    } catch (error) {
+      const normalized = toExtensionError(error);
+      if (normalized.code === ERROR_CODES.whatsappNotOpen) this.pendingConversationOpen = null;
+      logger.warn("whatsapp.open_conversation_stage", {
+        operationId: `open:${contact.contactId}`,
+        stage: "content_handshake_failed",
+        errorCode: normalized.code,
+        elapsedMs: Date.now() - handshakeStartedMs
+      });
+      throw normalized;
+    }
+    const handshakeAt = new Date().toISOString();
+    logger.info("whatsapp.open_conversation_stage", {
       operationId: `open:${contact.contactId}`,
-      phoneDigits: contact.phoneDigits
-    }, tab.id);
-    const result = await this.transport.waitForContent(tab.id, timeoutMs, signal);
+      stage: "content_handshake_confirmed",
+      elapsedMs: Date.now() - handshakeStartedMs,
+      navigationToHandshakeMs: Date.now() - pending.navigationRequestedMs
+    });
+
     if (!result.operational) {
       if (result.qrDetected) throw new ExtensionError(ERROR_CODES.sessionNotReady, result.message);
       if (result.status === "incompatible") {
@@ -97,6 +160,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
           recoverable: false,
           ...(failed ? {
             details: {
+              stage: "content_handshake",
               compatibilityDiagnostic: {
                 capability: failed.capability,
                 logicalStep: failed.logicalStep,
@@ -111,18 +175,39 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
           } : {})
         });
       }
-      throw new ExtensionError(ERROR_CODES.interfaceLoading, result.message);
+      throw new ExtensionError(ERROR_CODES.interfaceLoading, result.message, {
+        details: { stage: "content_handshake" }
+      });
     }
     if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
-    // Composer listo no equivale a destinatario probado. El Content Script espera una
-    // señal estructurada fuerte y sólo entonces habilitamos los steps de contenido.
-    await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
-      operationId: `prove:${contact.contactId}`,
-      phoneDigits: contact.phoneDigits,
-      timeoutMs: Math.min(timeoutMs, 15_000),
-      requestedNavigationAt: navigation.requestedNavigationAt,
-      navigationObservedAt: new Date().toISOString()
-    }, this.requireBoundTabId());
+
+    const proofStartedMs = Date.now();
+    try {
+      await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
+        operationId: `prove:${contact.contactId}`,
+        phoneDigits: contact.phoneDigits,
+        timeoutMs: Math.min(timeoutMs, 15_000),
+        requestedNavigationAt: pending.requestedNavigationAt,
+        navigationObservedAt: handshakeAt,
+        ...(result.contentInstanceId ? { expectedContentInstanceId: result.contentInstanceId } : {})
+      }, this.requireBoundTabId());
+      logger.info("whatsapp.open_conversation_stage", {
+        operationId: `open:${contact.contactId}`,
+        stage: "conversation_proof_confirmed",
+        elapsedMs: Date.now() - proofStartedMs,
+        totalOpenConversationMs: Date.now() - operationStartedMs
+      });
+      this.pendingConversationOpen = null;
+    } catch (error) {
+      const normalized = toExtensionError(error);
+      logger.warn("whatsapp.open_conversation_stage", {
+        operationId: `open:${contact.contactId}`,
+        stage: "conversation_proof_failed",
+        errorCode: normalized.code,
+        elapsedMs: Date.now() - proofStartedMs
+      });
+      throw normalized;
+    }
   }
 
   private requireBoundTabId(): number {
