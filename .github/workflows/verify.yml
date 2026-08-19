@@ -39,8 +39,10 @@ jobs:
           post success p0/typecheck-patch "P0 text patch applied"
           git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
           rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py .github/workflows/p0-handshake-fix.yml
-          npm ci >/tmp/npm-ci.log 2>&1 || { post failure p0/typecheck-npm-ci "npm ci failed"; cat /tmp/npm-ci.log; exit 1; }
+          post pending p0/typecheck-npm-ci "npm ci running"
+          npm ci --no-audit --no-fund >/tmp/npm-ci.log 2>&1 || { post failure p0/typecheck-npm-ci "npm ci failed"; cat /tmp/npm-ci.log; exit 1; }
           post success p0/typecheck-npm-ci "npm ci passed"
+          post pending p0/typecheck-result "TypeScript running"
           set +e
           npm run typecheck >/tmp/typecheck.log 2>&1
           code=$?
