@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { ExtensionError } from "../src/shared/errors";
+import type { ExtensionError } from "../src/shared/errors";
 import {
   classifyComposerContent,
   normalizeComposerLineEndings,
