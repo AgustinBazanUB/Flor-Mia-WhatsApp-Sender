@@ -366,6 +366,12 @@ export function proveConversationContext(
   root: ParentNode = document,
   context?: CausalNavigationContext
 ): ConversationContextProof | null {
+  // Una vez que una navegación estableció una lease, la revalidación previa al Send
+  // debe respetar su guard. No se rescata una selección manual con una URL vieja.
+  if (!context && activeLease?.expectedPhoneDigits === expectedPhoneDigits) {
+    return validateActiveLease(expectedPhoneDigits, root);
+  }
+  if (context && activeLease?.navigationRequestId !== context.navigationRequestId) activeLease = null;
   return inspectInitialProof(expectedPhoneDigits, root, context).proof ?? validateActiveLease(expectedPhoneDigits, root);
 }
 
