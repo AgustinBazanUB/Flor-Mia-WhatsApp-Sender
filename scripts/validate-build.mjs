@@ -9,6 +9,7 @@ const required = [
   "popup/index.html",
   "popup/popup.js",
   "popup/popup.css",
+  "popup/user-facing.css",
   "diagnostics/report.html",
   "diagnostics/report.js",
   "diagnostics/report.css"
