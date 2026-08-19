@@ -83,10 +83,21 @@ async function sleepWithSignal(
 ): Promise<void> {
   if (!signal) return sleep(delayMs);
   if (signal.aborted) return;
-  await Promise.race([
-    sleep(delayMs),
-    new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
-  ]);
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => finish(resolve);
+    signal.addEventListener("abort", onAbort, { once: true });
+    void sleep(delayMs).then(
+      () => finish(resolve),
+      (error) => finish(() => reject(error))
+    );
+  });
 }
 
 export async function processContact(
@@ -124,12 +135,19 @@ export async function processContact(
     pauseReason: "manual_pause",
     error: undefined
   });
+  const stopAtCancelledWait = async (): Promise<ContactProcessCheckpoint | null> => {
+    if (!dependencies.signal?.aborted) return null;
+    if (await pauseRequested()) return pauseAtSafeBoundary();
+    throw new DOMException("Operación cancelada", "AbortError");
+  };
 
   if (checkpoint.status === "completed") return checkpoint;
 
   let opened = false;
   while (!opened && checkpoint.openConversationAttempts < openConversationAttemptLimit) {
-    if ((dependencies.signal?.aborted || await pauseRequested()) && await pauseRequested()) return pauseAtSafeBoundary();
+    const cancelledBeforeOpen = await stopAtCancelledWait();
+    if (cancelledBeforeOpen) return cancelledBeforeOpen;
+    if (await pauseRequested()) return pauseAtSafeBoundary();
     checkpoint = await persist({
       ...checkpoint,
       status: "opening_chat",
@@ -141,7 +159,8 @@ export async function processContact(
       opened = true;
       checkpoint = await persist({ ...checkpoint, status: "running", error: undefined });
     } catch (error) {
-      if ((dependencies.signal?.aborted || await pauseRequested()) && await pauseRequested()) return pauseAtSafeBoundary();
+      const cancelledDuringOpen = await stopAtCancelledWait();
+      if (cancelledDuringOpen) return cancelledDuringOpen;
       const normalized = toExtensionError(error);
       checkpoint = await persist({ ...checkpoint, error: serializeError(normalized) });
       if (!normalized.recoverable || checkpoint.openConversationAttempts >= openConversationAttemptLimit) {
@@ -154,6 +173,8 @@ export async function processContact(
       }
       if (await pauseRequested()) return pauseAtSafeBoundary();
       await sleepWithSignal(sleep, retryDelayMs(checkpoint.openConversationAttempts, policy), dependencies.signal);
+      const cancelledDuringRetryDelay = await stopAtCancelledWait();
+      if (cancelledDuringRetryDelay) return cancelledDuringRetryDelay;
       if (await pauseRequested()) return pauseAtSafeBoundary();
     }
   }
@@ -245,6 +266,8 @@ export async function processContact(
       if (step.status === "failed") return checkpoint;
       if (await pauseRequested()) return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
       await sleepWithSignal(sleep, retryDelayMs(step.attempts, policy), dependencies.signal);
+      const cancelledDuringStepRetry = await stopAtCancelledWait();
+      if (cancelledDuringStepRetry) return cancelledDuringStepRetry;
       if (await pauseRequested()) return persist({ ...checkpoint, status: "paused", pauseReason: "manual_pause" });
     }
 
