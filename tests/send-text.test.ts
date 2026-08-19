@@ -17,19 +17,60 @@ beforeEach(() => {
   Object.defineProperty(document, "execCommand", { value: () => false, configurable: true });
 });
 
+function echoComposerAsOutgoing(id: string, onClick?: (exactComposerText: string) => void): void {
+  document.querySelector("button")!.addEventListener("click", () => {
+    const composer = document.querySelector<HTMLElement>("[contenteditable='true']")!;
+    const exact = composer.textContent ?? "";
+    onClick?.(exact);
+    const outgoing = document.createElement("div");
+    outgoing.className = "message-out";
+    outgoing.dataset.id = id;
+    const text = document.createElement("span");
+    text.className = "selectable-text";
+    text.textContent = exact;
+    outgoing.append(text);
+    document.getElementById("main")!.append(outgoing);
+  });
+}
+
 describe("verified text send", () => {
   it("returns success only after a new matching outgoing message exists", async () => {
-    document.querySelector("button")!.addEventListener("click", () => {
-      const outgoing = document.createElement("div");
-      outgoing.className = "message-out";
-      outgoing.dataset.id = "true_new";
-      outgoing.innerHTML = "<span class='selectable-text'>Hola Flor Mía</span>";
-      document.getElementById("main")!.append(outgoing);
-    });
+    echoComposerAsOutgoing("true_new");
     const result = await sendAndVerifyText({ operationId: "operation-1", phoneDigits: "5491112345678", message: "Hola Flor Mía", timeoutMs: 100 });
     expect(result.success).toBe(true);
     expect(result.verification).toMatchObject({ confirmed: true, method: "new-outgoing-message-dom", messageElementId: "true_new" });
     expect(result.contactId).not.toContain("5491112345678");
+  });
+
+  it.each([
+    "Hola, esto es una prueba 👋",
+    "Árbol, pingüino, acción y corazón ❤️",
+    "Línea uno\nLínea dos\nLínea tres",
+    "  conserva espacios exteriores  ",
+    "Símbolos: ¿¡!?#%&/()[]{}—… € $ @",
+    "x".repeat(4_000)
+  ])("places the exact campaign string in the composer before Send", async (message) => {
+    let observedBeforeClick: string | null = null;
+    echoComposerAsOutgoing("true_exact", (text) => { observedBeforeClick = text; });
+
+    const result = await sendAndVerifyText({
+      operationId: `exact-${message.length}`,
+      phoneDigits: "5491112345678",
+      message,
+      timeoutMs: 100
+    });
+
+    expect(observedBeforeClick).toBe(message);
+    expect(result.success).toBe(true);
+  });
+
+  it("normalizes only CRLF line endings before writing to a browser contenteditable", async () => {
+    const message = "Línea uno\r\nLínea dos";
+    let observedBeforeClick: string | null = null;
+    echoComposerAsOutgoing("true_crlf", (text) => { observedBeforeClick = text; });
+
+    await sendAndVerifyText({ operationId: "crlf", phoneDigits: "5491112345678", message, timeoutMs: 100 });
+    expect(observedBeforeClick).toBe("Línea uno\nLínea dos");
   });
 
   it("does not report success without DOM verification", async () => {
@@ -41,6 +82,19 @@ describe("verified text send", () => {
     document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = "Borrador del usuario";
     await expect(sendAndVerifyText({ operationId: "operation-3", phoneDigits: "5491112345678", message: "Nuevo", timeoutMs: 10 }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("cancels before click if another actor mutates the composer after the durable checkpoint", async () => {
+    let clicks = 0;
+    document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });
+    await expect(sendAndVerifyText(
+      { operationId: "composer-changed", phoneDigits: "5491112345678", message: "Contenido correcto", timeoutMs: 30 },
+      { beforeSend: async () => { document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = "Contenido distinto"; } }
+    )).rejects.toMatchObject({
+      code: "VERIFICATION_FAILED",
+      details: { sendAttempted: false }
+    });
+    expect(clicks).toBe(0);
   });
 
   it("returns a targeted sanitized diagnostic when composer strategies are exhausted", async () => {
@@ -98,12 +152,7 @@ describe("verified text send", () => {
 
   it("distinguishes a new stable message from an older identical message", async () => {
     document.querySelector(".selectable-text")!.textContent = "Repetido";
-    document.querySelector("button")!.addEventListener("click", () => {
-      document.getElementById("main")!.insertAdjacentHTML(
-        "beforeend",
-        "<div class='message-out' data-id='true_new_repeat'><span class='selectable-text'>Repetido</span></div>"
-      );
-    });
+    echoComposerAsOutgoing("true_new_repeat");
     const result = await sendAndVerifyText({ operationId: "repeat", phoneDigits: "5491112345678", message: "Repetido", timeoutMs: 20 });
     expect(result.verification.messageElementId).toBe("true_new_repeat");
   });
