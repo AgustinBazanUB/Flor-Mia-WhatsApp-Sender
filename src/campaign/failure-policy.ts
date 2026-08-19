@@ -79,7 +79,7 @@ export function campaignContactFailureClass(checkpoint: ContactProcessCheckpoint
   const code = error?.code;
   if (code && (SYSTEMIC_ERROR_CODES.has(code) || COMPATIBILITY_ERROR_CODES.has(code))) return "systemic";
   if (code && LOCAL_SAFE_ERROR_CODES.has(code)) return "local_safe";
-  if (["max_attempts", "open_conversation_failed"].includes(checkpoint.pauseReason ?? "") && error?.recoverable !== false) {
+  if (["max_attempts", "open_conversation_failed"].includes(checkpoint.pauseReason ?? "") && error?.recoverable === true) {
     return "local_safe";
   }
   return error?.recoverable === true ? "local_safe" : "systemic";
