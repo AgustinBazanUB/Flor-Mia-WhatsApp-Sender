@@ -25,6 +25,7 @@ export function createUnavailablePreflight(
   const level = request.level ?? "full";
   const requirements = request.requirements ?? DEFAULT_PREFLIGHT_REQUIREMENTS;
   const required = requiredCapabilities(requirements, level);
+  if (request.targetedCapability) required.add(request.targetedCapability);
   const capabilities = Object.fromEntries(CAPABILITIES.map((capability): [WhatsAppCapability, CapabilityDiscovery] => [capability, {
     capability,
     logicalStep: `preflight.${capability}`,
@@ -41,6 +42,9 @@ export function createUnavailablePreflight(
     checkedAt,
     pageDetected: options.pageDetected ?? false,
     contentScriptConnected: options.contentScriptConnected ?? false,
+    contentInstanceId: null,
+    purpose: request.purpose ?? "unspecified",
+    diagnosticComposerMutationDetected: false,
     documentReady: false,
     sessionReady: false,
     mainInterfaceReady: false,
