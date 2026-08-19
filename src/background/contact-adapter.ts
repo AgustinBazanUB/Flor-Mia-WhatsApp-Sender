@@ -17,6 +17,8 @@ import { ContactCheckpointStore } from "../storage/checkpoint-store";
 import { TechnicalTraceStore } from "../storage/technical-trace-store";
 import { WhatsAppTransport } from "./whatsapp-transport";
 
+const CONVERSATION_PROOF_BUDGET_MS = 4_000;
+
 function executionError(error: unknown): StepExecutionResult {
   const normalized = toExtensionError(error);
   const sendAttempted = normalized.details?.sendAttempted === true;
@@ -67,10 +69,15 @@ function stageError(error: unknown, stage: string, elapsedMs: number): Extension
   });
 }
 
+function createNavigationRequestId(contactId: string): string {
+  return globalThis.crypto?.randomUUID?.() ?? `navigation:${contactId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
 interface PendingConversationOpen {
   contactId: string;
   phoneDigits: string;
   tabId: number;
+  navigationRequestId: string;
   previousContentInstanceId: string;
   requestedNavigationAt: string;
   navigationRequestedMs: number;
@@ -129,7 +136,6 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         durationMs: Math.max(0, endedMs - startedMs)
       });
     } catch (error) {
-      // Una falla de telemetría local nunca debe alterar la ejecución ni la seguridad del envío.
       logger.debug("whatsapp.open_conversation_trace_skipped", {
         stage,
         errorCode: toExtensionError(error).code
@@ -158,15 +164,21 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
       || pending.phoneDigits !== contact.phoneDigits
       || pending.tabId !== tab.id) {
       const navigationStartedMs = Date.now();
+      const navigationRequestId = createNavigationRequestId(contact.contactId);
       try {
         const navigation = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
           operationId: `open:${contact.contactId}`,
-          phoneDigits: contact.phoneDigits
+          phoneDigits: contact.phoneDigits,
+          navigationRequestId
         }, tab.id);
+        if (navigation.navigationRequestId !== navigationRequestId) {
+          throw new ExtensionError(ERROR_CODES.protocolError, "La navegación de WhatsApp respondió con una correlación distinta.", { recoverable: false });
+        }
         pending = {
           contactId: contact.contactId,
           phoneDigits: contact.phoneDigits,
           tabId: tab.id,
+          navigationRequestId,
           previousContentInstanceId: navigation.contentInstanceId,
           requestedNavigationAt: navigation.requestedNavigationAt,
           navigationRequestedMs: Date.now()
@@ -175,6 +187,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         await this.recordOpenStage(contact, "navigation", "confirmed", navigationStartedMs);
         logger.info("whatsapp.open_conversation_stage", {
           operationId: `open:${contact.contactId}`,
+          navigationRequestId,
           stage: "navigation_requested",
           elapsedMs: Date.now() - operationStartedMs
         });
@@ -187,6 +200,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
       await this.recordOpenStage(contact, "navigation", "reused", Date.now());
       logger.debug("whatsapp.open_conversation_stage", {
         operationId: `open:${contact.contactId}`,
+        navigationRequestId: pending.navigationRequestId,
         stage: "reuse_pending_navigation",
         elapsedMs: Date.now() - operationStartedMs
       });
@@ -239,6 +253,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
     const handshakeAt = new Date().toISOString();
     logger.info("whatsapp.open_conversation_stage", {
       operationId: `open:${contact.contactId}`,
+      navigationRequestId: pending.navigationRequestId,
       stage: "content_handshake_confirmed",
       elapsedMs: Date.now() - handshakeStartedMs,
       navigationToHandshakeMs: Date.now() - pending.navigationRequestedMs
@@ -246,12 +261,18 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
 
     if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
 
+    const proofOperationId = `prove:${contact.contactId}:${pending.navigationRequestId}`;
     const proofStartedMs = Date.now();
+    const onAbort = (): void => {
+      void this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappCancelOperation, { operationId: proofOperationId }, tab.id).catch(() => undefined);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
-        operationId: `prove:${contact.contactId}`,
+      const proof = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
+        operationId: proofOperationId,
         phoneDigits: contact.phoneDigits,
-        timeoutMs: Math.min(timeoutMs, 15_000),
+        navigationRequestId: pending.navigationRequestId,
+        timeoutMs: Math.min(timeoutMs, CONVERSATION_PROOF_BUDGET_MS),
         requestedNavigationAt: pending.requestedNavigationAt,
         navigationObservedAt: handshakeAt,
         ...(result.contentInstanceId ? { expectedContentInstanceId: result.contentInstanceId } : {})
@@ -259,7 +280,10 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
       await this.recordOpenStage(contact, "conversation_proof", "confirmed", proofStartedMs);
       logger.info("whatsapp.open_conversation_stage", {
         operationId: `open:${contact.contactId}`,
+        navigationRequestId: pending.navigationRequestId,
         stage: "conversation_proof_confirmed",
+        proofLevel: proof.proofLevel,
+        proofStrategy: proof.evidence,
         elapsedMs: Date.now() - proofStartedMs,
         totalOpenConversationMs: Date.now() - operationStartedMs
       });
@@ -269,11 +293,15 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
       await this.recordOpenStage(contact, "conversation_proof", "failed", proofStartedMs, normalized.code);
       logger.warn("whatsapp.open_conversation_stage", {
         operationId: `open:${contact.contactId}`,
+        navigationRequestId: pending.navigationRequestId,
         stage: "conversation_proof_failed",
         errorCode: normalized.code,
+        proofFailureReason: normalized.details?.proofFailureReason ?? null,
         elapsedMs: Date.now() - proofStartedMs
       });
       throw normalized;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 
