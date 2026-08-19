@@ -56,15 +56,15 @@ describe("web-app bridge runtime lifecycle", () => {
   it("notifies a stale generation exactly once and never lets it become current again", () => {
     const root = new MarkerRoot();
     const first = installBridgeInstanceGuard(root as unknown as Element);
-    let superseded = 0;
-    first.onSuperseded(() => { superseded += 1; });
-
     const second = installBridgeInstanceGuard(root as unknown as Element);
+    let superseded = 0;
+
+    first.onSuperseded(() => { superseded += 1; });
+    expect(superseded).toBe(1);
     expect(first.isCurrent()).toBe(false);
     expect(second.isCurrent()).toBe(true);
 
-    // MarkerRoot is intentionally not a DOM Node, so onSuperseded is checked
-    // synchronously on registration/currentness rather than relying on MutationObserver.
+    // A second subscription cannot produce another stale-generation transition.
     first.onSuperseded(() => { superseded += 1; });
     expect(superseded).toBe(1);
 
