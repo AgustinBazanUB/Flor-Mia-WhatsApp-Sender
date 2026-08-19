@@ -33,6 +33,7 @@ describe("non-destructive WhatsApp preflight", () => {
     expect(result.overallStatus).toBe("GREEN");
     expect(result.requirements).toEqual({ needsText: true, needsImages: false });
     expect(result.capabilities.text_send_action.required).toBe(false);
+    expect(result.capabilities.text_send_action.state).toBe("not_tested");
     expect(result.capabilities.attachment_action.required).toBe(false);
     expect(result.diagnosticComposerMutationDetected).toBe(false);
     expect(composer.textContent).toBe("");
@@ -74,7 +75,7 @@ describe("non-destructive WhatsApp preflight", () => {
     }
   });
 
-  it("does not require a conversation during campaign-start preflight", async () => {
+  it("does not require or inspect a conversation during campaign-start preflight", async () => {
     document.body.innerHTML = `<div data-testid="chat-list"></div>`;
 
     const result = await runWhatsAppPreflight({
@@ -87,7 +88,8 @@ describe("non-destructive WhatsApp preflight", () => {
     expect(result.overallStatus).toBe("GREEN");
     expect(result.requirements.needsText).toBe(true);
     expect(result.capabilities.composer.required).toBe(false);
-    expect(result.capabilities.composer.state).toBe("requires_context");
+    expect(result.capabilities.composer.state).toBe("not_tested");
+    expect(result.capabilities.text_send_action.state).toBe("not_tested");
   });
 
   it("remains GREEN when a primary strategy is disabled and a fallback works", async () => {
@@ -113,6 +115,7 @@ describe("non-destructive WhatsApp preflight", () => {
     expect(result.overallStatus).toBe("GREEN");
     expect(composer.textContent).toBe("");
     expect(result.capabilities.text_send_action.required).toBe(false);
+    expect(result.capabilities.text_send_action.state).toBe("not_tested");
   });
 
   it("does not require or click the attachment action for an image campaign startup", async () => {
@@ -125,6 +128,7 @@ describe("non-destructive WhatsApp preflight", () => {
     });
     expect(result.overallStatus).toBe("GREEN");
     expect(result.capabilities.attachment_action.required).toBe(false);
+    expect(result.capabilities.attachment_action.state).toBe("not_tested");
     expect(result.requirements.needsImages).toBe(true);
   });
 
@@ -144,13 +148,14 @@ describe("non-destructive WhatsApp preflight", () => {
     });
     expect(result.overallStatus).toBe("GREEN");
     expect(result.capabilities.media_preview.required).toBe(false);
+    expect(result.capabilities.media_preview.state).toBe("not_tested");
     expect(result.capabilities.media_send_action.required).toBe(false);
     expect(result.capabilities.image_file_input.required).toBe(false);
     expect(fileInput.files?.length ?? 0).toBe(0);
     expect(document.querySelector("[data-testid='media-editor-canvas']")).toBeNull();
   });
 
-  it("can observe an already-open media preview without opening one", async () => {
+  it("manual diagnostics can observe an already-open media preview without opening one", async () => {
     baseConversation(`
       <input type="file" accept="image/*">
       <div data-testid="media-editor-canvas"></div>
@@ -158,6 +163,7 @@ describe("non-destructive WhatsApp preflight", () => {
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
       level: "full",
+      purpose: "manual_diagnostic",
       requirements: { needsText: true, needsImages: true }
     });
     expect(result.overallStatus).toBe("GREEN");
@@ -168,7 +174,7 @@ describe("non-destructive WhatsApp preflight", () => {
     expect(result.capabilities.media_send_action.required).toBe(false);
   });
 
-  it("uses a lightweight health check that does not require conversation capabilities", async () => {
+  it("uses a lightweight health check that does not inspect conversation capabilities", async () => {
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
       level: "lightweight",
@@ -176,9 +182,9 @@ describe("non-destructive WhatsApp preflight", () => {
       requirements: { needsText: true, needsImages: true }
     });
     expect(result.overallStatus).toBe("GREEN");
-    expect(result.capabilities.media_preview.required).toBe(false);
-    expect(result.capabilities.media_send_action.required).toBe(false);
-    expect(result.capabilities.text_send_action.required).toBe(false);
+    expect(result.capabilities.media_preview.state).toBe("not_tested");
+    expect(result.capabilities.media_send_action.state).toBe("not_tested");
+    expect(result.capabilities.text_send_action.state).toBe("not_tested");
   });
 
   it("manual targeted capability checks remain non-destructive when context is insufficient", async () => {
