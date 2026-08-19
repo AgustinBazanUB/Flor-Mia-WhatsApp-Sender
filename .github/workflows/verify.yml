@@ -8,9 +8,9 @@ permissions:
   statuses: write
 
 jobs:
-  diagnose-p0-typecheck:
+  verify-p0-final-tree:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
         with:
@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Patch and report TypeScript status
+      - name: Patch, clean and verify every phase
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -27,8 +27,8 @@ jobs:
         shell: bash
         run: |
           post() {
-            state="$1"; context="$2"; desc="$3"
-            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$desc" '{state:$state,context:$context,description:$description}')
+            state="$1"; phase="$2"; desc="$3"
+            payload=$(jq -n --arg state "$state" --arg context "p0/full-$phase" --arg description "$desc" '{state:$state,context:$context,description:$description}')
             curl --fail-with-body --silent --show-error \
               --request POST \
               --header "Authorization: Bearer $GH_TOKEN" \
@@ -36,29 +36,40 @@ jobs:
               "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
               --data "$payload" >/dev/null
           }
-          post pending p0/typecheck-start "P0 typecheck job started"
-          python3 scripts/apply-p0-text.py || { post failure p0/typecheck-patch "P0 text patch failed"; exit 1; }
-          python3 scripts/fix-p0-test-tab-type.py || { post failure p0/typecheck-patch "P0 test type patch failed"; exit 1; }
-          post success p0/typecheck-patch "P0 text patches applied"
+          run_phase() {
+            phase="$1"; shift
+            log="/tmp/p0-$phase.log"
+            post pending "$phase" "Running $phase"
+            set +e
+            "$@" >"$log" 2>&1
+            code=$?
+            set -e
+            cat "$log"
+            if [ "$code" -ne 0 ]; then
+              post failure "$phase" "$phase failed"
+              first=$(grep -E 'error TS[0-9]+|error |FAIL|failed|Error:' "$log" | head -n 1 || true)
+              if [ -z "$first" ]; then first=$(tail -n 1 "$log"); fi
+              slug=$(printf '%s' "$first" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-95)
+              post failure "$phase-$slug" "$slug"
+              exit "$code"
+            fi
+            post success "$phase" "$phase passed"
+          }
+
+          post pending start "P0 full verification started"
+          python3 scripts/apply-p0-text.py
+          python3 scripts/fix-p0-test-tab-type.py
+          post success patch "P0 source and regression patches applied"
+
           git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
           rm -f scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py scripts/fix-p0-test-tab-type.py .github/workflows/p0-handshake-fix.yml
-          post pending p0/typecheck-npm-ci "npm ci running"
-          npm ci --no-audit --no-fund >/tmp/npm-ci.log 2>&1 || { post failure p0/typecheck-npm-ci "npm ci failed"; cat /tmp/npm-ci.log; exit 1; }
-          post success p0/typecheck-npm-ci "npm ci passed"
-          post pending p0/typecheck-result "TypeScript running"
-          set +e
-          npm run typecheck >/tmp/typecheck.log 2>&1
-          code=$?
-          set -e
-          cat /tmp/typecheck.log
-          if [ "$code" -eq 0 ]; then
-            post success p0/typecheck-result "TypeScript passed"
-            post success p0/typecheck-start "P0 typecheck completed"
-            exit 0
-          fi
-          first=$(grep -E 'error TS[0-9]+' /tmp/typecheck.log | head -n 1 || true)
-          if [ -z "$first" ]; then first=$(tail -n 1 /tmp/typecheck.log); fi
-          slug=$(printf '%s' "$first" | tr ' /,:()[]`"' '------------' | tr -cd 'A-Za-z0-9_.-' | cut -c1-105)
-          post failure "p0/typecheck-$slug" "$slug"
-          post failure p0/typecheck-result "TypeScript failed"
-          exit "$code"
+          post success cleanup "Final working tree excludes repair helpers"
+
+          run_phase npm-ci npm ci --no-audit --no-fund
+          run_phase typecheck npm run typecheck
+          run_phase lint npm run lint
+          run_phase tests npm test
+          run_phase build npm run build
+          run_phase validate-build npm run validate:build
+          run_phase dist-version node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`Error: expected 0.9.4.1 got ${m.version}`);process.exit(1)}; console.log(`dist version=${m.version}`)'
+          post success start "P0 full verification completed"
