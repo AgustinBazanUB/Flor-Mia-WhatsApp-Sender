@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  statuses: write
 
 jobs:
   apply-p0-handshake:
@@ -24,20 +25,43 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Apply P0 lifecycle fix
-        run: |
-          node scripts/apply-p0-handshake-fix.mjs core
-          git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts
-          git commit -m "fix: synchronize WhatsApp post-navigation handshake"
-      - name: Add P0 regression tests
-        run: |
-          node scripts/apply-p0-handshake-fix.mjs tests
-          git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts
-          git commit -m "test: cover post-navigation content lifecycle"
-      - name: Set extension version 0.9.4.1
+      - name: Apply and publish P0 repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          node <<'NODE'
+          post_status() {
+            state="$1"; context="$2"; description="$3"
+            payload=$(jq -n --arg state "$state" --arg context "$context" --arg description "$description" '{state:$state,context:$context,description:$description}')
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+              --data "$payload" >/dev/null
+          }
+          fail() {
+            code="$1"; phase="$2"
+            post_status failure "p0/apply-$phase" "P0 repair failed during $phase"
+            exit "$code"
+          }
+
+          post_status pending "p0/apply-core" "Applying navigation/content lifecycle fix"
+          node scripts/apply-p0-handshake-fix.mjs core || fail $? core
+          git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts
+          git commit -m "fix: synchronize WhatsApp post-navigation handshake" || fail $? core
+          post_status success "p0/apply-core" "Lifecycle fix applied"
+
+          post_status pending "p0/apply-tests" "Adding post-navigation regression tests"
+          node scripts/apply-p0-handshake-fix.mjs tests || fail $? tests
+          git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts
+          git commit -m "test: cover post-navigation content lifecycle" || fail $? tests
+          post_status success "p0/apply-tests" "Regression tests applied"
+
+          post_status pending "p0/apply-version" "Setting Chrome extension version 0.9.4.1"
+          node <<'NODE' || fail $? version
           const fs = require('fs');
           const update = (path, mutate) => {
             const value = JSON.parse(fs.readFileSync(path, 'utf8'));
@@ -52,12 +76,15 @@ jobs:
           });
           NODE
           git add manifest.json package.json package-lock.json
-          git commit -m "chore: release 0.9.4.1"
-      - name: Restore normal verification workflow and clean helpers
-        run: |
-          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml
-          git rm scripts/apply-p0-handshake-fix.mjs .github/workflows/p0-handshake-fix.yml
+          git commit -m "chore: release 0.9.4.1" || fail $? version
+          post_status success "p0/apply-version" "Version 0.9.4.1 metadata applied"
+
+          post_status pending "p0/apply-cleanup" "Restoring normal CI and removing helpers"
+          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml || fail $? cleanup
+          git rm scripts/apply-p0-handshake-fix.mjs .github/workflows/p0-handshake-fix.yml || fail $? cleanup
           git add .github/workflows/verify.yml
-          git commit -m "chore: remove one-shot handshake repair helper"
-      - name: Push final tree to main
-        run: git push origin HEAD:main
+          git commit -m "chore: remove one-shot handshake repair helper" || fail $? cleanup
+          post_status success "p0/apply-cleanup" "Final tree cleaned"
+
+          git push origin HEAD:main || fail $? push
+          post_status success "p0/apply-push" "P0 repair pushed to main"
