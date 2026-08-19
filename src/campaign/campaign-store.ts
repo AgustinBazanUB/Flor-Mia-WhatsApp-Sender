@@ -2,6 +2,7 @@ import type { ValidatedCampaign } from "../shared/campaign";
 import { ERROR_CODES, ExtensionError } from "../shared/errors";
 import { createId } from "../shared/ids";
 import { ChromeLocalStorageAdapter, type KeyValueStorage } from "../storage/state-store";
+import { LOCAL_FAILURE_CIRCUIT_THRESHOLD } from "./failure-policy";
 import type { CampaignPolicyConfig, CampaignRepository, CampaignState, DailyLimitState } from "./campaign-types";
 
 export const ACTIVE_CAMPAIGN_KEY = "activeCampaign";
@@ -25,6 +26,7 @@ export function createCampaignState(
   return {
     schemaVersion: 1,
     runToken: createId("campaign-run"),
+    retryCycle: 0,
     campaignId: campaign.campaignId,
     campaignName: campaign.campaignName,
     createdBy: campaign.createdBy,
@@ -57,6 +59,12 @@ export function createCampaignState(
     stopRequested: false,
     wait: null,
     blockReason: null,
+    failureCircuit: {
+      signature: null,
+      consecutive: 0,
+      threshold: LOCAL_FAILURE_CIRCUIT_THRESHOLD,
+      updatedAt: now
+    },
     policy,
     dailyLimit,
     sequence: 1,
@@ -76,8 +84,20 @@ export class CampaignStore implements CampaignRepository {
     if (!isCampaignState(campaign)) {
       throw new ExtensionError(ERROR_CODES.storageError, "La campaña persistida no tiene un formato válido.", { recoverable: false });
     }
-    if (!campaign.runToken) {
-      const migrated = { ...campaign, runToken: createId("campaign-run"), updatedAt: new Date().toISOString() };
+    if (!campaign.runToken || !campaign.failureCircuit) {
+      const now = new Date().toISOString();
+      const migrated: CampaignState = {
+        ...campaign,
+        runToken: campaign.runToken ?? createId("campaign-run"),
+        retryCycle: campaign.retryCycle ?? 0,
+        failureCircuit: campaign.failureCircuit ?? {
+          signature: null,
+          consecutive: 0,
+          threshold: LOCAL_FAILURE_CIRCUIT_THRESHOLD,
+          updatedAt: now
+        },
+        updatedAt: now
+      };
       await this.storage.set({ [ACTIVE_CAMPAIGN_KEY]: migrated });
       return migrated;
     }
