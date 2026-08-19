@@ -30,6 +30,7 @@
 .campaign-status.is-daily_limit_reached::after { content: "Pausada"; }
 .campaign-status.is-images_required::after,
 .campaign-status.is-error::after { content: "Necesita revisión"; }
+.campaign-status.is-stopping::after { content: "Deteniendo…"; }
 .campaign-status.is-stopped::after { content: "Detenida"; }
 .campaign-status.is-completed::after { content: "Completada"; }
 
