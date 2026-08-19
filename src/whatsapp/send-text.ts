@@ -31,11 +31,6 @@ function composerTextRepresentations(composer: HTMLElement): string[] {
   return [...new Set(values)];
 }
 
-function composerPlainText(composer: HTMLElement): string {
-  const representations = composerTextRepresentations(composer);
-  return representations[0] ?? "";
-}
-
 export type ComposerPreparationState = "empty" | "prepared" | "conflict";
 
 export function classifyComposerContent(existingText: string, expectedText: string): ComposerPreparationState {
@@ -53,9 +48,13 @@ function classifyComposerElementContent(composer: HTMLElement, expectedText: str
   return "conflict";
 }
 
-async function waitForPreparedComposer(expected: string, timeoutMs = 1_000): Promise<HTMLElement | null> {
+async function waitForPreparedComposer(
+  expected: string,
+  fallbackComposer: HTMLElement,
+  timeoutMs = 1_000
+): Promise<HTMLElement | null> {
   return waitForCondition(() => {
-    const live = findComposer()?.element;
+    const live = findComposer()?.element ?? (fallbackComposer.isConnected ? fallbackComposer : null);
     if (!live) return null;
     return classifyComposerElementContent(live, expected) === "prepared" ? live : null;
   }, {
@@ -84,7 +83,7 @@ export async function prepareComposerTextForSend(composer: HTMLElement, message:
   selection?.addRange(range);
 
   const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, expected);
-  let prepared = await waitForPreparedComposer(expected, inserted ? 800 : 50);
+  let prepared = await waitForPreparedComposer(expected, composer, inserted ? 800 : 50);
 
   if (!prepared) {
     const liveComposer = findComposer()?.element ?? composer;
@@ -94,7 +93,7 @@ export async function prepareComposerTextForSend(composer: HTMLElement, message:
       ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: expected })
       : new Event("input", { bubbles: true });
     liveComposer.dispatchEvent(event);
-    prepared = await waitForPreparedComposer(expected, 1_000);
+    prepared = await waitForPreparedComposer(expected, liveComposer, 1_000);
   }
 
   if (!prepared) {
