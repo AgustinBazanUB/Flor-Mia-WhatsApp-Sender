@@ -72,6 +72,7 @@ export interface InternalRequestMap {
     timeoutMs?: number;
     requestedNavigationAt?: string;
     navigationObservedAt?: string;
+    expectedContentInstanceId?: string;
   };
   WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string; timeoutMs?: number; checkpointRequired?: boolean };
   WA_SEND_IMAGE: ImageSendInput;
@@ -98,7 +99,7 @@ export interface InternalResponseMap {
   CAMPAIGN_STATUS: CampaignPublicStatus | null;
   CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
   WA_PREFLIGHT: WhatsAppPreflightResult;
-  WA_OPEN_CONVERSATION: { navigationStarted: true; requestedNavigationAt: string };
+  WA_OPEN_CONVERSATION: { navigationStarted: true; requestedNavigationAt: string; contentInstanceId: string };
   WA_PROVE_CONVERSATION: ConversationContextProof;
   WA_SEND_TEXT: TextTestResult;
   WA_SEND_IMAGE: ImageSendResult;
@@ -283,17 +284,18 @@ function isSerializedCampaignShape(payload: Record<string, unknown>): boolean {
 
 export function isWebAppInboundEnvelope(value: unknown): value is WebAppEnvelope {
   if (!isRecord(value)) return false;
-  if (value.channel !== WEB_APP_CHANNEL || value.protocolVersion !== PROTOCOL_VERSION) return false;
-  if (typeof value.type !== "string" || !webAppInboundTypes.has(value.type)) return false;
-  if (typeof value.requestId !== "string" || !value.requestId || value.requestId.length > 200) return false;
-  if (!isRecord(value.payload)) return false;
-  if (value.campaignId !== undefined && (typeof value.campaignId !== "string" || !value.campaignId.trim() || value.campaignId.length > 200)) return false;
-  if (value.sequence !== undefined && (!Number.isInteger(value.sequence) || Number(value.sequence) < 0)) return false;
-  if (containsForbiddenProductionControl(value.payload)) return false;
-  if (value.campaignId !== undefined
-    && typeof value.payload.campaignId === "string"
-    && value.campaignId !== value.payload.campaignId) return false;
-  if (value.type === WEB_APP_MESSAGE_TYPES.prepare && !isSerializedCampaignShape(value.payload)) return false;
-  if (webAppControlTypes.has(value.type) && !campaignIdFromEnvelope(value)) return false;
-  return true;
+  return value.channel === WEB_APP_CHANNEL
+    && value.protocolVersion === PROTOCOL_VERSION
+    && typeof value.type === "string"
+    && webAppInboundTypes.has(value.type)
+    && typeof value.requestId === "string"
+    && value.requestId.length > 0
+    && value.requestId.length <= 200
+    && isRecord(value.payload)
+    && (value.campaignId === undefined || (typeof value.campaignId === "string" && value.campaignId.trim().length > 0 && value.campaignId.length <= 200))
+    && (value.sequence === undefined || (Number.isInteger(value.sequence) && Number(value.sequence) >= 0))
+    && !containsForbiddenProductionControl(value.payload)
+    && !(value.campaignId !== undefined && typeof value.payload.campaignId === "string" && value.campaignId !== value.payload.campaignId)
+    && !(value.type === WEB_APP_MESSAGE_TYPES.prepare && !isSerializedCampaignShape(value.payload))
+    && !(webAppControlTypes.has(value.type) && !campaignIdFromEnvelope(value));
 }
