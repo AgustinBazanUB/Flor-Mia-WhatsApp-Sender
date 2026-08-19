@@ -155,23 +155,31 @@ describe("non-destructive WhatsApp preflight", () => {
     expect(document.querySelector("[data-testid='media-editor-canvas']")).toBeNull();
   });
 
-  it("manual diagnostics can observe an already-open media preview without opening one", async () => {
+  it("manual diagnostics can observe current context without mutating composer, files or Send", async () => {
     baseConversation(`
       <input type="file" accept="image/*">
       <div data-testid="media-editor-canvas"></div>
       <button aria-label="Send" data-testid="media-editor-send"></button>`);
+    const composer = document.querySelector<HTMLElement>("[role='textbox']")!;
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    const sendButtons = [...document.querySelectorAll<HTMLButtonElement>("button[aria-label='Send']")];
+    let clicks = 0;
+    for (const button of sendButtons) button.addEventListener("click", () => { clicks += 1; });
+    composer.textContent = "Borrador intacto 👋";
+
     const result = await runWhatsAppPreflight({
       timeoutMs: 20,
       level: "full",
       purpose: "manual_diagnostic",
       requirements: { needsText: true, needsImages: true }
     });
+
     expect(result.overallStatus).toBe("GREEN");
-    expect(result.capabilities.media_preview.state).toBe("available");
-    expect(result.capabilities.media_preview.required).toBe(false);
-    expect(result.capabilities.media_preview.selectedStrategy).toBe("media-preview.testid.editor-canvas");
-    expect(result.capabilities.media_send_action.state).toBe("available");
-    expect(result.capabilities.media_send_action.required).toBe(false);
+    expect(result.purpose).toBe("manual_diagnostic");
+    expect(result.diagnosticComposerMutationDetected).toBe(false);
+    expect(composer.textContent).toBe("Borrador intacto 👋");
+    expect(fileInput.files?.length ?? 0).toBe(0);
+    expect(clicks).toBe(0);
   });
 
   it("uses a lightweight health check that does not inspect conversation capabilities", async () => {
