@@ -20,13 +20,18 @@ describe("WhatsApp document readiness", () => {
     }
   });
 
-  it("accepts an explicitly verified semantic surface while readyState stays loading", async () => {
+  it("accepts an explicitly verified semantic surface when its DOM mutation arrives while readyState stays loading", async () => {
     const originalDescriptor = Object.getOwnPropertyDescriptor(document, "readyState");
     Object.defineProperty(document, "readyState", { configurable: true, get: () => "loading" });
     let semanticReady = false;
     try {
       const pending = waitForDocumentReady(300, () => semanticReady);
-      globalThis.setTimeout(() => { semanticReady = true; }, 10);
+      globalThis.setTimeout(() => {
+        semanticReady = true;
+        const surface = document.createElement("div");
+        surface.dataset.testid = "chat-list";
+        document.body.append(surface);
+      }, 10);
       await expect(pending).resolves.toBe("semantic-surface");
     } finally {
       if (originalDescriptor) Object.defineProperty(document, "readyState", originalDescriptor);
