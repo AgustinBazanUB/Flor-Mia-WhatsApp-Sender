@@ -21,4 +21,10 @@ const testsChanged = await replaceOnce(
   `  it("does not create a new open-conversation budget after Resume", async () => {\n    const store = new MemoryCheckpointStore();\n    const adapter = new FakeAdapter();\n    adapter.remainingOpenFailures = 10;\n    const paused = await run(checkpoint(0), adapter, store);\n\n    expect(paused.status).toBe("paused");\n    expect(paused.pauseReason).toBe("open_conversation_failed");\n    expect(paused.openConversationAttempts).toBe(2);\n    expect(paused.steps[0]?.attempts).toBe(0);\n\n    const resumed = await run(paused, adapter, store);\n    expect(resumed.status).toBe("paused");\n    expect(resumed.openConversationAttempts).toBe(2);\n    expect(adapter.calls.filter((call) => call === "open")).toHaveLength(2);\n    expect(adapter.calls.filter((call) => call === "text")).toHaveLength(0);\n  });`
 );
 
-console.log(JSON.stringify({ serviceChanged, testsChanged }));
+const leaseChanged = await replaceOnce(
+  "src/whatsapp/conversation-context.ts",
+  `export function proveConversationContext(\n  expectedPhoneDigits: string,\n  root: ParentNode = document,\n  context?: CausalNavigationContext\n): ConversationContextProof | null {\n  return inspectInitialProof(expectedPhoneDigits, root, context).proof ?? validateActiveLease(expectedPhoneDigits, root);\n}`,
+  `export function proveConversationContext(\n  expectedPhoneDigits: string,\n  root: ParentNode = document,\n  context?: CausalNavigationContext\n): ConversationContextProof | null {\n  // Una vez que una navegación estableció una lease, la revalidación previa al Send\n  // debe respetar su guard. No se rescata una selección manual con una URL vieja.\n  if (!context && activeLease?.expectedPhoneDigits === expectedPhoneDigits) {\n    return validateActiveLease(expectedPhoneDigits, root);\n  }\n  if (context && activeLease?.navigationRequestId !== context.navigationRequestId) activeLease = null;\n  return inspectInitialProof(expectedPhoneDigits, root, context).proof ?? validateActiveLease(expectedPhoneDigits, root);\n}`
+);
+
+console.log(JSON.stringify({ serviceChanged, testsChanged, leaseChanged }));
