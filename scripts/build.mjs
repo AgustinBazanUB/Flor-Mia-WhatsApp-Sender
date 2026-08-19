@@ -18,6 +18,7 @@ const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8
 const webAppScript = manifest.content_scripts.find((item) => item.js.includes("content/web-app-bridge.js"));
 if (!webAppScript) throw new Error("manifest.json no declara el puente de la Web-App.");
 webAppScript.matches = webAppMatches;
+manifest.host_permissions = [...new Set(["https://web.whatsapp.com/*", ...webAppMatches])];
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(resolve(dist, "popup"), { recursive: true });
@@ -32,7 +33,7 @@ await cp(resolve(root, "src/diagnostics/report.css"), resolve(dist, "diagnostics
 
 const builds = [
   {
-    entryPoints: [resolve(root, "src/background/service-worker.ts")],
+    entryPoints: [resolve(root, "src/background/recovery-bootstrap.ts")],
     outfile: resolve(dist, "background/service-worker.js"),
     format: "esm"
   },
