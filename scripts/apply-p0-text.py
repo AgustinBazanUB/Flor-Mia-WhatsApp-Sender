@@ -48,7 +48,36 @@ transport = extract("transportSource", "`;\n\nconst openConversationSource = Str
 open_conversation = extract("openConversationSource", "`;\n\nfunction patchCore()")
 lifecycle_tests = extract("lifecycleTestSource", "`;\n\nfunction patchTests()")
 transport = transport.replace("chrome.tabs.TabStatus | null", 'chrome.tabs.Tab["status"] | null')
-lifecycle_tests = lifecycle_tests.replace("(...args: any[]) => void", "(...args: unknown[]) => void")
+old_event_helper = '''function event<T extends (...args: any[]) => void>() {
+  const listeners = new Set<T>();
+  return {
+    addListener: vi.fn((listener: T) => listeners.add(listener)),
+    removeListener: vi.fn((listener: T) => listeners.delete(listener)),
+    emit: (...args: Parameters<T>) => [...listeners].forEach((listener) => listener(...args)),
+    size: () => listeners.size
+  };
+}'''
+new_event_helper = '''function event<TArgs extends unknown[]>() {
+  type Listener = (...args: TArgs) => void;
+  const listeners = new Set<Listener>();
+  return {
+    addListener: vi.fn((listener: Listener) => listeners.add(listener)),
+    removeListener: vi.fn((listener: Listener) => listeners.delete(listener)),
+    emit: (...args: TArgs) => [...listeners].forEach((listener) => listener(...args)),
+    size: () => listeners.size
+  };
+}'''
+if old_event_helper not in lifecycle_tests:
+    raise RuntimeError("missing event helper in lifecycle tests")
+lifecycle_tests = lifecycle_tests.replace(old_event_helper, new_event_helper, 1)
+lifecycle_tests = lifecycle_tests.replace(
+    'event<(tabId: number, info: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void>()',
+    'event<[number, chrome.tabs.TabChangeInfo, chrome.tabs.Tab]>()',
+)
+lifecycle_tests = lifecycle_tests.replace(
+    'event<(tabId: number) => void>()',
+    'event<[number]>()',
+)
 
 print("phase=transport")
 write("src/background/whatsapp-transport.ts", transport)
