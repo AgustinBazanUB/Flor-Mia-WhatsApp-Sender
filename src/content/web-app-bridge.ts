@@ -21,13 +21,25 @@ import {
   captureBridgeRuntimeMetadata,
   installBridgeInstanceGuard,
   invalidatedContextMessage,
-  isExtensionContextInvalidated
+  isExtensionContextInvalidated,
+  isRuntimeAvailable
 } from "./bridge-runtime";
 
 const lastPostedSequenceByCampaign = new Map<string, number>();
 const BRIDGE_RUNTIME = captureBridgeRuntimeMetadata();
 const BRIDGE_INSTANCE = installBridgeInstanceGuard();
 let bridgeActive = true;
+let invalidationPosted = false;
+let releaseSupersededListener: () => void = () => undefined;
+
+function bridgeMetadata(): Record<string, unknown> {
+  return {
+    bridgeInstanceId: BRIDGE_INSTANCE.instanceId,
+    bridgeGeneration: BRIDGE_INSTANCE.generation,
+    bridgeCreatedAt: BRIDGE_INSTANCE.createdAt,
+    runtimeAvailable: bridgeActive && BRIDGE_INSTANCE.isCurrent() && isRuntimeAvailable()
+  };
+}
 
 function post(message: WebAppEnvelope): void {
   window.postMessage(message, window.location.origin);
@@ -48,6 +60,10 @@ function responseEnvelope(
     ...extra,
     payload
   };
+}
+
+function statusPayload(status: Record<string, unknown>): Record<string, unknown> {
+  return { ...status, ...bridgeMetadata() };
 }
 
 function messageTypeForEvent(type: CampaignPublicEventType): WebAppEnvelope["type"] {
@@ -82,16 +98,23 @@ function campaignIdOf(request: WebAppEnvelope): string {
   return request.campaignId || (typeof request.payload.campaignId === "string" ? request.payload.campaignId : "");
 }
 
+function requireCurrentRuntime(): void {
+  if (!bridgeActive || !BRIDGE_INSTANCE.isCurrent() || !isRuntimeAvailable()) {
+    throw new Error("Extension context invalidated.");
+  }
+}
+
 async function handleRequest(request: WebAppEnvelope): Promise<void> {
+  requireCurrentRuntime();
   if (request.type === WEB_APP_MESSAGE_TYPES.ping) {
     const status = await sendRuntimeRequest("web-app-bridge", INTERNAL_MESSAGE_TYPES.webAppPing, {});
-    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, status as unknown as Record<string, unknown>));
+    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, statusPayload(status as unknown as Record<string, unknown>)));
     return;
   }
   if (request.type === WEB_APP_MESSAGE_TYPES.preflightRequest) {
     await sendRuntimeRequest("web-app-bridge", INTERNAL_MESSAGE_TYPES.runPreflight, { developmentFault: "none" });
     const status = await sendRuntimeRequest("web-app-bridge", INTERNAL_MESSAGE_TYPES.webAppPing, {});
-    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, status as unknown as Record<string, unknown>));
+    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, statusPayload(status as unknown as Record<string, unknown>)));
     return;
   }
   if (request.type === WEB_APP_MESSAGE_TYPES.prepare) {
@@ -142,7 +165,7 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
     post(responseEnvelope(
       request,
       WEB_APP_MESSAGE_TYPES.status,
-      { ...extensionStatus, campaign } as unknown as Record<string, unknown>,
+      statusPayload({ ...extensionStatus, campaign } as unknown as Record<string, unknown>),
       campaign ? { campaignId: campaign.campaignId, sequence: campaign.sequence } : {}
     ));
   }
@@ -169,12 +192,12 @@ function retireBridge(): void {
   if (!bridgeActive) return;
   bridgeActive = false;
   window.removeEventListener("message", onWindowMessage);
+  releaseSupersededListener();
   BRIDGE_INSTANCE.release();
   try {
     chrome.storage.onChanged.removeListener(onStorageChanged);
   } catch {
-    // Un contexto MV3 invalidado ya no permite tocar chrome.*; el listener de window
-    // igualmente queda retirado para que esta instancia no compita con la nueva.
+    // Un content script cuyo runtime fue invalidado no vuelve a tocar chrome.*.
   }
 }
 
@@ -199,6 +222,29 @@ function onStorageChanged(changes: { [key: string]: chrome.storage.StorageChange
   });
 }
 
+function postInvalidatedStatusOnce(request: WebAppEnvelope, failure: ReturnType<typeof bridgeFailure>): void {
+  if (invalidationPosted) return;
+  invalidationPosted = true;
+  post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, {
+    operational: false,
+    message: failure.message,
+    extensionVersion: BRIDGE_RUNTIME.extensionVersion,
+    manifestVersion: BRIDGE_RUNTIME.manifestVersion,
+    protocolVersion: PROTOCOL_VERSION,
+    configuredLimit: 0,
+    sentToday: 0,
+    availableToday: 0,
+    overallStatus: "RED",
+    campaign: null,
+    updatedAt: new Date().toISOString(),
+    errorCode: failure.code,
+    bridgeInstanceId: BRIDGE_INSTANCE.instanceId,
+    bridgeGeneration: BRIDGE_INSTANCE.generation,
+    bridgeCreatedAt: BRIDGE_INSTANCE.createdAt,
+    runtimeAvailable: false
+  }));
+}
+
 function onWindowMessage(event: MessageEvent<unknown>): void {
   if (!bridgeActive || !BRIDGE_INSTANCE.isCurrent()) {
     retireBridge();
@@ -208,6 +254,15 @@ function onWindowMessage(event: MessageEvent<unknown>): void {
   const request = event.data;
   void handleRequest(request).catch((error: unknown) => {
     const failure = bridgeFailure(error);
+    if (failure.code === "EXTENSION_CONTEXT_INVALIDATED") {
+      logger.warn("web_app.bridge_invalidated", {
+        bridgeGeneration: BRIDGE_INSTANCE.generation,
+        extensionVersion: BRIDGE_RUNTIME.extensionVersion
+      });
+      postInvalidatedStatusOnce(request, failure);
+      retireBridge();
+      return;
+    }
     logger.warn("web_app.request_rejected", { type: request.type, errorCode: failure.code });
     if (request.type === WEB_APP_MESSAGE_TYPES.ping || request.type === WEB_APP_MESSAGE_TYPES.preflightRequest) {
       post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.status, {
@@ -222,7 +277,8 @@ function onWindowMessage(event: MessageEvent<unknown>): void {
         overallStatus: "RED",
         campaign: null,
         updatedAt: new Date().toISOString(),
-        errorCode: failure.code
+        errorCode: failure.code,
+        ...bridgeMetadata()
       }));
     } else {
       const campaignId = campaignIdOf(request);
@@ -235,17 +291,20 @@ function onWindowMessage(event: MessageEvent<unknown>): void {
         payload: failure as unknown as Record<string, unknown>
       });
     }
-    if (failure.code === "EXTENSION_CONTEXT_INVALIDATED") retireBridge();
   });
 }
 
 if (isAllowedWebAppOrigin(window.location.origin)) {
+  releaseSupersededListener = BRIDGE_INSTANCE.onSuperseded(retireBridge);
   chrome.storage.onChanged.addListener(onStorageChanged);
   window.addEventListener("message", onWindowMessage);
   logger.debug("web_app.bridge_ready", {
     origin: window.location.origin,
     extensionVersion: BRIDGE_RUNTIME.extensionVersion,
-    bridgeInstance: BRIDGE_INSTANCE.instanceId
+    bridgeInstanceId: BRIDGE_INSTANCE.instanceId,
+    bridgeGeneration: BRIDGE_INSTANCE.generation,
+    bridgeCreatedAt: BRIDGE_INSTANCE.createdAt,
+    runtimeAvailable: BRIDGE_RUNTIME.runtimeAvailable
   });
 } else {
   retireBridge();
