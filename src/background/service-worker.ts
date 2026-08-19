@@ -293,6 +293,8 @@ async function sendTestText(payload: InternalRequestMap["SEND_TEST_TEXT"]): Prom
       statusMessage: "Abriendo la conversación de prueba…"
     });
     const navigationRequestId = createId("navigation");
+    const openDeadlineMs = Date.now() + 40_000;
+    const remainingOpenBudget = () => Math.max(1, openDeadlineMs - Date.now());
     const navigation = await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappOpenConversation, {
       operationId,
       phoneDigits: phone.digits,
@@ -302,11 +304,28 @@ async function sendTestText(payload: InternalRequestMap["SEND_TEST_TEXT"]): Prom
       currentStep: "wait-conversation",
       lastCheckpoint: { operationId, recipientId: operationId, step: "navigation-requested", createdAt: new Date().toISOString() }
     });
-    const readiness = await whatsappTransport.waitForContent(tab.id, 30_000, undefined, {
+    const lifecycle = await whatsappTransport.waitForNavigationLifecycle(
+      tab.id,
+      Math.min(10_000, remainingOpenBudget()),
+      undefined,
+      { expectedPhoneDigits: phone.digits, navigationRequestId }
+    );
+    const handshake = await whatsappTransport.waitForContentHandshake(tab.id, remainingOpenBudget(), undefined, {
       previousContentInstanceId: navigation.contentInstanceId,
-      purpose: "content_handshake"
+      purpose: "content_handshake",
+      navigationRequestId
     });
-    const navigationObservedAt = new Date().toISOString();
+    if (!handshake.contentInstanceId) {
+      throw new ExtensionError(ERROR_CODES.protocolError, "El Content Script nuevo no informó su generación después de la navegación.", {
+        recoverable: false,
+        details: { stage: "content_handshake", navigationRequestId }
+      });
+    }
+    const readiness = await whatsappTransport.waitForSemanticReady(tab.id, remainingOpenBudget(), undefined, {
+      expectedContentInstanceId: handshake.contentInstanceId,
+      navigationRequestId
+    });
+    const navigationObservedAt = lifecycle.observedAt;
     await whatsappTransport.send(INTERNAL_MESSAGE_TYPES.whatsappProveConversation, {
       operationId: `prove:${operationId}`,
       phoneDigits: phone.digits,

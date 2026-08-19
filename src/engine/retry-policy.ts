@@ -26,7 +26,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicyConfig = {
     maxDelayMs: 4_000
   },
   timeouts: {
-    openConversationMs: 30_000,
+    openConversationMs: 40_000,
     imageLoadMs: 15_000,
     previewMs: 20_000,
     confirmationMs: 30_000,

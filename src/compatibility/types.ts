@@ -20,7 +20,7 @@ export type CapabilityState = "available" | "unavailable" | "requires_context" |
 export type CompatibilityOverallStatus = "GREEN" | "RED";
 export type CompatibilityChange = "stable" | "drift" | "break" | "unknown";
 export type PreflightLevel = "full" | "lightweight" | "targeted";
-export type PreflightPurpose = "campaign_start" | "health_check" | "content_handshake" | "manual_diagnostic" | "unspecified";
+export type PreflightPurpose = "campaign_start" | "health_check" | "content_handshake" | "semantic_ready" | "manual_diagnostic" | "unspecified";
 
 export interface CampaignRequirements {
   needsText: boolean;

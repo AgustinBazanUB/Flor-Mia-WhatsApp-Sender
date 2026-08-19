@@ -156,6 +156,7 @@ export async function runWhatsAppPreflight(
   if (request.targetedCapability) required.add(request.targetedCapability);
   const inspectConversation = level === "targeted" || request.purpose === "manual_diagnostic";
   const pageDetected = window.location.origin === "https://web.whatsapp.com";
+  const handshakeOnly = request.purpose === "content_handshake" && level === "lightweight";
 
   let readinessSignal: DocumentReadySignal | null = document.readyState === "interactive" || document.readyState === "complete"
     ? "ready-state"
@@ -163,7 +164,7 @@ export async function runWhatsAppPreflight(
       ? "semantic-surface"
       : null;
   let documentReady = Boolean(readinessSignal);
-  if (pageDetected && !documentReady) {
+  if (pageDetected && !documentReady && !handshakeOnly) {
     try {
       readinessSignal = await waitForDocumentReady(timeoutMs, hasSemanticWhatsAppSurface);
       documentReady = true;
@@ -173,7 +174,7 @@ export async function runWhatsAppPreflight(
     }
   }
 
-  if (pageDetected && documentReady && !findQrCode() && !resolveCapability("main_interface").match && !findComposer()) {
+  if (!handshakeOnly && pageDetected && documentReady && !findQrCode() && !resolveCapability("main_interface").match && !findComposer()) {
     await waitForCondition(
       () => findQrCode() || resolveCapability("main_interface").match || findComposer(),
       {
@@ -184,7 +185,7 @@ export async function runWhatsAppPreflight(
     ).catch(() => null);
   }
 
-  if (pageDetected && documentReady && inspectConversation && request.targetedCapability && !findQrCode() && !findComposer()) {
+  if (!handshakeOnly && pageDetected && documentReady && inspectConversation && request.targetedCapability && !findQrCode() && !findComposer()) {
     await waitForCondition(
       () => findQrCode() || findComposer(),
       {
