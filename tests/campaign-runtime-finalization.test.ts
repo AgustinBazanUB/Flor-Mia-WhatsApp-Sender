@@ -133,6 +133,7 @@ function setup(state: CampaignState, activeCheckpoint: ContactProcessCheckpoint 
   const blobs = new MemoryBlobs();
   const checkpoints = new MemoryCheckpoints(activeCheckpoint);
   const history = new CampaignHistoryStore(storage);
+  const campaigns = new MemoryCampaigns(state);
   const runtime = new CampaignRuntime({
     stateStore: new StateStore(storage),
     blobStore: blobs,
@@ -140,7 +141,7 @@ function setup(state: CampaignState, activeCheckpoint: ContactProcessCheckpoint 
     transport: {} as WhatsAppTransport,
     runPreflight: async (request) => createUnavailablePreflight("fixture", request),
     onContactCheckpoint: async () => undefined,
-    campaigns: new MemoryCampaigns(state),
+    campaigns,
     dailyLimit: new MemoryDaily(state.dailyLimit),
     wakeups: new NoopWakeups(),
     events: new CampaignEventPublisher(storage),
@@ -148,7 +149,7 @@ function setup(state: CampaignState, activeCheckpoint: ContactProcessCheckpoint 
     extensionVersion: "0.6.0",
     now: () => new Date(NOW)
   });
-  return { runtime, blobs, checkpoints, history };
+  return { runtime, blobs, checkpoints, history, campaigns };
 }
 
 describe("CampaignRuntime terminal finalization", () => {
@@ -196,7 +197,7 @@ describe("CampaignRuntime terminal finalization", () => {
     expect(blobs.deleted).toEqual([]);
   });
 
-  it("records a user stop and deletes images only after stopped is confirmed", async () => {
+  it("keeps a stopped campaign loaded until explicit release, then frees checkpoint, blobs and active slot", async () => {
     const paused = campaign("paused");
     const stopped: CampaignState = {
       ...paused,
@@ -210,11 +211,18 @@ describe("CampaignRuntime terminal finalization", () => {
       stoppedAt: NOW,
       sequence: 4
     };
-    const { runtime, blobs, history } = setup(stopped, checkpoint("paused"));
+    const { runtime, blobs, checkpoints, history, campaigns } = setup(stopped, checkpoint("paused"));
     const publicStatus = await runtime.syncCampaign(stopped);
 
     expect(publicStatus.status).toBe("stopped");
+    expect(blobs.deleted).toEqual([]);
+    expect(checkpoints.active).not.toBeNull();
+    expect(await history.list()).toEqual([expect.objectContaining({ status: "stopped", errorCategory: "USER_STOP" })]);
+
+    await expect(runtime.release("campaign-final")).resolves.toMatchObject({ campaignId: "campaign-final" });
     expect(blobs.deleted).toEqual(["campaign-final"]);
+    expect(checkpoints.active).toBeNull();
+    expect(campaigns.active).toBeNull();
     expect(await history.list()).toEqual([expect.objectContaining({ status: "stopped", errorCategory: "USER_STOP" })]);
   });
 
