@@ -56,6 +56,7 @@ export function createContactCheckpoint(input: ContactCheckpointInput): ContactP
     currentStepId: null,
     lastConfirmedStepId: null,
     openConversationAttempts: 0,
+    openConversationFailures: 0,
     createdAt: now,
     updatedAt: now,
     history: []
