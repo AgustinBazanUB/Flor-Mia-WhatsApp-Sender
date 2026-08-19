@@ -3,7 +3,7 @@ import { CampaignEventPublisher } from "../campaign/events";
 import { CampaignHistoryStore } from "../campaign/history-store";
 import { DailyLimitStore } from "../campaign/daily-limit";
 import { CampaignStore, createCampaignState } from "../campaign/campaign-store";
-import { campaignRecipientCounters, progressForCampaign } from "../campaign/progress";
+import { campaignRecipientCounters } from "../campaign/progress";
 import { CampaignScheduler, ChromeCampaignWakeupScheduler } from "../campaign/scheduler";
 import { toCampaignPublicStatus } from "../campaign/public-status";
 import type {
@@ -197,9 +197,6 @@ export class CampaignRuntime {
     };
     await this.history.upsert(record);
 
-    // Una campaña completada con fallidos conserva blobs para que "Reintentar fallidos"
-    // pueda continuar sin pedir nuevamente las imágenes. Stop tampoco equivale a borrar:
-    // los recursos se liberan al quitar explícitamente la campaña del emisor.
     if (campaign.status === "completed" && counters.failed === 0) {
       await this.dependencies.blobStore.deleteCampaign(campaign.campaignId);
     }
@@ -357,6 +354,27 @@ export class CampaignRuntime {
     if (["running", "pause_requested", "waiting_contact", "waiting_batch"].includes(current.status)) {
       return this.syncCampaign(current);
     }
+
+    // El protocolo público distingue Reanudar/Reintentar/Reintentar fallidos. Para no
+    // duplicar la cola serial del Service Worker, los tres llegan por CAMPAIGN_RESUME y
+    // el estado persistido decide la operación segura que corresponde.
+    const counters = campaignRecipientCounters(current);
+    if (current.status === "completed" && counters.failed > 0) {
+      await this.requireOperationalPreflight(campaignId);
+      const retried = await this.engine.retryFailed(campaignId);
+      await this.scheduler.schedule(retried, retried.status === "running");
+      return this.syncCampaign(retried);
+    }
+    if (current.status === "error" || (
+      current.status === "paused"
+      && ["repeated_contact_failures", "contact_failed", "contact_paused", "service_worker_restarted"].includes(current.blockReason?.code ?? "")
+    )) {
+      await this.requireOperationalPreflight(campaignId);
+      const retried = await this.engine.retry(campaignId);
+      await this.scheduler.schedule(retried, true);
+      return this.syncCampaign(retried);
+    }
+
     if (!["paused", "daily_limit_reached", "images_required"].includes(current.status)) {
       throw new ExtensionError(ERROR_CODES.invalidInput, "La campaña no está en un estado que admita reanudación.");
     }
@@ -386,6 +404,15 @@ export class CampaignRuntime {
   }
 
   async stop(campaignId: string): Promise<CampaignPublicStatus> {
+    const current = await this.campaignStore.loadActive();
+    if (!current || current.campaignId !== campaignId) {
+      throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
+    }
+    if (current.status === "stopped") {
+      const snapshot = await this.syncCampaign(current);
+      await this.release(campaignId);
+      return snapshot;
+    }
     const campaign = await this.engine.requestStop(campaignId);
     if (campaign.status === "stopped") {
       await this.scheduler.cancel(campaign);
