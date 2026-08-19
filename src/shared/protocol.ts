@@ -37,6 +37,7 @@ export const INTERNAL_MESSAGE_TYPES = {
   whatsappPreflight: "WA_PREFLIGHT",
   whatsappOpenConversation: "WA_OPEN_CONVERSATION",
   whatsappProveConversation: "WA_PROVE_CONVERSATION",
+  whatsappCancelOperation: "WA_CANCEL_OPERATION",
   whatsappSendText: "WA_SEND_TEXT",
   whatsappSendImage: "WA_SEND_IMAGE",
   whatsappReconcileStep: "WA_RECONCILE_STEP",
@@ -65,15 +66,17 @@ export interface InternalRequestMap {
   CAMPAIGN_STATUS: { campaignId?: string };
   CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
   WA_PREFLIGHT: WhatsAppPreflightRequest;
-  WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string };
+  WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string; navigationRequestId: string };
   WA_PROVE_CONVERSATION: {
     operationId: string;
     phoneDigits: string;
+    navigationRequestId: string;
     timeoutMs?: number;
     requestedNavigationAt?: string;
     navigationObservedAt?: string;
     expectedContentInstanceId?: string;
   };
+  WA_CANCEL_OPERATION: { operationId: string };
   WA_SEND_TEXT: { operationId: string; phoneDigits: string; message: string; timeoutMs?: number; checkpointRequired?: boolean };
   WA_SEND_IMAGE: ImageSendInput;
   WA_RECONCILE_STEP: ReconcileStepInput;
@@ -99,8 +102,9 @@ export interface InternalResponseMap {
   CAMPAIGN_STATUS: CampaignPublicStatus | null;
   CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
   WA_PREFLIGHT: WhatsAppPreflightResult;
-  WA_OPEN_CONVERSATION: { navigationStarted: true; requestedNavigationAt: string; contentInstanceId: string };
+  WA_OPEN_CONVERSATION: { navigationStarted: true; requestedNavigationAt: string; contentInstanceId: string; navigationRequestId: string };
   WA_PROVE_CONVERSATION: ConversationContextProof;
+  WA_CANCEL_OPERATION: { cancelled: boolean };
   WA_SEND_TEXT: TextTestResult;
   WA_SEND_IMAGE: ImageSendResult;
   WA_RECONCILE_STEP: StepReconciliationResult;
@@ -217,6 +221,10 @@ export interface FlorMiaExtensionStatus {
   campaign: CampaignPublicStatus | null;
   updatedAt: string;
   errorCode?: string;
+  bridgeInstanceId?: string;
+  bridgeGeneration?: number;
+  bridgeCreatedAt?: string;
+  runtimeAvailable?: boolean;
 }
 
 const webAppInboundTypes = new Set<string>([
