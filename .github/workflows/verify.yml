@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  statuses: write
 
 jobs:
   apply-verify-publish:
@@ -26,34 +27,59 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Apply, clean, verify and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          set +e
-          {
-            python3 scripts/apply-p0-text.py &&
-            git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts &&
-            git commit -m "fix: synchronize WhatsApp post-navigation handshake" &&
-            git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts &&
-            git commit -m "test: cover post-navigation content lifecycle" &&
-            git add manifest.json package.json package-lock.json &&
-            git commit -m "chore: release 0.9.4.1" &&
-            git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml &&
-            git rm scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py .github/workflows/p0-handshake-fix.yml &&
-            git add .github/workflows/verify.yml &&
-            git commit -m "chore: remove one-shot handshake repair helper" &&
-            npm ci &&
-            npm run verify &&
-            node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`unexpected dist version ${m.version}`);process.exit(1)}; console.log(`dist version=${m.version}`)'
-          } > /tmp/p0-final.log 2>&1
-          result=$?
-          set -e
-          cat /tmp/p0-final.log
-          if [ "$result" -ne 0 ]; then
-            git reset --hard "$GITHUB_SHA"
-            cp /tmp/p0-final.log p0-verify-failure.log
-            git add p0-verify-failure.log
-            git commit -m "diag: capture P0 final verify failure"
-            git push origin HEAD:main
-            exit "$result"
-          fi
-          git push origin HEAD:main
+          status() {
+            state="$1"; phase="$2"; desc="$3"
+            payload=$(jq -n --arg state "$state" --arg context "p0/final-$phase" --arg description "$desc" '{state:$state,context:$context,description:$description}')
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPOSITORY/statuses/$COMMIT_SHA" \
+              --data "$payload" >/dev/null
+          }
+          fail() {
+            phase="$1"; code="$2"
+            status failure "$phase" "P0 failed at $phase"
+            exit "$code"
+          }
+
+          status pending start "P0 final verification started"
+
+          python3 scripts/apply-p0-text.py || fail patch $?
+          status success patch "Text patch applied"
+
+          git add src/background/whatsapp-transport.ts src/background/contact-adapter.ts src/background/service-worker.ts src/compatibility/types.ts src/whatsapp/preflight.ts src/engine/retry-policy.ts
+          git commit -m "fix: synchronize WhatsApp post-navigation handshake" || fail commit-core $?
+          git add tests/contact-adapter-binding.test.ts tests/post-navigation-handshake.test.ts
+          git commit -m "test: cover post-navigation content lifecycle" || fail commit-tests $?
+          git add manifest.json package.json package-lock.json
+          git commit -m "chore: release 0.9.4.1" || fail commit-version $?
+          status success commits "Core tests and version committed locally"
+
+          git show 95b65f2714a447e73051906ddf413a0f583d2ca9:.github/workflows/verify.yml > .github/workflows/verify.yml || fail cleanup $?
+          git rm scripts/apply-p0-handshake-fix.mjs scripts/apply-p0-text.py .github/workflows/p0-handshake-fix.yml || fail cleanup $?
+          git add .github/workflows/verify.yml
+          git commit -m "chore: remove one-shot handshake repair helper" || fail cleanup $?
+          status success cleanup "Final tree has no repair helpers"
+
+          status pending npm-ci "Installing locked dependencies"
+          npm ci || fail npm-ci $?
+          status success npm-ci "npm ci passed"
+
+          status pending verify "Running typecheck lint tests build validate"
+          npm run verify || fail verify $?
+          status success verify "npm run verify passed"
+
+          status pending dist-version "Checking generated manifest"
+          node -e 'const m=require("./dist/manifest.json"); if(m.version!=="0.9.4.1"){console.error(`unexpected dist version ${m.version}`);process.exit(1)}; console.log(`dist version=${m.version}`)' || fail dist-version $?
+          status success dist-version "dist manifest is 0.9.4.1"
+
+          git push origin HEAD:main || fail push $?
+          status success push "Verified P0 commits pushed to main"
+          status success start "P0 final verification completed"
