@@ -54,4 +54,12 @@ describe("campaign cancel lifecycle",()=>{
     const second=await t.engine.requestStop("cancel-test");
     expect(second.status).toBe("stopped");
   });
+  it("stopped cancel reaches cancelled so the emitter can be released", async()=>{
+    const t=setup("stopped",null);
+    const result=await t.engine.requestCancel("cancel-test");
+    expect(result.status).toBe("cancelled");
+    expect(result.cancelRequested).toBe(true);
+    expect(result.stopRequested).toBe(false);
+    expect(result.activeContactId).toBeNull();
+  });
 });
