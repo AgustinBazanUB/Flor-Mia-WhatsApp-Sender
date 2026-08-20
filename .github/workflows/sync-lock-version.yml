@@ -2,7 +2,7 @@ name: sync-lock-version
 
 on:
   push:
-    branches: [agent/causal-photo-verification-0945]
+    branches: [main]
     paths:
       - .github/workflows/sync-lock-version.yml
 
@@ -11,14 +11,14 @@ permissions:
 
 jobs:
   sync-lock:
-    if: github.event.head_commit.message == 'chore: add temporary lock sync workflow'
+    if: github.event.head_commit.message == 'chore: arm temporary lock sync workflow'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout branch
+      - name: Checkout main
         uses: actions/checkout@v5
         with:
-          ref: agent/causal-photo-verification-0945
+          ref: main
       - name: Node.js 20
         uses: actions/setup-node@v5
         with:
@@ -36,4 +36,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- package-lock.json
           git commit -m "chore: sync lockfile version 0.9.4.5"
-          git push origin HEAD:agent/causal-photo-verification-0945
+          git push origin HEAD:main
