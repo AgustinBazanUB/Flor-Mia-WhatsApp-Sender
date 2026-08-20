@@ -1,1 +1,1 @@
-missing marker in src/whatsapp/wait.ts: '    observer = new MutationObserver(check);\n    // Sólo cambios estructurales durante esta espera acotada.\n'
+missing marker in src/background/service-worker.ts: '  await technicalTraceStore.append({\n    timestampStart: startedAt,\n    timestampEnd: completedAt,\n    campaignId: context.campaignId ?? "manual",\n'
