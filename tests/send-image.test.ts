@@ -53,9 +53,9 @@ function imageInput() {
     type: "image/png",
     size: 3,
     dataBase64: "AQID",
-    imageLoadTimeoutMs: 20,
-    previewTimeoutMs: 20,
-    confirmationTimeoutMs: 20
+    imageLoadTimeoutMs: 100,
+    previewTimeoutMs: 100,
+    confirmationTimeoutMs: 100
   };
 }
 
