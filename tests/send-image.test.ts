@@ -60,7 +60,7 @@ function imageInput() {
     dataBase64: "AQID",
     imageLoadTimeoutMs: 100,
     previewTimeoutMs: 100,
-    confirmationTimeoutMs: 100
+    confirmationTimeoutMs: 500
   };
 }
 
