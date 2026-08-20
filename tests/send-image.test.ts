@@ -39,6 +39,7 @@ beforeEach(() => {
       <footer>
         <button type="button" data-testid="clip">Adjuntar</button>
         <input data-testid="photos-videos-input" type="file" accept="image/*,video/mp4,video/3gpp,video/quicktime">
+        <div role="textbox" contenteditable="true" data-testid="conversation-compose-box-input"></div>
       </footer>
       <div data-testid="media-editor">
         <button type="button" data-testid="media-editor-send">Enviar</button>
@@ -98,6 +99,7 @@ describe("verified image send", () => {
     expect(result.success).toBe(true);
     expect(result.verification).toMatchObject({
       outcome: "confirmed",
+      confidence: "strong",
       method: "new-outgoing-photo-dom+preview-dismissed",
       outgoingMessageId: "true_new_media"
     });
@@ -167,7 +169,12 @@ describe("verified image send", () => {
     await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 10 }))
       .rejects.toMatchObject({
         code: "AMBIGUOUS_RESULT",
-        details: { sendAttempted: true, expectedOutgoingKind: "photo" }
+        details: {
+          sendAttempted: true,
+          expectedOutgoingKind: "photo",
+          previewDismissed: true,
+          causalPhotoObserved: false
+        }
       });
   });
 
@@ -216,9 +223,17 @@ describe("verified image send", () => {
     expect(result.verification.details).toMatchObject({ qualityMode: "hd_enabled" });
   });
 
-  it("marks the result ambiguous when send was clicked without conclusive photo DOM evidence", async () => {
+  it("marks the result ambiguous with explicit evidence diagnostics when no outgoing photo is observed", async () => {
     await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 5 }))
-      .rejects.toMatchObject({ code: "AMBIGUOUS_RESULT", details: { sendAttempted: true } });
+      .rejects.toMatchObject({
+        code: "AMBIGUOUS_RESULT",
+        details: {
+          sendAttempted: true,
+          previewDismissed: false,
+          causalNewOutgoingBubbleCount: 0,
+          causalPhotoObserved: false
+        }
+      });
   });
 
   it("fails closed instead of picking an ambiguous generic image uploader", async () => {
@@ -252,15 +267,45 @@ describe("verified image send", () => {
       .rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
   });
 
-  it("never confirms an outgoing photo without a stable DOM id", async () => {
+  it("confirms a newly inserted outgoing photo even when WhatsApp gives it no stable DOM id", async () => {
     document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
       document.getElementById("main")!.insertAdjacentHTML(
         "beforeend",
-        "<div class='message-out'><div data-testid='image-thumb'><img src='blob:test'></div></div>"
+        "<div class='message-out'><div><img src='blob:test'></div></div>"
       );
       document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
     });
-    await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 5 }))
-      .rejects.toMatchObject({ code: "AMBIGUOUS_RESULT" });
+
+    const result = await sendAndVerifyImage(imageInput());
+    expect(result.verification).toMatchObject({
+      outcome: "confirmed",
+      confidence: "causal",
+      method: "causal-outgoing-photo-mutation+preview-dismissed+composer-ready"
+    });
+    expect(result.verification.outgoingMessageId).toBeUndefined();
+    expect(result.verification.details).toMatchObject({
+      photoEvidenceMethod: "causal-outgoing-photo-mutation",
+      stablePhotoIdentity: false,
+      previewDismissed: true,
+      composerRestored: true
+    });
+  });
+
+  it("keeps causal proof when WhatsApp virtualizes the new photo immediately after inserting it", async () => {
+    document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = "<div class='message-out'><div><img src='blob:ephemeral'></div></div>";
+      const bubble = wrapper.firstElementChild as HTMLElement;
+      document.getElementById("main")!.appendChild(bubble);
+      document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
+      globalThis.setTimeout(() => bubble.remove(), 0);
+    });
+
+    const result = await sendAndVerifyImage(imageInput());
+    expect(result.verification).toMatchObject({
+      outcome: "confirmed",
+      confidence: "causal",
+      method: "causal-outgoing-photo-mutation+preview-dismissed+composer-ready"
+    });
   });
 });
