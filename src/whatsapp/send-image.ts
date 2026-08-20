@@ -3,12 +3,17 @@ import { ERROR_CODES, ExtensionError, toExtensionError } from "../shared/errors"
 import { capabilityResolutionError, capabilityUnavailableError } from "../compatibility/diagnostic-error";
 import {
   elementVisible,
+  findComposer,
   findMediaPreview,
   findMediaSendButton,
   resolveCapability,
   type SelectorMatch
 } from "./selectors";
-import { outgoingPhotoMessages } from "./photo-evidence";
+import {
+  outgoingPhotoMessages,
+  startCausalOutgoingPhotoObserver,
+  type CausalOutgoingPhotoObservation
+} from "./photo-evidence";
 import { waitForCondition } from "./wait";
 import { requireConversationContext } from "./conversation-context";
 
@@ -376,6 +381,11 @@ async function preferHdQuality(previewElement: HTMLElement): Promise<MediaQualit
   return "hd_enabled";
 }
 
+function composerReady(): boolean {
+  const composer = findComposer()?.element;
+  return Boolean(composer && elementVisible(composer));
+}
+
 export async function sendAndVerifyImage(
   input: ImageSendInput,
   lifecycle: { beforeSend?: (baselineOutgoingIds: string[]) => Promise<void> } = {}
@@ -383,7 +393,7 @@ export async function sendAndVerifyImage(
   const startedAt = new Date().toISOString();
   const imageLoadTimeoutMs = input.imageLoadTimeoutMs ?? 15_000;
   const previewTimeoutMs = input.previewTimeoutMs ?? 20_000;
-  const confirmationTimeoutMs = input.confirmationTimeoutMs ?? 30_000;
+  const confirmationTimeoutMs = input.confirmationTimeoutMs ?? 8_000;
   requireConversationContext(input.expectedPhoneDigits);
   const baselineOutgoingIds = outgoingPhotoMessages().filter((item) => item.stableIdentity).map((item) => item.identity);
   const before = new Set(baselineOutgoingIds);
@@ -450,31 +460,77 @@ export async function sendAndVerifyImage(
 
   await lifecycle.beforeSend?.(baselineOutgoingIds);
   requireConversationContext(input.expectedPhoneDigits);
-  sendButton.element.click();
-  const verified = await waitForCondition(() => {
-    requireConversationContext(input.expectedPhoneDigits);
-    const outgoing = outgoingPhotoMessages().find((item) => item.stableIdentity && !before.has(item.identity));
-    return outgoing && !elementVisible(currentPreview) ? outgoing : null;
-  }, {
-    timeoutMs: confirmationTimeoutMs,
-    description: "la nueva foto saliente y el cierre de su preview"
-  }).catch((error: unknown) => {
+  const main = document.getElementById("main");
+  if (!(main instanceof HTMLElement)) {
+    throw new ExtensionError(ERROR_CODES.interfaceLoading, "No se encontró el chat activo para observar el resultado del envío.", {
+      recoverable: true,
+      details: { imageId: input.imageId, sendAttempted: false }
+    });
+  }
+
+  const causalObserver = startCausalOutgoingPhotoObserver(main);
+  let verified: CausalOutgoingPhotoObservation | null = null;
+  try {
+    sendButton.element.click();
+    verified = await waitForCondition(() => {
+      requireConversationContext(input.expectedPhoneDigits);
+      if (elementVisible(currentPreview)) return null;
+
+      const stable = outgoingPhotoMessages().find((item) => item.stableIdentity && !before.has(item.identity));
+      if (stable) {
+        return {
+          snapshot: stable,
+          method: "stable-outgoing-photo-dom",
+          observedAt: new Date().toISOString()
+        } satisfies CausalOutgoingPhotoObservation;
+      }
+
+      const causal = causalObserver.take();
+      return causal && composerReady() ? causal : null;
+    }, {
+      timeoutMs: confirmationTimeoutMs,
+      description: "la evidencia causal de la foto saliente"
+    });
+  } catch (error: unknown) {
     const normalized = toExtensionError(error);
     if (normalized.code === ERROR_CODES.contactContextUnverified) throw normalized;
-    throw new ExtensionError(ERROR_CODES.ambiguousResult, "Se accionó enviar, pero no se pudo confirmar una foto saliente normal.", {
-      details: {
-        imageId: input.imageId,
-        sendAttempted: true,
-        baselineOutgoingIds,
-        previewSelector: preview.selector,
-        qualityMode,
-        uploadStrategy: fileInput.strategy,
-        expectedOutgoingKind: "photo"
-      },
-      cause: error
-    });
-  });
+    const observerSummary = causalObserver.summary();
+    const previewDismissed = !elementVisible(currentPreview);
+    const composerRestored = composerReady();
+    const currentPhotoCount = outgoingPhotoMessages().length;
+    throw new ExtensionError(
+      ERROR_CODES.ambiguousResult,
+      "Se hizo clic en Enviar, pero WhatsApp no expuso evidencia técnica suficiente para confirmar la foto. La campaña se pausa para evitar duplicarla.",
+      {
+        details: {
+          imageId: input.imageId,
+          sendAttempted: true,
+          baselineOutgoingIds,
+          previewSelector: preview.selector,
+          qualityMode,
+          uploadStrategy: fileInput.strategy,
+          expectedOutgoingKind: "photo",
+          confirmationTimeoutMs,
+          previewDismissed,
+          composerRestored,
+          currentPhotoCount,
+          causalNewOutgoingBubbleCount: observerSummary.newOutgoingBubbleCount,
+          causalPhotoObserved: observerSummary.photoObserved,
+          causalStableIdObserved: observerSummary.stableIdObserved,
+          causalEvidenceMethod: observerSummary.evidenceMethod
+        },
+        cause: error
+      }
+    );
+  } finally {
+    causalObserver.stop();
+  }
+
   requireConversationContext(input.expectedPhoneDigits);
+  const usedCausalFallback = verified.method === "causal-outgoing-photo-mutation";
+  const verificationMethod = usedCausalFallback
+    ? "causal-outgoing-photo-mutation+preview-dismissed+composer-ready"
+    : "new-outgoing-photo-dom+preview-dismissed";
 
   return {
     success: true,
@@ -484,10 +540,11 @@ export async function sendAndVerifyImage(
     completedAt: new Date().toISOString(),
     verification: {
       outcome: "confirmed",
-      method: "new-outgoing-photo-dom+preview-dismissed",
-      observedAt: new Date().toISOString(),
+      confidence: usedCausalFallback ? "causal" : "strong",
+      method: verificationMethod,
+      observedAt: verified.observedAt,
       sendAttempted: true,
-      outgoingMessageId: verified.identity,
+      ...(verified.snapshot.stableIdentity ? { outgoingMessageId: verified.snapshot.identity } : {}),
       baselineOutgoingIds,
       details: {
         inputSelector: fileInput.selector,
@@ -500,7 +557,11 @@ export async function sendAndVerifyImage(
         preparedSize: input.size,
         preparedType: input.type,
         qualityMode,
-        sourceBytesPreserved: prepared.size === input.size && prepared.type === input.type
+        sourceBytesPreserved: prepared.size === input.size && prepared.type === input.type,
+        photoEvidenceMethod: verified.method,
+        stablePhotoIdentity: verified.snapshot.stableIdentity,
+        previewDismissed: true,
+        composerRestored: usedCausalFallback ? true : composerReady()
       }
     }
   };
