@@ -51,8 +51,16 @@ if (originPatterns.some((pattern) => pattern === "<all_urls>" || pattern === "*:
   throw new Error("El manifest solicita permisos globales.");
 }
 if (!manifest.host_permissions.includes("https://web.whatsapp.com/*")) throw new Error("Falta el permiso de WhatsApp Web.");
+if (!manifest.host_permissions.includes("https://appintegralflormia.netlify.app/*")) {
+  throw new Error("Falta el permiso acotado para la Web App Integral Flor Mía de producción.");
+}
 if (!manifest.host_permissions.includes("https://deploy-preview-7--appintegralflormia.netlify.app/*")) {
   throw new Error("Falta el permiso acotado para recuperar el bridge de Deploy Preview 7.");
+}
+const webAppScript = manifest.content_scripts.find((item) => item.js.includes("content/web-app-bridge.js"));
+if (!webAppScript) throw new Error("Falta el puente de la Web-App.");
+if (!webAppScript.matches?.includes("https://appintegralflormia.netlify.app/*")) {
+  throw new Error("El bridge no se inyecta en la Web App Integral Flor Mía de producción.");
 }
 if (!manifest.permissions.includes("storage")) throw new Error("Falta el permiso de persistencia local.");
 if (!manifest.permissions.includes("alarms")) throw new Error("Falta el permiso alarms requerido por el scheduler MV3.");
@@ -61,5 +69,4 @@ const allowedExtensionPermissions = new Set(["storage", "alarms", "scripting"]);
 if (manifest.permissions.some((permission) => !allowedExtensionPermissions.has(permission))) {
   throw new Error("El manifest contiene permisos de extensión no previstos.");
 }
-if (!manifest.content_scripts.some((item) => item.js.includes("content/web-app-bridge.js"))) throw new Error("Falta el puente de la Web-App.");
 console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3 y artefactos requeridos presentes.`);

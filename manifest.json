@@ -3,8 +3,8 @@
   "name": "Flor Mía WhatsApp Sender",
   "short_name": "Flor Mía WA",
   "description": "Extensión privada para ejecutar y verificar envíos preparados por Flor Mía.",
-  "version": "0.9.4.6",
-  "version_name": "0.9.4.6",
+  "version": "0.9.4.7",
+  "version_name": "0.9.4.7",
   "minimum_chrome_version": "120",
   "action": {
     "default_title": "Flor Mía WhatsApp Sender",
@@ -21,6 +21,7 @@
   ],
   "host_permissions": [
     "https://web.whatsapp.com/*",
+    "https://appintegralflormia.netlify.app/*",
     "https://app-integral-fm.netlify.app/*",
     "https://deploy-preview-7--app-integral-fm.netlify.app/*",
     "https://deploy-preview-7--appintegralflormia.netlify.app/*",
@@ -40,6 +41,7 @@
     },
     {
       "matches": [
+        "https://appintegralflormia.netlify.app/*",
         "https://app-integral-fm.netlify.app/*",
         "https://deploy-preview-7--app-integral-fm.netlify.app/*",
         "https://deploy-preview-7--appintegralflormia.netlify.app/*",
