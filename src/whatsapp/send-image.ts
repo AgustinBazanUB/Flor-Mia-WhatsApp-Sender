@@ -130,9 +130,10 @@ function findMediaSendButtonNearPreview(previewElement: HTMLElement): SelectorMa
       return registered as unknown as SelectorMatch<HTMLElement>;
     }
     const candidates = visibleUniqueActions(root, MEDIA_SEND_FALLBACK_SELECTORS);
-    if (candidates.length === 1) {
+    const candidate = candidates.length === 1 ? candidates[0] : undefined;
+    if (candidate) {
       return {
-        element: candidates[0],
+        element: candidate,
         strategy: "media-send.semantic-preview-scope.2026",
         selector: MEDIA_SEND_FALLBACK_SELECTORS.join(", ")
       };
@@ -177,8 +178,9 @@ async function preferHdQuality(previewElement: HTMLElement): Promise<MediaQualit
   let control: HTMLElement | null = null;
   for (const root of previewSearchRoots(previewElement)) {
     const candidates = visibleUniqueActions(root, HD_CONTROL_SELECTORS);
-    if (candidates.length === 1) {
-      control = candidates[0];
+    const candidate = candidates.length === 1 ? candidates[0] : undefined;
+    if (candidate) {
+      control = candidate;
       break;
     }
   }
