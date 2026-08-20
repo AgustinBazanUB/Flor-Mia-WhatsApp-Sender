@@ -57,11 +57,7 @@ found 0 vulnerabilities
 
 
 /home/runner/work/Flor-Mia-WhatsApp-Sender/Flor-Mia-WhatsApp-Sender/src/background/service-worker.ts
-  785:16  error  'refreshDiagnosticIncident' is defined but never used  @typescript-eslint/no-unused-vars
+  28:37  error  'CampaignState' is defined but never used  @typescript-eslint/no-unused-vars
 
-/home/runner/work/Flor-Mia-WhatsApp-Sender/Flor-Mia-WhatsApp-Sender/src/storage/campaign-data-store.ts
-  68:22  error  '_key' is defined but never used         @typescript-eslint/no-unused-vars
-  68:40  error  '_campaignId' is defined but never used  @typescript-eslint/no-unused-vars
-
-✖ 3 problems (3 errors, 0 warnings)
+✖ 1 problem (1 error, 0 warnings)
 
