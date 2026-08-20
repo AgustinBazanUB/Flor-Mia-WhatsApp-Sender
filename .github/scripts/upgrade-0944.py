@@ -14,7 +14,6 @@ source = source.replace('campaignId: context.campaignId ?? "manual",', 'campaign
 source = source.replace('cancelRequested: boolean;', 'cancelRequested?: boolean;')
 source = source.replace('  createdAt: string;\n  startedAt: string | null;', '  createdAt?: string;\n  startedAt: string | null;')
 source = source.replace('.map(({ key: _key, campaignId: _campaignId, ...recipient }) => recipient);', '.map((record) => {\n          const recipient = { ...record };\n          delete (recipient as Partial<StoredRecipient>).key;\n          delete (recipient as Partial<StoredRecipient>).campaignId;\n          return recipient as CampaignRecipientState;\n        });')
-source = source.replace('import type { CampaignPublicStatus, CampaignState } from "../campaign/campaign-types";', 'import type { CampaignPublicStatus } from "../campaign/campaign-types";')
 source += r"""
 regex_once("src/content/web-app-bridge.ts",
   r'''    const responsePayload = request\.type === WEB_APP_MESSAGE_TYPES\.deleteRequest[\s\S]*?: status as unknown as Record<string, unknown>;''',
@@ -22,5 +21,8 @@ regex_once("src/content/web-app-bridge.ts",
 regex_once("src/background/service-worker.ts",
   r'''async function refreshDiagnosticIncident\([\s\S]*?\n}\n\nasync function generateDiagnosticReport''',
   '''async function generateDiagnosticReport''')
+replace_once("src/background/service-worker.ts",
+  '''import type { CampaignPublicStatus, CampaignState } from "../campaign/campaign-types";''',
+  '''import type { CampaignPublicStatus } from "../campaign/campaign-types";''')
 """
 exec(compile(source, "upgrade-0944-expanded.py", "exec"))
