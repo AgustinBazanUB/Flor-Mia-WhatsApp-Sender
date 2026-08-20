@@ -42,7 +42,7 @@ describe("ambiguous result reconciliation", () => {
       baselineOutgoingIds: [],
       timeoutMs: 5
     });
-    expect(result).toMatchObject({ outcome: "ambiguous", verification: { method: "no-conclusive-dom-evidence" } });
+    expect(result).toMatchObject({ outcome: "ambiguous", verification: { method: "no-conclusive-photo-evidence" } });
   });
 
   it("refuses to inspect another chat during reconciliation", async () => {
@@ -106,10 +106,10 @@ describe("ambiguous result reconciliation", () => {
     expect(result.outcome).toBe("ambiguous");
   });
 
-  it("ignores DOM reorder when every stable media id was already in the baseline", async () => {
+  it("ignores DOM reorder when every stable PHOTO id was already in the baseline", async () => {
     document.getElementById("main")!.insertAdjacentHTML(
       "beforeend",
-      "<div class='message-out' data-id='true_media_2'><img src='blob:2'></div><div class='message-out' data-id='true_media_1'><img src='blob:1'></div>"
+      "<div class='message-out' data-id='true_media_2'><div data-testid='image-thumb'><img src='blob:2'></div></div><div class='message-out' data-id='true_media_1'><div data-testid='image-thumb'><img src='blob:1'></div></div>"
     );
     const result = await reconcileWhatsAppStep({
       kind: "image",
@@ -121,10 +121,10 @@ describe("ambiguous result reconciliation", () => {
     expect(result.outcome).toBe("ambiguous");
   });
 
-  it("confirms only the second image when it has a new stable identity", async () => {
+  it("confirms only the second PHOTO when it has a new stable identity", async () => {
     document.getElementById("main")!.insertAdjacentHTML(
       "beforeend",
-      "<div class='message-out' data-id='true_media_old'><img src='blob:old'></div><div class='message-out' data-id='true_media_new'><img src='blob:new'></div>"
+      "<div class='message-out' data-id='true_media_old'><div data-testid='image-thumb'><img src='blob:old'></div></div><div class='message-out' data-id='true_media_new'><div data-testid='image-thumb'><img src='blob:new'></div></div>"
     );
     const result = await reconcileWhatsAppStep({
       kind: "image",
@@ -133,6 +133,27 @@ describe("ambiguous result reconciliation", () => {
       baselineOutgoingIds: ["true_media_old"],
       timeoutMs: 5
     });
-    expect(result).toMatchObject({ outcome: "confirmed", verification: { outgoingMessageId: "true_media_new" } });
+    expect(result).toMatchObject({
+      outcome: "confirmed",
+      verification: { method: "reconciled-new-outgoing-photo-dom", outgoingMessageId: "true_media_new" }
+    });
+  });
+
+  it("never reconciles a sticker as a confirmed campaign photo", async () => {
+    document.getElementById("main")!.insertAdjacentHTML(
+      "beforeend",
+      "<div class='message-out' data-id='true_sticker'><div data-testid='sticker'><img src='blob:sticker'></div></div>"
+    );
+    const result = await reconcileWhatsAppStep({
+      kind: "image",
+      operationId: "sticker-is-not-photo",
+      expectedPhoneDigits: "5491112345678",
+      baselineOutgoingIds: [],
+      timeoutMs: 5
+    });
+    expect(result).toMatchObject({
+      outcome: "ambiguous",
+      verification: { method: "no-conclusive-photo-evidence", sendAttempted: true }
+    });
   });
 });
