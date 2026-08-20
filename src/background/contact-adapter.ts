@@ -18,6 +18,49 @@ import { TechnicalTraceStore } from "../storage/technical-trace-store";
 import { WhatsAppTransport } from "./whatsapp-transport";
 
 const CONVERSATION_PROOF_BUDGET_MS = 4_000;
+const FIRST_IMAGE_SETTLE_MS = 1_000;
+const FOLLOWUP_IMAGE_SETTLE_MS = 500;
+const IMAGE_CONFIRMATION_BUDGET_MS = 8_000;
+
+function imageSettleDelayMs(step: ImageContactStep): number {
+  return step.image.order <= 1 ? FIRST_IMAGE_SETTLE_MS : FOLLOWUP_IMAGE_SETTLE_MS;
+}
+
+async function waitForImageSettle(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = (): void => finish(() => reject(new DOMException("Operación cancelada", "AbortError")));
+    const timer = globalThis.setTimeout(() => finish(resolve), delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function imageExecutionError(
+  error: unknown,
+  step: ImageContactStep,
+  settleDelayMs: number,
+  confirmationTimeoutMs: number
+): StepExecutionResult {
+  const normalized = toExtensionError(error);
+  return executionError(new ExtensionError(normalized.code, normalized.message, {
+    recoverable: normalized.recoverable,
+    cause: error,
+    details: {
+      ...(normalized.details ?? {}),
+      imageOrder: step.image.order,
+      preSendSettleMs: settleDelayMs,
+      imageConfirmationTimeoutMs: confirmationTimeoutMs
+    }
+  }));
+}
 
 function executionError(error: unknown): StepExecutionResult {
   const normalized = toExtensionError(error);
@@ -388,8 +431,12 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         error: serializeError(new ExtensionError(ERROR_CODES.imageMissing, "La imagen temporal ya no está disponible."))
       };
     }
+
+    const settleDelayMs = imageSettleDelayMs(step);
+    const confirmationTimeoutMs = Math.min(context.timeoutMs, IMAGE_CONFIRMATION_BUDGET_MS);
     try {
       const data = await stored.blob.arrayBuffer();
+      await waitForImageSettle(settleDelayMs, context.signal);
       const result = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappSendImage, {
         operationId: step.operationId,
         expectedPhoneDigits: context.checkpoint.contact.phoneDigits,
@@ -400,12 +447,23 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         dataBase64: arrayBufferToBase64(data),
         imageLoadTimeoutMs: context.imageLoadTimeoutMs,
         previewTimeoutMs: context.previewTimeoutMs,
-        confirmationTimeoutMs: context.timeoutMs,
+        confirmationTimeoutMs,
         checkpointRequired: true
       }, this.requireBoundTabId());
-      return { outcome: "confirmed", verification: result.verification };
+      return {
+        outcome: "confirmed",
+        verification: {
+          ...result.verification,
+          details: {
+            ...(result.verification.details ?? {}),
+            imageOrder: step.image.order,
+            preSendSettleMs: settleDelayMs,
+            imageConfirmationTimeoutMs: confirmationTimeoutMs
+          }
+        }
+      };
     } catch (error) {
-      return executionError(error);
+      return imageExecutionError(error, step, settleDelayMs, confirmationTimeoutMs);
     }
   }
 
