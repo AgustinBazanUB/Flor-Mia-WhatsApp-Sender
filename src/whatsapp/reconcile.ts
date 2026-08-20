@@ -5,9 +5,9 @@ import {
   findComposer,
   findMediaPreview,
   findMediaSendButton,
-  outgoingMediaMessages,
   outgoingMessages
 } from "./selectors";
+import { outgoingPhotoMessages } from "./photo-evidence";
 import { waitForCondition } from "./wait";
 import { requireConversationContext } from "./conversation-context";
 
@@ -50,8 +50,10 @@ function inspect(input: ReconcileStepInput): StepReconciliationResult | null {
     return null;
   }
 
-  const outgoing = outgoingMediaMessages().find((item) => item.stableIdentity && !baseline.has(item.identity));
-  if (outgoing) return result("confirmed", "reconciled-new-outgoing-media-dom", true, outgoing.identity);
+  // Un paso image representa una FOTO de campaña, no un sticker. Un sticker
+  // saliente nunca puede reconciliar ni destrabar el paso siguiente de texto.
+  const outgoing = outgoingPhotoMessages().find((item) => item.stableIdentity && !baseline.has(item.identity));
+  if (outgoing) return result("confirmed", "reconciled-new-outgoing-photo-dom", true, outgoing.identity);
   const preview = findMediaPreview();
   if (preview && findMediaSendButton(preview.element)) {
     return result("not_sent", "media-preview-still-awaiting-send", false);
@@ -77,5 +79,5 @@ export async function reconcileWhatsAppStep(input: ReconcileStepInput): Promise<
     return null;
   });
   requireConversationContext(input.expectedPhoneDigits);
-  return resolved ?? result("ambiguous", "no-conclusive-dom-evidence", true);
+  return resolved ?? result("ambiguous", "no-conclusive-photo-evidence", true);
 }
