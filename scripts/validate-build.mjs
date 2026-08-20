@@ -26,9 +26,11 @@ const optimisticControls = await readFile(resolve("dist", "popup/optimistic-cont
 if (manifest.manifest_version !== 3) throw new Error("El build no contiene Manifest V3.");
 if (manifest.version !== sourceManifest.version) throw new Error("La versión del build no coincide con manifest.json.");
 if (manifest.version_name !== sourceManifest.version_name) throw new Error("El nombre de versión del build no coincide con manifest.json.");
-if (sourceManifest.version !== packageMetadata.version) throw new Error("package.json y manifest.json deben declarar la misma versión.");
+if (sourceManifest.version_name !== sourceManifest.version) {
+  throw new Error("manifest.json debe mantener version y version_name coherentes para la versión visible en Chrome.");
+}
 if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) {
-  throw new Error("package-lock.json, package.json y manifest.json deben declarar la misma versión.");
+  throw new Error("package-lock.json y package.json deben mantener coherente la versión del workspace npm.");
 }
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
