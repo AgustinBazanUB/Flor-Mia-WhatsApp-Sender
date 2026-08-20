@@ -8,6 +8,7 @@ permissions:
   contents: write
   statuses: write
 
+# Temporary self-cleaning migration runner. Removed after the verified 0.9.4.4 commit.
 jobs:
   apply-verify:
     if: github.actor != 'github-actions[bot]'
