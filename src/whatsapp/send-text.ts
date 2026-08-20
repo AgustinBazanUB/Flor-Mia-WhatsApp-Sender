@@ -13,6 +13,7 @@ import {
 } from "./selectors";
 import { waitForCondition } from "./wait";
 import { requireConversationContext } from "./conversation-context";
+import { recordObserverCreated, recordObserverDisconnected, recordTimerCleared, recordTimerCreated } from "../performance/runtime-metrics";
 
 const POST_CLICK_VERIFICATION_BUDGET_MS = 6_000;
 const STRONG_ID_GRACE_MS = 100;
@@ -162,8 +163,15 @@ function armOutgoingVerification(input: {
   const budget = Math.min(POST_CLICK_VERIFICATION_BUDGET_MS, Math.max(20, input.timeoutMs));
   const cleanup = (): void => {
     observer.disconnect();
-    if (timeoutTimer) globalThis.clearTimeout(timeoutTimer);
-    if (causalTimer) globalThis.clearTimeout(causalTimer);
+    recordObserverDisconnected();
+    if (timeoutTimer) {
+      globalThis.clearTimeout(timeoutTimer);
+      recordTimerCleared();
+    }
+    if (causalTimer) {
+      globalThis.clearTimeout(causalTimer);
+      recordTimerCleared();
+    }
   };
   const metrics = (kind: ObserverOutcome["kind"], snapshot?: OutgoingMessageSnapshot): ObserverOutcome => {
     const now = Date.now();
@@ -213,6 +221,7 @@ function armOutgoingVerification(input: {
     }
     const exactCount = outgoingMessages(input.root).filter((item) => item.text === expected).length;
     if (exactCount <= baselineExactCount || causalTimer) return;
+    recordTimerCreated();
     causalTimer = globalThis.setTimeout(() => {
       causalTimer = null;
       if (settled) return;
@@ -239,6 +248,7 @@ function armOutgoingVerification(input: {
       if (settled) return;
     }
   });
+  recordObserverCreated();
   observer.observe(input.root, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-id", "id"] });
   return {
     baselineIds: [...baselineIds],
@@ -247,6 +257,7 @@ function armOutgoingVerification(input: {
       clicked = true;
       sendClickAtMs = Date.now();
       sendClickAt = new Date(sendClickAtMs).toISOString();
+      recordTimerCreated();
       timeoutTimer = globalThis.setTimeout(() => {
         if (settled) return;
         try { requireConversationContext(input.expectedPhoneDigits); } catch (error) { failAfterClick(error); return; }

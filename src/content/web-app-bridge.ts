@@ -75,6 +75,7 @@ function messageTypeForEvent(type: CampaignPublicEventType): WebAppEnvelope["typ
     CAMPAIGN_RESUMED: WEB_APP_MESSAGE_TYPES.resumed,
     CAMPAIGN_ERROR: WEB_APP_MESSAGE_TYPES.error,
     CAMPAIGN_STOPPED: WEB_APP_MESSAGE_TYPES.stopped,
+    CAMPAIGN_CANCELLED: WEB_APP_MESSAGE_TYPES.cancelled,
     CAMPAIGN_COMPLETED: WEB_APP_MESSAGE_TYPES.completed
   }[type];
 }
@@ -85,6 +86,7 @@ function messageTypeForStatus(
 ): WebAppEnvelope["type"] {
   if (status.status === "completed") return WEB_APP_MESSAGE_TYPES.completed;
   if (status.status === "stopped") return WEB_APP_MESSAGE_TYPES.stopped;
+  if (status.status === "cancelled") return WEB_APP_MESSAGE_TYPES.cancelled;
   if (status.status === "error") return WEB_APP_MESSAGE_TYPES.error;
   if (["paused", "pause_requested", "daily_limit_reached", "images_required"].includes(status.status)) {
     return WEB_APP_MESSAGE_TYPES.paused;
@@ -136,15 +138,36 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
   }
 
   const campaignId = campaignIdOf(request);
+  if (request.type === WEB_APP_MESSAGE_TYPES.deleteRequest) {
+    const released = await sendRuntimeRequest(
+      "web-app-bridge",
+      INTERNAL_MESSAGE_TYPES.campaignDelete,
+      { campaignId, ...(request.sequence === undefined ? {} : { expectedSequence: request.sequence }) },
+      request.requestId
+    );
+    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.stopped, { ...released, campaignId, status: "stopped", emitterReleased: true }, { campaignId }));
+    return;
+  }
+  if (request.type === WEB_APP_MESSAGE_TYPES.cancelRequest) {
+    const status = await sendRuntimeRequest(
+      "web-app-bridge",
+      INTERNAL_MESSAGE_TYPES.campaignCancel,
+      { campaignId, ...(request.sequence === undefined ? {} : { expectedSequence: request.sequence }) },
+      request.requestId
+    );
+    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.cancelled, { ...(status as unknown as Record<string, unknown>), emitterReleased: true }, {
+      campaignId: status.campaignId,
+      sequence: status.sequence
+    }));
+    return;
+  }
   const controls = {
-    [WEB_APP_MESSAGE_TYPES.cancelRequest]: INTERNAL_MESSAGE_TYPES.campaignStop,
     [WEB_APP_MESSAGE_TYPES.startRequest]: INTERNAL_MESSAGE_TYPES.campaignStart,
     [WEB_APP_MESSAGE_TYPES.pauseRequest]: INTERNAL_MESSAGE_TYPES.campaignPause,
     [WEB_APP_MESSAGE_TYPES.resumeRequest]: INTERNAL_MESSAGE_TYPES.campaignResume,
     [WEB_APP_MESSAGE_TYPES.retryRequest]: INTERNAL_MESSAGE_TYPES.campaignResume,
     [WEB_APP_MESSAGE_TYPES.retryFailedRequest]: INTERNAL_MESSAGE_TYPES.campaignResume,
-    [WEB_APP_MESSAGE_TYPES.stopRequest]: INTERNAL_MESSAGE_TYPES.campaignStop,
-    [WEB_APP_MESSAGE_TYPES.deleteRequest]: INTERNAL_MESSAGE_TYPES.campaignStop
+    [WEB_APP_MESSAGE_TYPES.stopRequest]: INTERNAL_MESSAGE_TYPES.campaignStop
   } as const;
   if (request.type in controls) {
     const type = controls[request.type as keyof typeof controls];
@@ -154,15 +177,30 @@ async function handleRequest(request: WebAppEnvelope): Promise<void> {
       { campaignId, ...(request.sequence === undefined ? {} : { expectedSequence: request.sequence }) },
       request.requestId
     );
-    const responsePayload = request.type === WEB_APP_MESSAGE_TYPES.deleteRequest
-      ? { ...(status as unknown as Record<string, unknown>), emitterReleased: true }
-      : status as unknown as Record<string, unknown>;
+    const responsePayload = status as unknown as Record<string, unknown>;
     post(responseEnvelope(
       request,
       messageTypeForStatus(status, request.type),
       responsePayload,
       { campaignId: status.campaignId, sequence: status.sequence }
     ));
+    return;
+  }
+  if (request.type === WEB_APP_MESSAGE_TYPES.diagnosticReportRequest) {
+    const report = await sendRuntimeRequest(
+      "web-app-bridge",
+      INTERNAL_MESSAGE_TYPES.generateDiagnosticReport,
+      {
+        includeCampaignName: false,
+        webAppContext: request.payload.webAppContext && typeof request.payload.webAppContext === "object"
+          ? request.payload.webAppContext as Record<string, unknown>
+          : undefined
+      },
+      request.requestId
+    );
+    post(responseEnvelope(request, WEB_APP_MESSAGE_TYPES.diagnosticReport, report as unknown as Record<string, unknown>, {
+      ...(campaignId ? { campaignId } : {})
+    }));
     return;
   }
   if (request.type === WEB_APP_MESSAGE_TYPES.statusRequest) {

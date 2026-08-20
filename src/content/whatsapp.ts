@@ -15,6 +15,7 @@ import { scheduleConversationNavigation, sendAndVerifyText } from "../whatsapp/s
 import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
 import { waitForConversationContext } from "../whatsapp/conversation-context";
+import { snapshotRuntimeMetrics } from "../performance/runtime-metrics";
 
 const proofControllers = new Map<string, AbortController>();
 installConversationInteractionGuard(document);
@@ -73,6 +74,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 
   void (async () => {
     try {
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappDiagnosticSnapshot) {
+        sendResponse(success(message.requestId, {
+          contentInstanceId: CONTENT_INSTANCE_ID,
+          documentReadyState: document.readyState,
+          composerPresent: Boolean(document.querySelector("#main footer [role='textbox'][contenteditable='true'], #main footer [contenteditable='true']")),
+          activeProofControllers: proofControllers.size,
+          runtimeMetrics: snapshotRuntimeMetrics() as unknown as Record<string, unknown>
+        }));
+        return;
+      }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappPreflight) {
         const data = await runWhatsAppPreflight(message.payload as InternalRequestMap["WA_PREFLIGHT"]);
         sendResponse(success(message.requestId, data));

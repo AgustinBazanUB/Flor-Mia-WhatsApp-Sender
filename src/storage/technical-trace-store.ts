@@ -4,8 +4,8 @@ import type { TechnicalTraceInput, TechnicalTraceRecord, TechnicalTraceState } f
 import { ChromeLocalStorageAdapter, type KeyValueStorage } from "./state-store";
 
 export const TECHNICAL_TRACE_STATE_KEY = "technicalTraceState";
-export const MAX_TRACE_RECORDS_PER_CAMPAIGN = 500;
-export const MAX_TRACE_RECORDS_GLOBAL = 1_000;
+export const MAX_TRACE_RECORDS_PER_CAMPAIGN = 120;
+export const MAX_TRACE_RECORDS_GLOBAL = 300;
 
 function defaultState(now = new Date().toISOString()): TechnicalTraceState {
   return { schemaVersion: 1, records: [], updatedAt: now };
@@ -122,8 +122,16 @@ export class TechnicalTraceStore {
     return current.records.filter((record) => record.campaignId === campaignId).slice(-Math.max(0, limit));
   }
 
-  async listRecent(limit = 100): Promise<TechnicalTraceRecord[]> {
+  async listRecent(limit = 50): Promise<TechnicalTraceRecord[]> {
     return (await this.load()).records.slice(-Math.max(0, limit));
+  }
+
+  async countCampaign(campaignId: string): Promise<number> {
+    return (await this.load()).records.filter((record) => record.campaignId === campaignId).length;
+  }
+
+  async countAll(): Promise<number> {
+    return (await this.load()).records.length;
   }
 
   async clearCampaign(campaignId: string): Promise<void> {

@@ -50,7 +50,7 @@ export interface CampaignEngineDependencies {
   completionFault?: (point: CampaignCompletionFaultPoint) => Promise<void> | void;
 }
 
-const TERMINAL_STATUSES = new Set<CampaignState["status"]>(["stopped", "completed"]);
+const TERMINAL_STATUSES = new Set<CampaignState["status"]>(["stopped", "cancelled", "completed"]);
 
 function block(
   code: CampaignBlockReason["code"],
@@ -148,6 +148,15 @@ function terminalRecipient(status: CampaignState["recipients"][number]["status"]
   return status === "completed" || status === "error";
 }
 
+function terminalInterruptedRecipients(
+  campaign: CampaignState,
+  recipientId: string | null,
+  status: "stopped" | "cancelled"
+): CampaignState["recipients"] {
+  if (!recipientId) return campaign.recipients;
+  return campaign.recipients.map((item) => item.recipientId === recipientId ? { ...item, status } : item);
+}
+
 function resetFailureCircuit(campaign: CampaignState, at: string): CampaignState["failureCircuit"] {
   return {
     signature: null,
@@ -232,6 +241,7 @@ export class CampaignEngine {
     daily: DailyLimitState,
     at: string
   ): Partial<CampaignState> {
+    if (campaign.cancelRequested) return { status: "cancelled", wait: null, cancelledAt: at };
     if (campaign.stopRequested) return { status: "stopped", wait: null, stoppedAt: at };
     if (campaign.pauseRequested) return { status: "paused", wait: null };
     if (daily.remaining <= 0) {
@@ -325,7 +335,9 @@ export class CampaignEngine {
     const allProcessed = recipients.every((item) => terminalRecipient(item.status));
     const processedInBatch = campaign.contactsCompletedInBatch + 1;
     let terminalPatch: Partial<CampaignState>;
-    if (campaign.stopRequested) {
+    if (campaign.cancelRequested) {
+      terminalPatch = { status: "cancelled", wait: null, cancelledAt: failedAt, blockReason: null };
+    } else if (campaign.stopRequested) {
       terminalPatch = { status: "stopped", wait: null, stoppedAt: failedAt, blockReason: null };
     } else if (campaign.pauseRequested) {
       terminalPatch = { status: "paused", wait: null, blockReason: block("manual_pause", "La campaña quedó pausada en una frontera segura.", failedAt, true) };
@@ -377,6 +389,7 @@ export class CampaignEngine {
       dailyLimit: daily,
       pauseRequested: false,
       stopRequested: false,
+      cancelRequested: false,
       blockReason: null,
       wait: null,
       startedAt: campaign.startedAt ?? this.now().toISOString()
@@ -419,6 +432,7 @@ export class CampaignEngine {
       status: pendingWait?.kind === "between_batches" ? "waiting_batch" : pendingWait ? "waiting_contact" : "ready",
       pauseRequested: false,
       stopRequested: campaign.stopRequested,
+      cancelRequested: campaign.cancelRequested,
       dailyLimit: daily,
       blockReason: null,
       wait: pendingWait
@@ -467,6 +481,7 @@ export class CampaignEngine {
       currentRecipientIndex: null,
       pauseRequested: false,
       stopRequested: false,
+      cancelRequested: false,
       blockReason: null,
       wait: null,
       runToken: createId("campaign-run"),
@@ -525,10 +540,38 @@ export class CampaignEngine {
     return this.save(campaign, {
       status: contactStepInFlight ? "pause_requested" : "stopped",
       stopRequested: true,
+      cancelRequested: false,
       pauseRequested: false,
       wait: null,
       blockReason: null,
-      ...(contactStepInFlight ? {} : { stoppedAt: this.now().toISOString() })
+      ...(contactStepInFlight ? {} : {
+        activeContactId: null,
+        recipients: terminalInterruptedRecipients(campaign, campaign.activeContactId, "stopped"),
+        stoppedAt: this.now().toISOString()
+      })
+    });
+  }
+
+  async requestCancel(campaignId: string): Promise<CampaignState> {
+    const campaign = await this.requireCampaign(campaignId);
+    if (campaign.status === "cancelled") return campaign;
+    if (campaign.status === "completed") {
+      throw new ExtensionError(ERROR_CODES.invalidInput, "Una campaña completada no puede cancelarse.", { recoverable: false });
+    }
+    const contactStepInFlight = campaign.activeContactId !== null
+      && ["running", "pause_requested"].includes(campaign.status);
+    return this.save(campaign, {
+      status: contactStepInFlight ? "pause_requested" : "cancelled",
+      cancelRequested: true,
+      stopRequested: false,
+      pauseRequested: false,
+      wait: null,
+      blockReason: null,
+      ...(contactStepInFlight ? {} : {
+        activeContactId: null,
+        recipients: terminalInterruptedRecipients(campaign, campaign.activeContactId, "cancelled"),
+        cancelledAt: this.now().toISOString()
+      })
     });
   }
 
@@ -547,6 +590,24 @@ export class CampaignEngine {
       }
     }
     if (TERMINAL_STATUSES.has(campaign.status)) return campaign;
+    if (campaign.cancelRequested) {
+      return this.save(campaign, {
+        status: "cancelled",
+        activeContactId: null,
+        recipients: terminalInterruptedRecipients(campaign, campaign.activeContactId, "cancelled"),
+        wait: null,
+        cancelledAt: this.now().toISOString()
+      });
+    }
+    if (campaign.stopRequested && campaign.status !== "stopped") {
+      return this.save(campaign, {
+        status: "stopped",
+        activeContactId: null,
+        recipients: terminalInterruptedRecipients(campaign, campaign.activeContactId, "stopped"),
+        wait: null,
+        stoppedAt: this.now().toISOString()
+      });
+    }
     if (campaign.status === "waiting_batch" || campaign.status === "waiting_contact") return campaign;
     if (["received", "paused", "daily_limit_reached", "images_required", "error"].includes(campaign.status)) return campaign;
     if (checkpoint && checkpoint.campaignId === campaign.campaignId) {
@@ -596,6 +657,9 @@ export class CampaignEngine {
     let campaign = await this.requireCampaign(campaignId);
     if (TERMINAL_STATUSES.has(campaign.status) || ["paused", "images_required", "error", "daily_limit_reached", "received"].includes(campaign.status)) {
       return campaign;
+    }
+    if (campaign.cancelRequested && campaign.activeContactId === null) {
+      return this.save(campaign, { status: "cancelled", wait: null, cancelledAt: this.now().toISOString() });
     }
     if (campaign.stopRequested && campaign.activeContactId === null) {
       return this.save(campaign, { status: "stopped", wait: null, stoppedAt: this.now().toISOString() });
@@ -704,6 +768,26 @@ export class CampaignEngine {
     }
 
     if (hasUnresolvedSendEvidence(checkpoint)) {
+      if (campaign.cancelRequested) {
+        return this.save(campaign, {
+          status: "cancelled",
+          activeContactId: null,
+          recipients: terminalInterruptedRecipients(campaign, recipient!.recipientId, "cancelled"),
+          wait: null,
+          blockReason: null,
+          cancelledAt: this.now().toISOString()
+        });
+      }
+      if (campaign.stopRequested) {
+        return this.save(campaign, {
+          status: "stopped",
+          activeContactId: null,
+          recipients: terminalInterruptedRecipients(campaign, recipient!.recipientId, "stopped"),
+          wait: null,
+          blockReason: null,
+          stoppedAt: this.now().toISOString()
+        });
+      }
       const blocked = checkpointBlock(checkpoint, this.now().toISOString());
       return this.save(campaign, {
         status: "paused",
@@ -714,12 +798,21 @@ export class CampaignEngine {
         blockReason: blocked.reason
       });
     }
+    if (campaign.cancelRequested) {
+      return this.save(campaign, {
+        status: "cancelled",
+        activeContactId: null,
+        recipients: terminalInterruptedRecipients(campaign, recipient!.recipientId, "cancelled"),
+        wait: null,
+        blockReason: null,
+        cancelledAt: this.now().toISOString()
+      });
+    }
     if (campaign.stopRequested) {
       return this.save(campaign, {
         status: "stopped",
-        recipients: campaign.recipients.map((item) => item.recipientId === recipient!.recipientId
-          ? { ...item, status: "stopped" }
-          : item),
+        activeContactId: null,
+        recipients: terminalInterruptedRecipients(campaign, recipient!.recipientId, "stopped"),
         stoppedAt: this.now().toISOString(),
         blockReason: null
       });

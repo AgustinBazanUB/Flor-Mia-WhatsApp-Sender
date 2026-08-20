@@ -34,6 +34,7 @@ export const INTERNAL_MESSAGE_TYPES = {
   campaignRetry: "CAMPAIGN_RETRY",
   campaignRetryFailed: "CAMPAIGN_RETRY_FAILED",
   campaignStop: "CAMPAIGN_STOP",
+  campaignCancel: "CAMPAIGN_CANCEL",
   campaignDelete: "CAMPAIGN_DELETE",
   campaignStatus: "CAMPAIGN_STATUS",
   campaignRestoreImages: "CAMPAIGN_RESTORE_IMAGES",
@@ -45,6 +46,7 @@ export const INTERNAL_MESSAGE_TYPES = {
   whatsappSendImage: "WA_SEND_IMAGE",
   whatsappReconcileStep: "WA_RECONCILE_STEP",
   whatsappOperationStage: "WA_OPERATION_STAGE",
+  whatsappDiagnosticSnapshot: "WA_DIAGNOSTIC_SNAPSHOT",
   webAppPing: "WEB_APP_PING",
   webAppPrepareCampaign: "WEB_APP_PREPARE_CAMPAIGN",
   webAppCancelCampaign: "WEB_APP_CANCEL_CAMPAIGN"
@@ -57,7 +59,7 @@ export interface InternalRequestMap {
   GET_EXTENSION_STATE: Record<string, never>;
   RUN_WHATSAPP_PREFLIGHT: { developmentFault?: CompatibilityDevelopmentFault };
   SET_COMPATIBILITY_DEVELOPMENT_FAULT: { fault: CompatibilityDevelopmentFault };
-  GENERATE_DIAGNOSTIC_REPORT: { includeCampaignName?: boolean };
+  GENERATE_DIAGNOSTIC_REPORT: { includeCampaignName?: boolean; webAppContext?: Record<string, unknown> };
   SEND_TEST_TEXT: { phone: string; message: string };
   PROCESS_TEST_CONTACT: { phone: string; message: string; images: SerializedCampaignImage[]; faultInjection?: DevelopmentFault };
   RESUME_CONTACT_PROCESS: Record<string, never>;
@@ -68,6 +70,7 @@ export interface InternalRequestMap {
   CAMPAIGN_RETRY: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_RETRY_FAILED: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_STOP: { campaignId: string; expectedSequence?: number };
+  CAMPAIGN_CANCEL: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_DELETE: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_STATUS: { campaignId?: string };
   CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
@@ -87,6 +90,7 @@ export interface InternalRequestMap {
   WA_SEND_IMAGE: ImageSendInput;
   WA_RECONCILE_STEP: ReconcileStepInput;
   WA_OPERATION_STAGE: { operationId: string; stage: "send_attempted"; baselineOutgoingIds: string[] };
+  WA_DIAGNOSTIC_SNAPSHOT: Record<string, never>;
   WEB_APP_PING: Record<string, never>;
   WEB_APP_PREPARE_CAMPAIGN: SerializedCampaignPayload;
   WEB_APP_CANCEL_CAMPAIGN: { campaignId: string };
@@ -107,6 +111,7 @@ export interface InternalResponseMap {
   CAMPAIGN_RETRY: CampaignPublicStatus;
   CAMPAIGN_RETRY_FAILED: CampaignPublicStatus;
   CAMPAIGN_STOP: CampaignPublicStatus;
+  CAMPAIGN_CANCEL: CampaignPublicStatus;
   CAMPAIGN_DELETE: { campaignId: string; releasedAt: string };
   CAMPAIGN_STATUS: CampaignPublicStatus | null;
   CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
@@ -118,9 +123,16 @@ export interface InternalResponseMap {
   WA_SEND_IMAGE: ImageSendResult;
   WA_RECONCILE_STEP: StepReconciliationResult;
   WA_OPERATION_STAGE: { recorded: boolean };
+  WA_DIAGNOSTIC_SNAPSHOT: {
+    contentInstanceId: string;
+    documentReadyState: string;
+    composerPresent: boolean;
+    activeProofControllers: number;
+    runtimeMetrics: Record<string, unknown>;
+  };
   WEB_APP_PING: FlorMiaExtensionStatus;
   WEB_APP_PREPARE_CAMPAIGN: CampaignPublicStatus;
-  WEB_APP_CANCEL_CAMPAIGN: { campaignId: string; cancelledAt: string };
+  WEB_APP_CANCEL_CAMPAIGN: CampaignPublicStatus & { emitterReleased: true };
 }
 
 export interface InternalEnvelope<T extends InternalMessageType = InternalMessageType> {
@@ -204,7 +216,9 @@ export const WEB_APP_MESSAGE_TYPES = {
   retryFailedRequest: "FLORMIA_CAMPAIGN_RETRY_FAILED",
   stopRequest: "FLORMIA_CAMPAIGN_STOP",
   deleteRequest: "FLORMIA_CAMPAIGN_DELETE",
-  statusRequest: "FLORMIA_CAMPAIGN_STATUS_REQUEST"
+  statusRequest: "FLORMIA_CAMPAIGN_STATUS_REQUEST",
+  diagnosticReportRequest: "FLORMIA_DIAGNOSTIC_REPORT_REQUEST",
+  diagnosticReport: "FLORMIA_DIAGNOSTIC_REPORT"
 } as const;
 
 export type WebAppMessageType = (typeof WEB_APP_MESSAGE_TYPES)[keyof typeof WEB_APP_MESSAGE_TYPES];
@@ -251,7 +265,8 @@ const webAppInboundTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.retryFailedRequest,
   WEB_APP_MESSAGE_TYPES.stopRequest,
   WEB_APP_MESSAGE_TYPES.deleteRequest,
-  WEB_APP_MESSAGE_TYPES.statusRequest
+  WEB_APP_MESSAGE_TYPES.statusRequest,
+  WEB_APP_MESSAGE_TYPES.diagnosticReportRequest
 ]);
 
 const webAppControlTypes = new Set<string>([

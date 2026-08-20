@@ -1,7 +1,7 @@
 import { isAllowedWebAppOrigin } from "../config/origins";
 import { INTERNAL_CHANNEL, INTERNAL_MESSAGE_TYPES, PROTOCOL_VERSION } from "../shared/protocol";
 
-export type CampaignControlIntent = "pause" | "stop";
+export type CampaignControlIntent = "pause" | "stop" | "cancel";
 
 type CampaignControlRequest = { kind: CampaignControlIntent; requestedAt: string };
 
@@ -9,13 +9,15 @@ const intents = new Map<string, CampaignControlRequest>();
 const completedRequests = new Map<string, CampaignControlRequest>();
 const activeControllers = new Map<string, AbortController>();
 
+const CONTROL_WEIGHT: Record<CampaignControlIntent, number> = { pause: 1, stop: 2, cancel: 3 };
+
 export function requestCampaignControlIntent(campaignId: string, kind: CampaignControlIntent): string {
   const requestedAt = new Date().toISOString();
   const existing = intents.get(campaignId);
-  if (!existing || existing.kind !== "stop") intents.set(campaignId, { kind, requestedAt });
+  if (!existing || CONTROL_WEIGHT[kind] >= CONTROL_WEIGHT[existing.kind]) {
+    intents.set(campaignId, { kind, requestedAt });
+  }
   completedRequests.delete(campaignId);
-  // AbortController sólo alcanza esperas pre-send que cooperan con AbortSignal.
-  // Los clicks/sendAttempted no se abortan: su reconciliación conserva prioridad.
   activeControllers.get(campaignId)?.abort();
   return requestedAt;
 }
@@ -38,11 +40,7 @@ export function hasCampaignControlIntent(campaignId: string): boolean {
 
 export function clearCampaignControlIntent(campaignId: string): void {
   const current = intents.get(campaignId);
-  if (current) {
-    completedRequests.set(campaignId, current);
-    // Sólo se conserva el último request por campaña para correlacionar la traza inmediata;
-    // un request nuevo reemplaza esta referencia y no se acumula historial en memoria.
-  }
+  if (current) completedRequests.set(campaignId, current);
   intents.delete(campaignId);
 }
 
@@ -53,6 +51,10 @@ export function registerActiveContactController(campaignId: string, controller: 
 
 export function releaseActiveContactController(campaignId: string, controller: AbortController): void {
   if (activeControllers.get(campaignId) === controller) activeControllers.delete(campaignId);
+}
+
+export function activeControlControllerCount(): number {
+  return activeControllers.size;
 }
 
 function senderMayControl(sender: chrome.runtime.MessageSender, source: unknown): boolean {
@@ -67,20 +69,19 @@ function senderMayControl(sender: chrome.runtime.MessageSender, source: unknown)
   }
 }
 
-// Listener deliberadamente síncrono y mínimo. Se registra durante la evaluación del
-// Service Worker, antes del dispatcher serializado. Sólo marca intención/cancela waits
-// cooperativos; la transición durable sigue pasando por CampaignEngine y su cola.
 if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message: unknown, sender) => {
     if (!message || typeof message !== "object") return false;
     const value = message as Record<string, unknown>;
     if (value.channel !== INTERNAL_CHANNEL || value.protocolVersion !== PROTOCOL_VERSION) return false;
     if (!senderMayControl(sender, value.source)) return false;
-    const kind = value.type === INTERNAL_MESSAGE_TYPES.campaignPause
+    const kind: CampaignControlIntent | null = value.type === INTERNAL_MESSAGE_TYPES.campaignPause
       ? "pause"
       : value.type === INTERNAL_MESSAGE_TYPES.campaignStop
         ? "stop"
-        : null;
+        : value.type === INTERNAL_MESSAGE_TYPES.campaignCancel || value.type === INTERNAL_MESSAGE_TYPES.webAppCancelCampaign
+          ? "cancel"
+          : null;
     if (!kind || !value.payload || typeof value.payload !== "object") return false;
     const campaignId = (value.payload as Record<string, unknown>).campaignId;
     if (typeof campaignId !== "string" || !campaignId.trim() || campaignId.length > 200) return false;

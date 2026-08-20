@@ -75,12 +75,8 @@
           <strong id="campaign-current-step">Esperando campaña</strong>
         </div>
         <p id="campaign-alert" class="process-alert" hidden></p>
-        <div class="campaign-controls">
-          <button id="campaign-start" class="button button--primary" type="button" disabled>Iniciar</button>
-          <button id="campaign-pause" class="button button--secondary" type="button" disabled>Pausar</button>
-          <button id="campaign-resume" class="button button--secondary" type="button" disabled>Reanudar</button>
-          <button id="campaign-stop" class="button button--danger" type="button" disabled>Detener</button>
-        </div>
+        <p class="process-alert">Los controles de campaña se administran desde App Integral FM.</p>
+        <button id="generate-report" class="button button--secondary button--wide" type="button">Generar reporte de situación actual</button>
       </section>
 
       <section id="incident-card" class="card incident-card" aria-live="polite" hidden>
@@ -109,7 +105,6 @@
             <div class="incident-grid__wide"><dt>Capability</dt><dd id="incident-capability">—</dd></div>
           </dl>
         </details>
-        <button id="generate-report" class="button button--secondary button--wide" type="button">Generar reporte para soporte</button>
         <small>El reporte se genera y sanea localmente. No se envía automáticamente.</small>
       </section>
 

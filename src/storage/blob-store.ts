@@ -1,8 +1,9 @@
-import { ERROR_CODES, ExtensionError } from "../shared/errors";
-
-const DATABASE_NAME = "flor-mia-whatsapp-sender";
-const DATABASE_VERSION = 1;
-const STORE_NAME = "campaign-blobs";
+import {
+  CAMPAIGN_BLOB_STORE,
+  openFlorMiaDatabase,
+  recordIndexedDbWrite,
+  requestResult
+} from "./database";
 
 export interface CampaignBlobInput {
   imageId: string;
@@ -18,36 +19,16 @@ export interface StoredCampaignBlob extends CampaignBlobInput {
   createdAt: string;
 }
 
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
-  });
-}
-
 export class CampaignBlobStore {
   constructor(private readonly indexedDb: IDBFactory = globalThis.indexedDB) {}
 
-  private async open(): Promise<IDBDatabase> {
-    if (!this.indexedDb) throw new ExtensionError(ERROR_CODES.storageError, "IndexedDB no está disponible.");
-    const request = this.indexedDb.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
-        const store = database.createObjectStore(STORE_NAME, { keyPath: "key" });
-        store.createIndex("campaignId", "campaignId", { unique: false });
-      }
-    };
-    return requestResult(request);
-  }
-
   async putCampaignImages(campaignId: string, images: CampaignBlobInput[]): Promise<void> {
-    if (!campaignId.trim()) throw new ExtensionError(ERROR_CODES.storageError, "campaignId es obligatorio para guardar imágenes.");
-    const database = await this.open();
+    if (!campaignId.trim()) throw new Error("campaignId es obligatorio para guardar imágenes.");
+    const database = await openFlorMiaDatabase(this.indexedDb);
     try {
       await new Promise<void>((resolve, reject) => {
-        const transaction = database.transaction(STORE_NAME, "readwrite");
-        const store = transaction.objectStore(STORE_NAME);
+        const transaction = database.transaction(CAMPAIGN_BLOB_STORE, "readwrite");
+        const store = transaction.objectStore(CAMPAIGN_BLOB_STORE);
         for (const image of images) {
           const record: StoredCampaignBlob = {
             ...image,
@@ -61,15 +42,16 @@ export class CampaignBlobStore {
         transaction.onerror = () => reject(transaction.error ?? new Error("No se pudieron guardar las imágenes."));
         transaction.onabort = () => reject(transaction.error ?? new Error("Se canceló el guardado de imágenes."));
       });
+      recordIndexedDbWrite(images.map(({ blob, ...image }) => ({ ...image, blobSize: blob.size })));
     } finally {
       database.close();
     }
   }
 
   async getImage(campaignId: string, imageId: string): Promise<StoredCampaignBlob | null> {
-    const database = await this.open();
+    const database = await openFlorMiaDatabase(this.indexedDb);
     try {
-      const result = await requestResult(database.transaction(STORE_NAME).objectStore(STORE_NAME).get(`${campaignId}:${imageId}`));
+      const result = await requestResult(database.transaction(CAMPAIGN_BLOB_STORE).objectStore(CAMPAIGN_BLOB_STORE).get(`${campaignId}:${imageId}`));
       return result as StoredCampaignBlob | undefined ?? null;
     } finally {
       database.close();
@@ -77,9 +59,9 @@ export class CampaignBlobStore {
   }
 
   async listCampaignImages(campaignId: string): Promise<StoredCampaignBlob[]> {
-    const database = await this.open();
+    const database = await openFlorMiaDatabase(this.indexedDb);
     try {
-      const index = database.transaction(STORE_NAME).objectStore(STORE_NAME).index("campaignId");
+      const index = database.transaction(CAMPAIGN_BLOB_STORE).objectStore(CAMPAIGN_BLOB_STORE).index("campaignId");
       const result = await requestResult(index.getAll(IDBKeyRange.only(campaignId)));
       return (result as StoredCampaignBlob[]).sort((a, b) => a.order - b.order);
     } finally {
@@ -88,23 +70,25 @@ export class CampaignBlobStore {
   }
 
   async deleteCampaign(campaignId: string): Promise<number> {
-    const database = await this.open();
+    const database = await openFlorMiaDatabase(this.indexedDb);
     try {
-      return await new Promise<number>((resolve, reject) => {
-        const transaction = database.transaction(STORE_NAME, "readwrite");
-        const index = transaction.objectStore(STORE_NAME).index("campaignId");
+      const deleted = await new Promise<number>((resolve, reject) => {
+        const transaction = database.transaction(CAMPAIGN_BLOB_STORE, "readwrite");
+        const index = transaction.objectStore(CAMPAIGN_BLOB_STORE).index("campaignId");
         const cursorRequest = index.openKeyCursor(IDBKeyRange.only(campaignId));
-        let deleted = 0;
+        let count = 0;
         cursorRequest.onsuccess = () => {
           const cursor = cursorRequest.result;
           if (!cursor) return;
-          transaction.objectStore(STORE_NAME).delete(cursor.primaryKey);
-          deleted += 1;
+          transaction.objectStore(CAMPAIGN_BLOB_STORE).delete(cursor.primaryKey);
+          count += 1;
           cursor.continue();
         };
-        transaction.oncomplete = () => resolve(deleted);
+        transaction.oncomplete = () => resolve(count);
         transaction.onerror = () => reject(transaction.error ?? new Error("No se pudieron eliminar las imágenes."));
       });
+      recordIndexedDbWrite({ deletedCampaign: campaignId, deleted });
+      return deleted;
     } finally {
       database.close();
     }

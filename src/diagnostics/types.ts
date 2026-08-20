@@ -173,8 +173,9 @@ export interface ServiceWorkerRecoveryInfo {
 }
 
 export interface TechnicalReportV1 {
-  reportSchemaVersion: 1;
+  reportSchemaVersion: 2;
   generatedAt: string;
+  diagnosticSessionId: string;
   extension: {
     name: "Flor Mía WhatsApp Sender";
     extensionVersion: string;
@@ -198,6 +199,8 @@ export interface TechnicalReportV1 {
   dailyLimit: SanitizedDailyLimit | null;
   recentTechnicalOperations: Array<Record<string, unknown>>;
   trace: TechnicalTraceRecord[];
+  olderTraceCount: number;
+  runtimeSnapshot: Record<string, unknown>;
   serviceWorkerRecovery: ServiceWorkerRecoveryInfo | null;
   repairContext: {
     probableFiles: string[];

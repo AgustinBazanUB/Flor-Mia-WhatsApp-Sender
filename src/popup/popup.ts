@@ -49,10 +49,6 @@ const campaignProgressBar = element<HTMLElement>("campaign-progress-bar");
 const campaignCurrentContact = element("campaign-current-contact");
 const campaignCurrentStep = element("campaign-current-step");
 const campaignAlert = element("campaign-alert");
-const campaignStart = element<HTMLButtonElement>("campaign-start");
-const campaignPause = element<HTMLButtonElement>("campaign-pause");
-const campaignResume = element<HTMLButtonElement>("campaign-resume");
-const campaignStop = element<HTMLButtonElement>("campaign-stop");
 const incidentCard = element("incident-card");
 const incidentTitle = element("incident-title");
 const incidentCategory = element("incident-category");
@@ -214,6 +210,7 @@ function campaignStatusLabel(status: NonNullable<ExtensionState["activeCampaign"
     images_required: "Requiere imágenes",
     error: "Error",
     stopped: "Detenida",
+    cancelled: "Cancelada",
     completed: "Completada"
   };
   return labels[status];
@@ -233,10 +230,6 @@ function renderCampaign(state: ExtensionState): void {
     campaignProgressBar.parentElement?.setAttribute("aria-valuenow", "0");
     campaignCurrentContact.textContent = "Sin contacto activo";
     campaignCurrentStep.textContent = "Esperando campaña";
-    campaignStart.disabled = true;
-    campaignPause.disabled = true;
-    campaignResume.disabled = true;
-    campaignStop.disabled = true;
     return;
   }
   const completed = campaign.sent;
@@ -269,11 +262,6 @@ function renderCampaign(state: ExtensionState): void {
     campaignAlert.textContent = campaign.blockReason.message;
   }
 
-  const terminal = campaign.status === "completed" || campaign.status === "stopped";
-  campaignStart.disabled = !["received", "ready"].includes(campaign.status);
-  campaignPause.disabled = !["running", "waiting_contact", "waiting_batch"].includes(campaign.status);
-  campaignResume.disabled = !["paused", "daily_limit_reached"].includes(campaign.status);
-  campaignStop.disabled = terminal;
 }
 
 function renderIncident(incident: DiagnosticIncident | null, activeCampaignName: string | null): void {
@@ -450,44 +438,6 @@ reselectForm.addEventListener("submit", (event) => {
     .finally(() => setBusy(reselectButton, false, "Restaurando…", "Restaurar imágenes"));
 });
 
-function activeCampaignId(): string {
-  const campaignId = currentState?.activeCampaign?.campaignId;
-  if (!campaignId) throw new Error("No hay una campaña activa.");
-  return campaignId;
-}
-
-campaignStart.addEventListener("click", () => {
-  clearError();
-  setBusy(campaignStart, true, "Iniciando…", "Iniciar");
-  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignStart, { campaignId: activeCampaignId() })
-    .then(() => refreshState()).catch(showError)
-    .finally(() => setBusy(campaignStart, false, "Iniciando…", "Iniciar"));
-});
-
-campaignPause.addEventListener("click", () => {
-  clearError();
-  setBusy(campaignPause, true, "Pausando…", "Pausar");
-  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignPause, { campaignId: activeCampaignId() })
-    .then(() => refreshState()).catch(showError)
-    .finally(() => setBusy(campaignPause, false, "Pausando…", "Pausar"));
-});
-
-campaignResume.addEventListener("click", () => {
-  clearError();
-  setBusy(campaignResume, true, "Reanudando…", "Reanudar");
-  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignResume, { campaignId: activeCampaignId() })
-    .then(() => refreshState()).catch(showError)
-    .finally(() => setBusy(campaignResume, false, "Reanudando…", "Reanudar"));
-});
-
-campaignStop.addEventListener("click", () => {
-  if (!window.confirm("¿Detener esta campaña? No se procesarán más contactos.")) return;
-  clearError();
-  setBusy(campaignStop, true, "Deteniendo…", "Detener");
-  void sendRuntimeRequest("popup", INTERNAL_MESSAGE_TYPES.campaignStop, { campaignId: activeCampaignId() })
-    .then(() => refreshState()).catch(showError)
-    .finally(() => setBusy(campaignStop, false, "Deteniendo…", "Detener"));
-});
 
 generateReport.addEventListener("click", () => {
   clearError();

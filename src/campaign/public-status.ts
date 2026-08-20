@@ -28,7 +28,7 @@ export function toCampaignPublicStatus(
       : campaign.recipients[campaign.currentRecipientIndex] ?? null;
   const progress = progressForCampaign(campaign);
   const counters = campaignRecipientCounters(campaign);
-  const terminalAt = campaign.completedAt ?? campaign.stoppedAt ?? null;
+  const terminalAt = campaign.completedAt ?? campaign.stoppedAt ?? campaign.cancelledAt ?? null;
   const startedAt = campaign.startedAt ?? campaign.createdAt;
   const error = campaign.blockReason?.error ?? null;
   const errorSummary = campaign.blockReason ? {
@@ -37,8 +37,27 @@ export function toCampaignPublicStatus(
     message: campaign.blockReason.message,
     recoverable: campaign.blockReason.recoverable
   } : null;
-  const finalSummary = campaign.status === "completed" && terminalAt ? {
+  const terminalStatus = ["completed", "stopped", "cancelled"].includes(campaign.status)
+    ? campaign.status as "completed" | "stopped" | "cancelled"
+    : null;
+  const cancellationEvidence = checkpoint?.campaignId === campaign.campaignId
+    ? (() => {
+        const step = [...checkpoint.steps].reverse().find((item) => item.verification?.sendAttempted === true);
+        if (!step) return null;
+        return {
+          stepId: step.id,
+          operationId: step.operationId,
+          sendAttempted: true,
+          verificationOutcome: step.verification?.outcome ?? null,
+          observedAt: step.verification?.observedAt ?? null,
+          errorCategory: step.error ? classifyDiagnosticError(step.error) : null,
+          maskedPhone: checkpoint.contact.maskedPhone
+        };
+      })()
+    : null;
+  const finalSummary = terminalStatus && terminalAt ? {
     campaignId: campaign.campaignId,
+    terminalStatus,
     completedAt: terminalAt,
     total: counters.total,
     processed: counters.processed,
@@ -49,7 +68,9 @@ export function toCampaignPublicStatus(
     durationMs: durationBetween(startedAt, terminalAt),
     batches: campaign.batchNumber,
     sentToday: campaign.dailyLimit.completedToday,
-    extensionVersion: options.extensionVersion
+    extensionVersion: options.extensionVersion,
+    lastCompletedContactId: campaign.lastCompletedContactId,
+    cancellationEvidence
   } : null;
   return {
     snapshotSchemaVersion: 1,
@@ -104,6 +125,7 @@ export function toCampaignPublicStatus(
     blockReason: campaign.blockReason,
     pauseRequested: campaign.pauseRequested,
     stopRequested: campaign.stopRequested,
+    cancelRequested: campaign.cancelRequested,
     sequence: campaign.sequence,
     retryCycle: campaign.retryCycle ?? 0,
     retryableFailed: campaign.recipients.filter((item) => item.status === "error" && item.failure?.retryEligible === true && item.failure.ambiguous !== true).length,

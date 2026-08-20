@@ -226,7 +226,7 @@ describe("CampaignRuntime terminal finalization", () => {
     expect(await history.list()).toEqual([expect.objectContaining({ status: "stopped", errorCategory: "USER_STOP" })]);
   });
 
-  it("refuses stopped cleanup while post-click evidence is still ambiguous", async () => {
+  it("archives a stopped campaign while retaining ambiguous post-click evidence for explicit cancel/review", async () => {
     const paused = campaign("paused");
     const stopped: CampaignState = {
       ...paused,
@@ -250,10 +250,10 @@ describe("CampaignRuntime terminal finalization", () => {
       verification: { outcome: "ambiguous", method: "test", observedAt: NOW, sendAttempted: true }
     }];
     const { runtime, blobs, checkpoints, history } = setup(stopped, ambiguous);
-    await expect(runtime.syncCampaign(stopped)).rejects.toThrow(/ambiguo/i);
+    await expect(runtime.syncCampaign(stopped)).resolves.toMatchObject({ status: "stopped" });
     expect(blobs.deleted).toEqual([]);
     expect(checkpoints.active).toBe(ambiguous);
-    expect(await history.list()).toEqual([]);
+    expect(await history.list()).toEqual([expect.objectContaining({ status: "stopped" })]);
   });
 
   it("refuses completion cleanup if a contact checkpoint is incomplete", async () => {

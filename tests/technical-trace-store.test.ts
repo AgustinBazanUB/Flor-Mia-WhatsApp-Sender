@@ -41,7 +41,7 @@ describe("TechnicalTraceStore", () => {
 
     const records = await store.listCampaign("campaign-a", 1_000);
     expect(records).toHaveLength(MAX_TRACE_RECORDS_PER_CAMPAIGN);
-    expect(records[0]?.traceId).toBe("campaign-a-20");
+    expect(records[0]?.traceId).toBe(`campaign-a-${520 - MAX_TRACE_RECORDS_PER_CAMPAIGN}`);
     expect(records.at(-1)?.traceId).toBe("campaign-a-519");
   });
 
@@ -49,11 +49,12 @@ describe("TechnicalTraceStore", () => {
     const store = new TechnicalTraceStore(new MemoryStorage());
     await store.appendMany(Array.from({ length: 510 }, (_, index) => trace("campaign-a", index)));
     await store.appendMany(Array.from({ length: 510 }, (_, index) => trace("campaign-b", index)));
-    await store.append({ ...trace("campaign-b", 509), outcome: "reconciled" });
+    await store.appendMany(Array.from({ length: 510 }, (_, index) => trace("campaign-c", index)));
+    await store.append({ ...trace("campaign-c", 509), outcome: "reconciled" });
 
     const all = await store.listRecent(2_000);
     expect(all).toHaveLength(MAX_TRACE_RECORDS_GLOBAL);
-    expect(all.filter((record) => record.traceId === "campaign-b-509")).toHaveLength(1);
+    expect(all.filter((record) => record.traceId === "campaign-c-509")).toHaveLength(1);
     expect(all.at(-1)?.outcome).toBe("reconciled");
 
     await store.clearCampaign("campaign-a");

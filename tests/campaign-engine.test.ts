@@ -462,15 +462,15 @@ describe("multi-contact CampaignEngine", () => {
     expect(runner.calls).toEqual(["contact-1"]);
   });
 
-  it("keeps Stop as intent while an ambiguous post-click result awaits reconciliation", async () => {
+  it("Stop terminalizes at the safe boundary while preserving ambiguous post-click evidence", async () => {
     const { engine, runner, checkpoints } = setup(2);
     runner.outcomes.set("contact-1", ["ambiguous"]);
     runner.onAmbiguous = async () => { await engine.requestStop("campaign-1"); };
     const result = await startAndAdvance(engine, 1);
-    expect(result.status).toBe("paused");
+    expect(result.status).toBe("stopped");
     expect(result.stopRequested).toBe(true);
-    expect(result.blockReason?.code).toBe("contact_ambiguous");
     expect(checkpoints.active?.steps[0]?.status).toBe("verification_pending");
+    expect(checkpoints.active?.steps[0]?.verification?.sendAttempted).toBe(true);
     expect(result.recipients[1]?.status).toBe("pending");
   });
 

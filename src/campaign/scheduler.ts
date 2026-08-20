@@ -35,7 +35,7 @@ export class CampaignScheduler {
 
   async schedule(campaign: CampaignState, immediate = false): Promise<void> {
     if (!campaign.runToken) throw new Error("La campaña no tiene token de ejecución persistente.");
-    if (["completed", "stopped", "paused", "images_required", "error", "daily_limit_reached"].includes(campaign.status)) {
+    if (["completed", "stopped", "cancelled", "paused", "images_required", "error", "daily_limit_reached"].includes(campaign.status)) {
       await this.dependencies.wakeups.cancel(campaign.campaignId, campaign.runToken);
       return;
     }

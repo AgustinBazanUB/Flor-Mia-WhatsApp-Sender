@@ -9,6 +9,7 @@ import { toCampaignPublicStatus } from "../campaign/public-status";
 import type {
   CampaignBlockReason,
   CampaignHistoryRecord,
+  CancellationEvidenceSummary,
   CampaignHistoryRepository,
   CampaignPublicStatus,
   CampaignRepository,
@@ -41,7 +42,7 @@ import {
   releaseActiveContactController
 } from "./control-intent";
 
-const TERMINAL_CAMPAIGNS = new Set<CampaignState["status"]>(["completed", "stopped"]);
+const TERMINAL_CAMPAIGNS = new Set<CampaignState["status"]>(["completed", "stopped", "cancelled"]);
 
 type CampaignBlobRepository = Pick<CampaignBlobStore, "putCampaignImages" | "getImage" | "deleteCampaign">;
 
@@ -79,7 +80,8 @@ function statusMessage(campaign: CampaignState): string {
       ? `Campaña completada · ${counters.sent} enviados · ${counters.failed} con problemas.`
       : `Campaña completada con éxito: ${counters.sent}/${counters.total} enviados.`;
   }
-  if (campaign.status === "stopped") return "Campaña detenida por el usuario. Podés quitarla del emisor cuando no haya un envío ambiguo pendiente.";
+  if (campaign.status === "stopped") return "Campaña detenida por el usuario.";
+  if (campaign.status === "cancelled") return "Campaña cancelada. El emisor será liberado automáticamente.";
   if (campaign.status === "daily_limit_reached") return "Límite diario alcanzado. No se iniciarán más contactos hoy.";
   if (campaign.status === "images_required") return "La campaña requiere volver a seleccionar imágenes temporales.";
   if (campaign.status === "waiting_batch") return "Tanda completada. Esperando la pausa configurada.";
@@ -141,8 +143,7 @@ export class CampaignRuntime {
         }
       },
       healthCheck: async (campaign) => this.runLightweightHealthCheck(campaign),
-      now: this.now,
-      onCampaign: async (campaign) => { await this.syncCampaign(campaign); }
+      now: this.now
     });
     this.scheduler = new CampaignScheduler({
       engine: this.engine,
@@ -154,14 +155,31 @@ export class CampaignRuntime {
     });
   }
 
+  private cancellationEvidence(
+    checkpoint: ContactProcessCheckpoint | null
+  ): CancellationEvidenceSummary | null {
+    if (!checkpoint) return null;
+    const step = [...checkpoint.steps].reverse().find((item) => item.verification?.sendAttempted === true);
+    if (!step) return null;
+    return {
+      stepId: step.id,
+      operationId: step.operationId,
+      sendAttempted: true,
+      verificationOutcome: step.verification?.outcome ?? null,
+      observedAt: step.verification?.observedAt ?? null,
+      errorCategory: null,
+      maskedPhone: checkpoint.contact.maskedPhone
+    };
+  }
+
   private async finalizeTerminalCampaign(
     campaign: CampaignState,
     checkpoint: ContactProcessCheckpoint | null
   ): Promise<void> {
-    if (campaign.status !== "completed" && campaign.status !== "stopped") return;
+    if (!["completed", "stopped", "cancelled"].includes(campaign.status)) return;
     const matchingCheckpoint = checkpoint?.campaignId === campaign.campaignId ? checkpoint : null;
-    if (hasUnresolvedSendEvidence(matchingCheckpoint)) {
-      throw new ExtensionError(ERROR_CODES.internal, "La campaña terminal conserva un envío ambiguo pendiente de reconciliación.", { recoverable: false });
+    if (campaign.status === "completed" && hasUnresolvedSendEvidence(matchingCheckpoint)) {
+      throw new ExtensionError(ERROR_CODES.internal, "La campaña completada conserva un envío ambiguo pendiente de reconciliación.", { recoverable: false });
     }
     const counters = campaignRecipientCounters(campaign);
     if (campaign.status === "completed") {
@@ -177,7 +195,7 @@ export class CampaignRuntime {
       if (matchingCheckpoint) await this.dependencies.checkpointStore.clearActive();
     }
 
-    const completedAt = campaign.completedAt ?? campaign.stoppedAt;
+    const completedAt = campaign.completedAt ?? campaign.stoppedAt ?? campaign.cancelledAt;
     if (!completedAt) {
       throw new ExtensionError(ERROR_CODES.internal, "La campaña terminal no tiene timestamp de finalización.", { recoverable: false });
     }
@@ -187,8 +205,10 @@ export class CampaignRuntime {
       historySchemaVersion: 1,
       campaignId: campaign.campaignId,
       campaignName: campaign.campaignName,
+      createdAt: campaign.createdAt,
       startedAt: campaign.startedAt ?? null,
       completedAt,
+      cancelledAt: campaign.cancelledAt ?? null,
       total: campaign.recipients.length,
       completed: counters.sent,
       failed: counters.failed,
@@ -196,8 +216,10 @@ export class CampaignRuntime {
       confirmedSent: counters.confirmedSent,
       unverifiedSent: counters.unverifiedSent,
       retryCycle: campaign.retryCycle ?? 0,
-      status: campaign.status,
-      errorCategory: campaign.status === "stopped" ? "USER_STOP" : null,
+      status: campaign.status as "completed" | "stopped" | "cancelled",
+      errorCategory: campaign.status === "stopped" || campaign.status === "cancelled" ? "USER_STOP" : null,
+      lastCompletedContactId: campaign.lastCompletedContactId,
+      cancellationEvidence: this.cancellationEvidence(matchingCheckpoint),
       extensionVersion: this.extensionVersion,
       dailyCounterImpact,
       durationMs: durationMs(campaign.startedAt ?? campaign.createdAt, completedAt),
@@ -212,6 +234,8 @@ export class CampaignRuntime {
   }
 
   async syncCampaign(campaign: CampaignState): Promise<CampaignPublicStatus> {
+    const { recordCampaignSync } = await import("../performance/runtime-metrics");
+    recordCampaignSync();
     const checkpoint = await this.dependencies.checkpointStore.loadActive();
     const currentRecipient = campaign.activeContactId
       ? campaign.recipients.find((recipient) => recipient.recipientId === campaign.activeContactId) ?? null
@@ -286,6 +310,10 @@ export class CampaignRuntime {
     }
     campaign = await this.engine.recoverAfterServiceWorkerRestart(campaign, checkpoint);
     await this.syncCampaign(campaign);
+    if (campaign.status === "cancelled") {
+      await this.releaseCancelled(campaign);
+      return null;
+    }
     if (campaign.status === "waiting_batch" || campaign.status === "waiting_contact") await this.scheduler.schedule(campaign);
     return campaign;
   }
@@ -329,7 +357,9 @@ export class CampaignRuntime {
     if (!["received", "ready"].includes(current.status)) {
       throw new ExtensionError(ERROR_CODES.invalidInput, "Iniciar solo está disponible para una campaña recibida y preparada.");
     }
-    const campaign = await this.requireOperationalPreflight(campaignId);
+    const campaign = current;
+    const health = await this.runLightweightHealthCheck(campaign);
+    if (!health.healthy) throw new ExtensionError(health.error?.code ?? ERROR_CODES.preflightFailed, health.message ?? "WhatsApp no está listo para iniciar.", { recoverable: true });
     const started = await this.engine.start(campaign.campaignId);
     await this.scheduler.schedule(started, true);
     return this.syncCampaign(started);
@@ -387,7 +417,8 @@ export class CampaignRuntime {
     if (current.status === "images_required") {
       throw new ExtensionError(ERROR_CODES.imageMissing, "Volvé a seleccionar las imágenes antes de reanudar.");
     }
-    await this.requireOperationalPreflight(campaignId);
+    const health = await this.runLightweightHealthCheck(current);
+    if (!health.healthy) throw new ExtensionError(health.error?.code ?? ERROR_CODES.preflightFailed, health.message ?? "WhatsApp no está listo para reanudar.", { recoverable: true });
     const resumed = await this.engine.resume(campaignId);
     await this.scheduler.schedule(resumed, !resumed.wait);
     return this.syncCampaign(resumed);
@@ -395,7 +426,10 @@ export class CampaignRuntime {
 
   async retry(campaignId: string): Promise<CampaignPublicStatus> {
     clearCampaignControlIntent(campaignId);
-    await this.requireOperationalPreflight(campaignId);
+    const current = await this.campaignStore.loadActive();
+    if (!current || current.campaignId !== campaignId) throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
+    const health = await this.runLightweightHealthCheck(current);
+    if (!health.healthy) throw new ExtensionError(health.error?.code ?? ERROR_CODES.preflightFailed, health.message ?? "WhatsApp no está listo para reintentar.", { recoverable: true });
     const retried = await this.engine.retry(campaignId);
     await this.scheduler.schedule(retried, true);
     return this.syncCampaign(retried);
@@ -403,7 +437,10 @@ export class CampaignRuntime {
 
   async retryFailed(campaignId: string): Promise<CampaignPublicStatus> {
     clearCampaignControlIntent(campaignId);
-    await this.requireOperationalPreflight(campaignId);
+    const current = await this.campaignStore.loadActive();
+    if (!current || current.campaignId !== campaignId) throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
+    const health = await this.runLightweightHealthCheck(current);
+    if (!health.healthy) throw new ExtensionError(health.error?.code ?? ERROR_CODES.preflightFailed, health.message ?? "WhatsApp no está listo para reintentar fallidos.", { recoverable: true });
     const retried = await this.engine.retryFailed(campaignId);
     await this.scheduler.schedule(retried, retried.status === "running");
     return this.syncCampaign(retried);
@@ -415,9 +452,8 @@ export class CampaignRuntime {
       throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
     }
     if (current.status === "stopped") {
-      const snapshot = await this.syncCampaign(current);
-      await this.release(campaignId);
-      return snapshot;
+      clearCampaignControlIntent(campaignId);
+      return this.syncCampaign(current);
     }
     const campaign = await this.engine.requestStop(campaignId);
     if (campaign.status === "stopped") {
@@ -427,6 +463,49 @@ export class CampaignRuntime {
     }
     clearCampaignControlIntent(campaignId);
     return this.syncCampaign(campaign);
+  }
+
+  async cancel(campaignId: string): Promise<CampaignPublicStatus> {
+    const current = await this.campaignStore.loadActive();
+    if (!current || current.campaignId !== campaignId) {
+      throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña solicitada no coincide con la activa.");
+    }
+    if (current.status === "cancelled") {
+      const snapshot = await this.syncCampaign(current);
+      await this.releaseCancelled(current);
+      return snapshot;
+    }
+    const requested = await this.engine.requestCancel(campaignId);
+    let terminal = requested;
+    if (requested.status !== "cancelled") {
+      await this.scheduler.schedule(requested, true);
+      terminal = await this.scheduler.run(campaignId) ?? await this.campaignStore.loadActive() ?? requested;
+    }
+    if (terminal.status !== "cancelled") {
+      throw new ExtensionError(ERROR_CODES.internal, "La cancelación no alcanzó una frontera terminal.", { recoverable: true });
+    }
+    const snapshot = await this.syncCampaign(terminal);
+    await this.releaseCancelled(terminal);
+    return snapshot;
+  }
+
+  private async releaseCancelled(campaign: CampaignState): Promise<void> {
+    await this.scheduler.cancel(campaign);
+    const checkpoint = await this.dependencies.checkpointStore.loadActive();
+    if (checkpoint?.campaignId === campaign.campaignId) await this.dependencies.checkpointStore.clearActive();
+    await this.dependencies.blobStore.deleteCampaign(campaign.campaignId);
+    clearCampaignControlIntent(campaign.campaignId);
+    await this.campaignStore.clearActive();
+    await this.dependencies.stateStore.patch({
+      status: "idle",
+      activeCampaign: null,
+      currentCampaign: null,
+      progress: { total: 0, sent: 0, failed: 0 },
+      currentContact: null,
+      currentStep: null,
+      activeContactProcess: null,
+      statusMessage: "Emisor libre. La campaña cancelada quedó conservada en historial."
+    });
   }
 
   async release(campaignId: string): Promise<{ campaignId: string; releasedAt: string }> {

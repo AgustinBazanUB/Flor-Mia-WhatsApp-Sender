@@ -14,11 +14,12 @@ export const CAMPAIGN_STATUSES = [
   "images_required",
   "error",
   "stopped",
+  "cancelled",
   "completed"
 ] as const;
 
 export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
-export type CampaignRecipientStatus = "pending" | "active" | "paused" | "images_required" | "error" | "stopped" | "completed";
+export type CampaignRecipientStatus = "pending" | "active" | "paused" | "images_required" | "error" | "stopped" | "cancelled" | "completed";
 export type CampaignWaitKind = "between_contacts" | "between_batches";
 
 export interface CampaignPolicyConfig {
@@ -148,6 +149,7 @@ export interface CampaignState {
   contactsCompletedInBatch: number;
   pauseRequested: boolean;
   stopRequested: boolean;
+  cancelRequested?: boolean;
   wait: CampaignWaitState | null;
   blockReason: CampaignBlockReason | null;
   failureCircuit?: CampaignFailureCircuit;
@@ -160,6 +162,7 @@ export interface CampaignState {
   startedAt?: string;
   completedAt?: string;
   stoppedAt?: string;
+  cancelledAt?: string;
 }
 
 export interface CampaignPublicStatus {
@@ -213,14 +216,26 @@ export interface CampaignPublicStatus {
   blockReason: CampaignBlockReason | null;
   pauseRequested: boolean;
   stopRequested: boolean;
+  cancelRequested?: boolean;
   sequence: number;
   retryCycle: number;
   retryableFailed: number;
   finalSummary: FinalCampaignSummary | null;
 }
 
+export interface CancellationEvidenceSummary {
+  stepId: string | null;
+  operationId: string | null;
+  sendAttempted: boolean;
+  verificationOutcome: string | null;
+  observedAt: string | null;
+  errorCategory: DiagnosticErrorCategory | null;
+  maskedPhone: string | null;
+}
+
 export interface FinalCampaignSummary {
   campaignId: string;
+  terminalStatus: "completed" | "stopped" | "cancelled";
   completedAt: string;
   total: number;
   processed: number;
@@ -232,14 +247,18 @@ export interface FinalCampaignSummary {
   batches: number;
   sentToday: number;
   extensionVersion: string;
+  lastCompletedContactId: string | null;
+  cancellationEvidence: CancellationEvidenceSummary | null;
 }
 
 export interface CampaignHistoryRecord {
   historySchemaVersion: 1;
   campaignId: string;
   campaignName: string;
+  createdAt?: string;
   startedAt: string | null;
   completedAt: string;
+  cancelledAt?: string | null;
   total: number;
   completed: number;
   failed?: number;
@@ -247,8 +266,10 @@ export interface CampaignHistoryRecord {
   confirmedSent?: number;
   unverifiedSent?: number;
   retryCycle?: number;
-  status: Extract<CampaignStatus, "completed" | "stopped">;
+  status: Extract<CampaignStatus, "completed" | "stopped" | "cancelled">;
   errorCategory: DiagnosticErrorCategory | null;
+  lastCompletedContactId?: string | null;
+  cancellationEvidence?: CancellationEvidenceSummary | null;
   extensionVersion: string;
   dailyCounterImpact: number;
   durationMs: number;

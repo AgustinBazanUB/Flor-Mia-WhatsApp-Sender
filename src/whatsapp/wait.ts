@@ -1,4 +1,5 @@
 import { ERROR_CODES, ExtensionError } from "../shared/errors";
+import { recordObserverCreated, recordObserverDisconnected, recordTimerCleared, recordTimerCreated } from "../performance/runtime-metrics";
 
 export interface WaitOptions {
   timeoutMs?: number;
@@ -30,7 +31,9 @@ export async function waitForCondition<T>(
       if (settled) return;
       settled = true;
       observer.disconnect();
+      recordObserverDisconnected();
       clearTimeout(timer);
+      recordTimerCleared();
       signal?.removeEventListener("abort", onAbort);
       callback();
     };
@@ -43,6 +46,8 @@ export async function waitForCondition<T>(
       }
     };
     const observer = new MutationObserver(check);
+    recordObserverCreated();
+    recordTimerCreated();
     const timer = globalThis.setTimeout(() => {
       finish(() => reject(new ExtensionError(ERROR_CODES.timeout, `Tiempo agotado esperando ${description}.`, {
         details: { timeoutMs, description }
@@ -77,8 +82,12 @@ export async function waitForDocumentReady(
       document.removeEventListener("readystatechange", check);
       document.removeEventListener("DOMContentLoaded", check);
       globalThis.removeEventListener?.("load", check as EventListener);
-      observer?.disconnect();
+      if (observer) {
+        observer.disconnect();
+        recordObserverDisconnected();
+      }
       globalThis.clearTimeout(timer);
+      recordTimerCleared();
     };
 
     const finish = (callback: () => void): void => {
@@ -97,6 +106,7 @@ export async function waitForDocumentReady(
       }
     };
 
+    recordTimerCreated();
     const timer = globalThis.setTimeout(() => {
       finish(() => reject(new ExtensionError(ERROR_CODES.timeout, "Tiempo agotado esperando que WhatsApp Web quede utilizable.", {
         details: { timeoutMs, readyState: document.readyState }
@@ -109,6 +119,7 @@ export async function waitForDocumentReady(
 
     const root = document.documentElement ?? document;
     observer = new MutationObserver(check);
+    recordObserverCreated();
     // Sólo cambios estructurales durante esta espera acotada. No observamos atributos
     // globales ni mantenemos un interval de 100 ms sobre toda la sesión.
     observer.observe(root, { childList: true, subtree: true });

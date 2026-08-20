@@ -5,6 +5,7 @@ import { DEFAULT_RETRY_POLICY } from "../engine/retry-policy";
 import { DEFAULT_CAMPAIGN_POLICY, normalizeCampaignPolicy } from "../campaign/campaign-policy";
 import { createDefaultCompatibilityState } from "../compatibility/fingerprint";
 import { normalizeCompatibilityState } from "../compatibility/state-normalizer";
+import { recordStorageRead, recordStorageWrite } from "../performance/runtime-metrics";
 
 const STATE_KEY = "extensionState";
 const MAX_ERRORS = 20;
@@ -17,10 +18,13 @@ export interface KeyValueStorage {
 
 export class ChromeLocalStorageAdapter implements KeyValueStorage {
   async get(key: string): Promise<Record<string, unknown>> {
-    return chrome.storage.local.get(key);
+    const result = await chrome.storage.local.get(key);
+    recordStorageRead(false);
+    return result;
   }
 
   async set(items: Record<string, unknown>): Promise<void> {
+    recordStorageWrite(items, false);
     await chrome.storage.local.set(items);
   }
 }

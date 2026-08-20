@@ -24,6 +24,20 @@ describe("AsyncCommandQueue", () => {
     expect(order).toEqual(["first:start", "first:end", "second"]);
   });
 
+  it("runs a pending Stop before an earlier normal command once the current mutation completes", async () => {
+    const queue = new AsyncCommandQueue();
+    const order: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const running = queue.run(async () => { order.push("running"); await gate; }, { priority: "normal", label: "running" });
+    const resume = queue.run(async () => { order.push("resume"); }, { priority: "normal", label: "resume" });
+    const stop = queue.run(async () => { order.push("stop"); }, { priority: "critical", label: "stop" });
+    await Promise.resolve();
+    release();
+    await Promise.all([running, resume, stop]);
+    expect(order).toEqual(["running", "stop", "resume"]);
+  });
+
   it.each([
     ["Start", "Start"],
     ["Start", "Pause"],

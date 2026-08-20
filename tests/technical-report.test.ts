@@ -291,7 +291,7 @@ describe("TechnicalReportV1", () => {
 
   it("produces Spanish repair text, stable JSON and all required diagnostic evidence", () => {
     const result = bundle();
-    expect(result.report.reportSchemaVersion).toBe(1);
+    expect(result.report.reportSchemaVersion).toBe(2);
     expect(JSON.parse(result.json)).toEqual(result.report);
     expect(result.text).toContain("REPORTE PARA CODEX — FLOR MÍA WHATSAPP SENDER");
     expect(result.text).toContain("Preservar atomicidad, verificación y checkpoints. No reemplazar por clicks ciegos.");
@@ -378,7 +378,7 @@ describe("TechnicalReportV1", () => {
           "localOnly": true,
           "redactionMarker": "[REDACTED]",
         },
-        "schema": 1,
+        "schema": 2,
       }
     `);
   });

@@ -12,6 +12,7 @@ export const CAMPAIGN_PUBLIC_EVENT_TYPES = [
   "CAMPAIGN_RESUMED",
   "CAMPAIGN_ERROR",
   "CAMPAIGN_STOPPED",
+  "CAMPAIGN_CANCELLED",
   "CAMPAIGN_COMPLETED"
 ] as const;
 
@@ -61,6 +62,7 @@ function eventType(status: CampaignPublicStatus, previousLifecycle: CampaignEven
   if (status.status === "received") return "CAMPAIGN_ACCEPTED";
   if (status.status === "completed") return "CAMPAIGN_COMPLETED";
   if (status.status === "stopped") return "CAMPAIGN_STOPPED";
+  if (status.status === "cancelled") return "CAMPAIGN_CANCELLED";
   if (status.status === "error") return "CAMPAIGN_ERROR";
   if (["paused", "pause_requested", "daily_limit_reached", "images_required"].includes(status.status)) return "CAMPAIGN_PAUSED";
   if (status.status === "running") {

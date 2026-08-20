@@ -33,6 +33,7 @@ import type {
 
 export interface TechnicalReportInput {
   generatedAt: string;
+  diagnosticSessionId?: string;
   extensionVersion: string;
   manifestVersion: number;
   environment: DiagnosticEnvironment;
@@ -42,6 +43,8 @@ export interface TechnicalReportInput {
   checkpoint: ContactProcessCheckpoint | null;
   compatibility: CompatibilityState;
   trace: TechnicalTraceRecord[];
+  olderTraceCount?: number;
+  runtimeSnapshot?: Record<string, unknown>;
   serviceWorkerRecovery: ServiceWorkerRecoveryInfo | null;
   includeCampaignName?: boolean;
 }
@@ -297,8 +300,9 @@ export function buildTechnicalReport(input: TechnicalReportInput): TechnicalRepo
       }
     : null;
   return {
-    reportSchemaVersion: 1,
+    reportSchemaVersion: 2,
     generatedAt: input.generatedAt,
+    diagnosticSessionId: input.diagnosticSessionId ?? "diagnostic-session-unknown",
     extension: {
       name: "Flor Mía WhatsApp Sender",
       extensionVersion: input.extensionVersion,
@@ -347,7 +351,9 @@ export function buildTechnicalReport(input: TechnicalReportInput): TechnicalRepo
     },
     dailyLimit: input.campaign ? sanitizeDailyLimit(input.campaign.dailyLimit) : sanitizeDailyLimit(input.state.dailyLimit),
     recentTechnicalOperations: input.state.operations.slice(-20).map((operation) => sanitizeDiagnosticValue(operation, "", { sensitiveStrings }) as Record<string, unknown>),
-    trace: input.trace.slice(-200).map((record) => sanitizeDiagnosticValue(record, "", { sensitiveStrings }) as unknown as TechnicalTraceRecord),
+    trace: input.trace.slice(-50).map((record) => sanitizeDiagnosticValue(record, "", { sensitiveStrings }) as unknown as TechnicalTraceRecord),
+    olderTraceCount: Math.max(0, input.olderTraceCount ?? 0),
+    runtimeSnapshot: sanitizeDiagnosticValue(input.runtimeSnapshot ?? {}, "", { sensitiveStrings }) as Record<string, unknown>,
     serviceWorkerRecovery: recovery,
     repairContext: {
       probableFiles: probableFiles(input.incident, failedCapability, input.trace),
