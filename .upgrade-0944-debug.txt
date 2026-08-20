@@ -51,13 +51,9 @@ found 0 vulnerabilities
 > flor-mia-whatsapp-sender@0.9.4.4 typecheck
 > tsc --noEmit
 
-src/whatsapp/wait.ts(112,16): error TS1005: ',' expected.
-src/whatsapp/wait.ts(113,7): error TS1005: ',' expected.
-src/whatsapp/wait.ts(113,9): error TS1005: ',' expected.
-src/whatsapp/wait.ts(113,10): error TS1005: ';' expected.
-src/whatsapp/wait.ts(114,6): error TS1128: Declaration or statement expected.
-src/whatsapp/wait.ts(114,8): error TS1434: Unexpected keyword or identifier.
-src/whatsapp/wait.ts(114,17): error TS1128: Declaration or statement expected.
-src/whatsapp/wait.ts(126,3): error TS1128: Declaration or statement expected.
-src/whatsapp/wait.ts(126,4): error TS1128: Declaration or statement expected.
-src/whatsapp/wait.ts(127,1): error TS1128: Declaration or statement expected.
+src/content/web-app-bridge.ts(180,29): error TS2367: This comparison appears to be unintentional because the types '"FLORMIA_EXTENSION_STATUS" | "FLORMIA_CAMPAIGN_ACCEPTED" | "FLORMIA_CAMPAIGN_STARTED" | "FLORMIA_CAMPAIGN_PROGRESS" | "FLORMIA_CAMPAIGN_PAUSED" | "FLORMIA_CAMPAIGN_RESUMED" | ... 12 more ... | "FLORMIA_DIAGNOSTIC_REPORT"' and '"FLORMIA_CAMPAIGN_DELETE"' have no overlap.
+tests/campaign-public-sync.test.ts(18,3): error TS2741: Property 'cancelRequested' is missing in type '{ startedAt?: string | undefined; completedAt?: string | undefined; schemaVersion: 1; runToken: string; campaignId: string; campaignName: string; createdBy: string; status: "paused" | "error" | ... 10 more ... | "completed"; ... 18 more ...; updatedAt: string; }' but required in type 'CampaignState'.
+tests/campaign-public-sync.test.ts(118,88): error TS2741: Property 'createdAt' is missing in type '{ historySchemaVersion: 1; campaignId: string; campaignName: string; startedAt: string; completedAt: string; total: number; completed: number; status: "completed"; errorCategory: null; extensionVersion: string; dailyCounterImpact: number; durationMs: number; batches: number; recordedAt: string; }' but required in type 'CampaignHistoryRecord'.
+tests/campaign-runtime-finalization.test.ts(60,3): error TS2741: Property 'cancelRequested' is missing in type '{ completedAt?: string | undefined; schemaVersion: 1; runToken: string; campaignId: string; campaignName: string; createdBy: string; status: "paused" | "error" | "stopped" | "received" | ... 8 more ... | "completed"; ... 19 more ...; startedAt: string; }' but required in type 'CampaignState'.
+tests/campaign-runtime-preflight.test.ts(54,3): error TS2741: Property 'cancelRequested' is missing in type '{ schemaVersion: 1; runToken: string; campaignId: string; campaignName: string; createdBy: string; status: "received"; recipients: { recipientId: string; name: string; phoneDigits: string; maskedPhone: string; source: "flor_mia"; position: number; status: "pending"; }[]; ... 17 more ...; updatedAt: string; }' but required in type 'CampaignState'.
+tests/campaign-scheduler.test.ts(18,3): error TS2741: Property 'cancelRequested' is missing in type '{ schemaVersion: 1; runToken: string; campaignId: string; campaignName: string; createdBy: string; status: "paused" | "error" | "stopped" | "received" | "ready" | "running" | "pause_requested" | ... 5 more ... | "completed"; ... 18 more ...; updatedAt: string; }' but required in type 'CampaignState'.
