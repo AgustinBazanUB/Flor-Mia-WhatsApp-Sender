@@ -20,27 +20,31 @@ class TestDataTransfer {
   }
 }
 
-beforeEach(() => {
-  TestDataTransfer.lastFile = null;
-  document.body.innerHTML = `
-    <div id="main">
-      <header data-jid="5491112345678@c.us"></header>
-      <div class="message-out" data-id="true_old"><img src="data:image/png;base64,AA=="></div>
-      <footer>
-        <button type="button" data-testid="clip">Adjuntar</button>
-        <input type="file" accept="image/*">
-      </footer>
-      <div data-testid="media-editor">
-        <button type="button" data-testid="media-editor-send">Enviar</button>
-      </div>
-    </div>`;
-  const input = document.querySelector<HTMLInputElement>("input[type='file']")!;
+function wireWritableFiles(input: HTMLInputElement): () => FileList | null {
   let assignedFiles: FileList | null = null;
   Object.defineProperty(input, "files", {
     configurable: true,
     get: () => assignedFiles,
     set: (value: FileList) => { assignedFiles = value; }
   });
+  return () => assignedFiles;
+}
+
+beforeEach(() => {
+  TestDataTransfer.lastFile = null;
+  document.body.innerHTML = `
+    <div id="main">
+      <header data-jid="5491112345678@c.us"></header>
+      <div class="message-out" data-id="true_old"><div data-testid="image-thumb"><img src="data:image/png;base64,AA=="></div></div>
+      <footer>
+        <button type="button" data-testid="clip">Adjuntar</button>
+        <input data-testid="photos-videos-input" type="file" accept="image/*,video/mp4,video/3gpp,video/quicktime">
+      </footer>
+      <div data-testid="media-editor">
+        <button type="button" data-testid="media-editor-send">Enviar</button>
+      </div>
+    </div>`;
+  wireWritableFiles(document.querySelector<HTMLInputElement>("input[type='file']")!);
   Object.defineProperty(globalThis, "DataTransfer", { value: TestDataTransfer, configurable: true });
 });
 
@@ -68,18 +72,21 @@ function readFileBytes(file: File): Promise<Uint8Array> {
   });
 }
 
+function appendOutgoingPhoto(id: string, src = "blob:photo"): void {
+  document.getElementById("main")!.insertAdjacentHTML(
+    "beforeend",
+    `<div class='message-out' data-id='${id}'><div data-testid='image-thumb'><img src='${src}'></div></div>`
+  );
+}
+
 describe("verified image send", () => {
-  it("confirms only a new outgoing media node after the preview closes", async () => {
+  it("confirms only a new outgoing PHOTO node after the preview closes", async () => {
     let checkpointedBeforeClick = false;
     let clickObservedCheckpoint = false;
     document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
       clickObservedCheckpoint = checkpointedBeforeClick;
-      const outgoing = document.createElement("div");
-      outgoing.className = "message-out";
-      outgoing.dataset.id = "true_new_media";
-      outgoing.innerHTML = "<img src='data:image/png;base64,AQID'>";
-      document.getElementById("main")!.append(outgoing);
-      (document.querySelector<HTMLElement>("[data-testid='media-editor']")!).style.display = "none";
+      appendOutgoingPhoto("true_new_media");
+      document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
     });
 
     const result = await sendAndVerifyImage(imageInput(), {
@@ -91,18 +98,16 @@ describe("verified image send", () => {
     expect(result.success).toBe(true);
     expect(result.verification).toMatchObject({
       outcome: "confirmed",
-      method: "new-outgoing-media-dom+preview-dismissed",
+      method: "new-outgoing-photo-dom+preview-dismissed",
       outgoingMessageId: "true_new_media"
     });
+    expect(result.verification.details).toMatchObject({ expectedOutgoingKind: "photo" });
     expect(clickObservedCheckpoint).toBe(true);
   });
 
-  it("preserves the exact local image bytes, name, type and size before WhatsApp receives the file", async () => {
+  it("preserves the exact local image bytes, name, type and size before WhatsApp receives the photo", async () => {
     document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
-      document.getElementById("main")!.insertAdjacentHTML(
-        "beforeend",
-        "<div class='message-out' data-id='true_exact_media'><img src='blob:exact'></div>"
-      );
+      appendOutgoingPhoto("true_exact_media", "blob:exact");
       document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
     });
 
@@ -115,8 +120,55 @@ describe("verified image send", () => {
       preparedName: "flor.png",
       preparedType: "image/png",
       preparedSize: 3,
-      sourceBytesPreserved: true
+      sourceBytesPreserved: true,
+      expectedOutgoingKind: "photo"
     });
+  });
+
+  it("chooses the explicit Fotos y videos route instead of a generic sticker-capable image input", async () => {
+    document.querySelector("[data-testid='photos-videos-input']")?.remove();
+    const footer = document.querySelector("footer")!;
+    footer.insertAdjacentHTML("beforeend", `
+      <input data-testid="sticker-upload" aria-label="Sticker" type="file" accept="image/*">
+      <input data-testid="photo-upload" aria-label="Campaign photo" type="file" accept="image/*">
+      <div role="menu" data-testid="attach-menu" hidden>
+        <div role="button" tabindex="0">Fotos y videos</div>
+      </div>`);
+    const stickerInput = document.querySelector<HTMLInputElement>("[data-testid='sticker-upload']")!;
+    const photoInput = document.querySelector<HTMLInputElement>("[data-testid='photo-upload']")!;
+    const stickerFiles = wireWritableFiles(stickerInput);
+    const photoFiles = wireWritableFiles(photoInput);
+    const menu = document.querySelector<HTMLElement>("[data-testid='attach-menu']")!;
+    document.querySelector<HTMLButtonElement>("[data-testid='clip']")!.addEventListener("click", () => { menu.hidden = false; });
+    menu.querySelector<HTMLElement>("[role='button']")!.addEventListener("click", () => { photoInput.click(); });
+    document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
+      appendOutgoingPhoto("true_photo_route");
+      document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
+    });
+
+    const result = await sendAndVerifyImage(imageInput());
+    expect(stickerFiles()).toBeNull();
+    expect(photoFiles()?.item(0)).toMatchObject({ name: "flor.png", type: "image/png", size: 3 });
+    expect(result.verification.details).toMatchObject({
+      uploadStrategy: "photo-input.photos-videos-action",
+      expectedOutgoingKind: "photo"
+    });
+  });
+
+  it("never accepts a sticker bubble as confirmation of an image/photo step", async () => {
+    document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out' data-id='true_sticker'><div data-testid='sticker'><img src='blob:sticker'></div></div>"
+      );
+      document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
+    });
+
+    await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 10 }))
+      .rejects.toMatchObject({
+        code: "AMBIGUOUS_RESULT",
+        details: { sendAttempted: true, expectedOutgoingKind: "photo" }
+      });
   });
 
   it("resolves the current WhatsApp send glyph when the media action is a role button", async () => {
@@ -127,10 +179,7 @@ describe("verified image send", () => {
       </div>`;
     const currentSend = editor.querySelector<HTMLElement>("[role='button']")!;
     currentSend.addEventListener("click", () => {
-      document.getElementById("main")!.insertAdjacentHTML(
-        "beforeend",
-        "<div class='message-out' data-id='true_current_media'><img src='blob:current'></div>"
-      );
+      appendOutgoingPhoto("true_current_media", "blob:current");
       editor.style.display = "none";
     });
 
@@ -158,10 +207,7 @@ describe("verified image send", () => {
     option.addEventListener("click", () => { option.setAttribute("aria-checked", "true"); });
     done.addEventListener("click", () => { menu.hidden = true; });
     editor.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
-      document.getElementById("main")!.insertAdjacentHTML(
-        "beforeend",
-        "<div class='message-out' data-id='true_hd_media'><img src='blob:hd'></div>"
-      );
+      appendOutgoingPhoto("true_hd_media", "blob:hd");
       editor.style.display = "none";
     });
 
@@ -170,17 +216,19 @@ describe("verified image send", () => {
     expect(result.verification.details).toMatchObject({ qualityMode: "hd_enabled" });
   });
 
-  it("marks the result ambiguous when send was clicked without conclusive DOM evidence", async () => {
+  it("marks the result ambiguous when send was clicked without conclusive photo DOM evidence", async () => {
     await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 5 }))
       .rejects.toMatchObject({ code: "AMBIGUOUS_RESULT", details: { sendAttempted: true } });
   });
 
-  it("reports attachment capability exhaustion before attempting a send", async () => {
+  it("fails closed instead of picking an ambiguous generic image uploader", async () => {
+    document.querySelector("[data-testid='photos-videos-input']")?.remove();
     document.querySelector("[data-testid='clip']")?.remove();
-    document.querySelector("input[type='file']")?.remove();
+    document.querySelector("footer")!.insertAdjacentHTML("beforeend", "<input type='file' accept='image/*'>");
+    wireWritableFiles(document.querySelector<HTMLInputElement>("footer input[type='file']")!);
     await expect(sendAndVerifyImage(imageInput())).rejects.toMatchObject({
-      code: "SELECTOR_STRATEGY_EXHAUSTED",
-      details: { compatibilityDiagnostic: { capability: "attachment_action", logicalStep: "image.attachment_action" } }
+      code: "ATTACHMENT_UNAVAILABLE",
+      details: { expectedMediaRoute: "photos_videos", sendAttempted: false }
     });
   });
 
@@ -196,10 +244,7 @@ describe("verified image send", () => {
   it("fails closed if the active chat changes after the media click while confirmation is pending", async () => {
     document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
       document.querySelector("header")!.setAttribute("data-jid", "5491188888888@c.us");
-      document.getElementById("main")!.insertAdjacentHTML(
-        "beforeend",
-        "<div class='message-out' data-id='true_other_chat_media'><img src='blob:other'></div>"
-      );
+      appendOutgoingPhoto("true_other_chat_media", "blob:other");
       document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
     });
 
@@ -207,9 +252,12 @@ describe("verified image send", () => {
       .rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED" });
   });
 
-  it("never confirms outgoing media without a stable DOM id", async () => {
+  it("never confirms an outgoing photo without a stable DOM id", async () => {
     document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
-      document.getElementById("main")!.insertAdjacentHTML("beforeend", "<div class='message-out'><img src='blob:test'></div>");
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out'><div data-testid='image-thumb'><img src='blob:test'></div></div>"
+      );
       document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
     });
     await expect(sendAndVerifyImage({ ...imageInput(), confirmationTimeoutMs: 5 }))
