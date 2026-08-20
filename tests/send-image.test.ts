@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { sendAndVerifyImage } from "../src/whatsapp/send-image";
 
 class TestDataTransfer {
+  static lastFile: File | null = null;
   private readonly transferred: File[] = [];
-  readonly items = { add: (file: File) => { this.transferred.push(file); } };
+  readonly items = { add: (file: File) => {
+    TestDataTransfer.lastFile = file;
+    this.transferred.push(file);
+  } };
   get files(): FileList {
     const files = this.transferred;
     return {
@@ -17,6 +21,7 @@ class TestDataTransfer {
 }
 
 beforeEach(() => {
+  TestDataTransfer.lastFile = null;
   document.body.innerHTML = `
     <div id="main">
       <header data-jid="5491112345678@c.us"></header>
@@ -54,6 +59,15 @@ function imageInput() {
   };
 }
 
+function readFileBytes(file: File): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("No se pudo leer el archivo de prueba."));
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 describe("verified image send", () => {
   it("confirms only a new outgoing media node after the preview closes", async () => {
     let checkpointedBeforeClick = false;
@@ -81,6 +95,79 @@ describe("verified image send", () => {
       outgoingMessageId: "true_new_media"
     });
     expect(clickObservedCheckpoint).toBe(true);
+  });
+
+  it("preserves the exact local image bytes, name, type and size before WhatsApp receives the file", async () => {
+    document.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out' data-id='true_exact_media'><img src='blob:exact'></div>"
+      );
+      document.querySelector<HTMLElement>("[data-testid='media-editor']")!.style.display = "none";
+    });
+
+    const result = await sendAndVerifyImage(imageInput());
+    const file = TestDataTransfer.lastFile;
+    expect(file).not.toBeNull();
+    expect(file).toMatchObject({ name: "flor.png", type: "image/png", size: 3 });
+    expect([...await readFileBytes(file!)]).toEqual([1, 2, 3]);
+    expect(result.verification.details).toMatchObject({
+      preparedName: "flor.png",
+      preparedType: "image/png",
+      preparedSize: 3,
+      sourceBytesPreserved: true
+    });
+  });
+
+  it("resolves the current WhatsApp send glyph when the media action is a role button", async () => {
+    const editor = document.querySelector<HTMLElement>("[data-testid='media-editor']")!;
+    editor.innerHTML = `
+      <div role="button" tabindex="0" aria-label="Send media">
+        <span data-icon="wds-ic-send-filled"></span>
+      </div>`;
+    const currentSend = editor.querySelector<HTMLElement>("[role='button']")!;
+    currentSend.addEventListener("click", () => {
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out' data-id='true_current_media'><img src='blob:current'></div>"
+      );
+      editor.style.display = "none";
+    });
+
+    const result = await sendAndVerifyImage(imageInput());
+    expect(result.verification.outgoingMessageId).toBe("true_current_media");
+    expect(result.verification.details).toMatchObject({
+      sendStrategy: "media-send.semantic-preview-scope.2026"
+    });
+  });
+
+  it("requests HD quality through an explicit menu before sending when WhatsApp exposes it", async () => {
+    const editor = document.querySelector<HTMLElement>("[data-testid='media-editor']")!;
+    editor.innerHTML = `
+      <button type="button" aria-label="HD" aria-haspopup="menu">HD</button>
+      <div role="menu" hidden>
+        <button type="button" role="menuitemradio">HD quality</button>
+        <button type="button" aria-label="Done">Done</button>
+      </div>
+      <button type="button" data-testid="media-editor-send">Enviar</button>`;
+    const menu = editor.querySelector<HTMLElement>("[role='menu']")!;
+    const hd = editor.querySelector<HTMLButtonElement>("[aria-label='HD']")!;
+    const option = editor.querySelector<HTMLButtonElement>("[role='menuitemradio']")!;
+    const done = editor.querySelector<HTMLButtonElement>("[aria-label='Done']")!;
+    hd.addEventListener("click", () => { menu.hidden = !menu.hidden; });
+    option.addEventListener("click", () => { option.setAttribute("aria-checked", "true"); });
+    done.addEventListener("click", () => { menu.hidden = true; });
+    editor.querySelector<HTMLButtonElement>("[data-testid='media-editor-send']")!.addEventListener("click", () => {
+      document.getElementById("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div class='message-out' data-id='true_hd_media'><img src='blob:hd'></div>"
+      );
+      editor.style.display = "none";
+    });
+
+    const result = await sendAndVerifyImage(imageInput());
+    expect(option.getAttribute("aria-checked")).toBe("true");
+    expect(result.verification.details).toMatchObject({ qualityMode: "hd_enabled" });
   });
 
   it("marks the result ambiguous when send was clicked without conclusive DOM evidence", async () => {
