@@ -10,36 +10,6 @@ permissions:
   statuses: write
 
 jobs:
-  sync-release-lock:
-    if: github.event_name == 'push' && github.event.head_commit.message == 'chore: run lock sync for 0.9.4.5'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v5
-        with:
-          ref: main
-      - name: Node.js 20
-        uses: actions/setup-node@v5
-        with:
-          node-version: 20
-      - name: Synchronize lockfile metadata
-        run: npm install --package-lock-only --ignore-scripts
-      - name: Commit synchronized lockfile
-        shell: bash
-        run: |
-          if git diff --quiet -- package-lock.json; then
-            echo "package-lock.json already synchronized"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- package-lock.json
-          git commit -m "chore: sync lockfile version 0.9.4.5"
-          git push origin HEAD:main
-
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
