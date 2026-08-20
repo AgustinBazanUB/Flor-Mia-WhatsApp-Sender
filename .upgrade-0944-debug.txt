@@ -1,4 +1,67 @@
-  File ".github/scripts/upgrade-0944.py", line 18
-    r'''    const responsePayload = request\.type === WEB_APP_MESSAGE_TYPES\.deleteRequest[\s\S]*?: status as unknown as Record<string, unknown>;''',
-            ^^^^^
-SyntaxError: invalid syntax
+0.9.4.4 stage patch applied
+--- changed files ---
+ M manifest.json
+ M package-lock.json
+ M package.json
+ M src/background/campaign-runtime.ts
+ M src/background/command-queue.ts
+ M src/background/control-intent.ts
+ M src/background/service-worker.ts
+ M src/campaign/campaign-engine.ts
+ M src/campaign/campaign-state-machine.ts
+ M src/campaign/campaign-store.ts
+ M src/campaign/campaign-types.ts
+ M src/campaign/events.ts
+ M src/campaign/public-status.ts
+ M src/campaign/scheduler.ts
+ M src/content/web-app-bridge.ts
+ M src/content/whatsapp.ts
+ M src/diagnostics/report-builder.ts
+ M src/diagnostics/types.ts
+ M src/popup/index.html
+ M src/popup/popup.ts
+ M src/shared/protocol.ts
+ M src/storage/blob-store.ts
+ M src/storage/state-store.ts
+ M src/storage/technical-trace-store.ts
+ M src/whatsapp/send-text.ts
+ M src/whatsapp/wait.ts
+ M tests/campaign-store.test.ts
+ M tests/command-queue.test.ts
+ M tests/technical-report.test.ts
+?? .github/scripts/__pycache__/
+?? src/performance/
+?? src/storage/campaign-data-store.ts
+?? src/storage/database.ts
+?? tests/campaign-cancel-lifecycle.test.ts
+?? tests/storage-performance.test.ts
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+
+added 199 packages, and audited 200 packages in 2s
+
+59 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+> flor-mia-whatsapp-sender@0.9.4.4 verify
+> npm run typecheck && npm run lint && npm test && npm run build && npm run validate:build
+
+
+> flor-mia-whatsapp-sender@0.9.4.4 typecheck
+> tsc --noEmit
+
+
+> flor-mia-whatsapp-sender@0.9.4.4 lint
+> eslint .
+
+
+/home/runner/work/Flor-Mia-WhatsApp-Sender/Flor-Mia-WhatsApp-Sender/src/background/service-worker.ts
+  785:16  error  'refreshDiagnosticIncident' is defined but never used  @typescript-eslint/no-unused-vars
+
+/home/runner/work/Flor-Mia-WhatsApp-Sender/Flor-Mia-WhatsApp-Sender/src/storage/campaign-data-store.ts
+  68:22  error  '_key' is defined but never used         @typescript-eslint/no-unused-vars
+  68:40  error  '_campaignId' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 3 problems (3 errors, 0 warnings)
+
