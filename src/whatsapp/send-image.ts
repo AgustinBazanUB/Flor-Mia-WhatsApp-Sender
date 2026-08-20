@@ -3,13 +3,12 @@ import { ERROR_CODES, ExtensionError, toExtensionError } from "../shared/errors"
 import { capabilityResolutionError, capabilityUnavailableError } from "../compatibility/diagnostic-error";
 import {
   elementVisible,
-  findImageFileInput,
   findMediaPreview,
   findMediaSendButton,
-  outgoingMediaMessages,
   resolveCapability,
   type SelectorMatch
 } from "./selectors";
+import { outgoingPhotoMessages } from "./photo-evidence";
 import { waitForCondition } from "./wait";
 import { requireConversationContext } from "./conversation-context";
 
@@ -65,6 +64,9 @@ const HD_CONTROL_SELECTORS = [
 
 const HD_OPTION_LABELS = new Set(["hd quality", "calidad hd", "qualidade hd"]);
 const DONE_LABELS = new Set(["done", "listo", "pronto"]);
+const PHOTO_VIDEO_LABEL = /^(photos?\s*(?:&|and)\s*videos?|fotos?\s*(?:y|e)\s*v[ií]deos?|foto\s*(?:y|e)\s*video)$/i;
+const STICKER_TERMS = /sticker|pegatina|figurinha|adhesivo/i;
+const PHOTO_VIDEO_TERMS = /photo|photos|foto|fotos|image|imagen|imágenes|imagem|video|vídeo|videos|vídeos/i;
 
 function base64Bytes(value: string): Uint8Array {
   const binary = atob(value);
@@ -168,6 +170,162 @@ function findVisibleActionByText(labels: Set<string>, root: ParentNode = documen
   return null;
 }
 
+function findPhotoVideoMenuAction(root: ParentNode = document): HTMLElement | null {
+  const candidates = root.querySelectorAll<HTMLElement>("[role='button'], [role='menuitem'], button, li[tabindex]");
+  for (const candidate of candidates) {
+    if (!elementVisible(candidate)) continue;
+    const label = String(
+      candidate.getAttribute("aria-label")
+      || candidate.getAttribute("title")
+      || candidate.textContent
+      || ""
+    ).replace(/\s+/g, " ").trim();
+    if (PHOTO_VIDEO_LABEL.test(label)) return candidate;
+  }
+  return null;
+}
+
+function inputSemanticContext(input: HTMLInputElement): string {
+  const values = [
+    input.accept,
+    input.name,
+    input.id,
+    input.getAttribute("aria-label") || "",
+    input.getAttribute("title") || "",
+    input.getAttribute("data-testid") || ""
+  ];
+  let current: HTMLElement | null = input.parentElement;
+  for (let depth = 0; current && depth < 3; depth += 1, current = current.parentElement) {
+    values.push(current.getAttribute("aria-label") || "");
+    values.push(current.getAttribute("title") || "");
+    values.push(current.getAttribute("data-testid") || "");
+    values.push((current.textContent || "").slice(0, 120));
+  }
+  return values.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function acceptsImage(input: HTMLInputElement): boolean {
+  const accept = input.accept.toLowerCase();
+  return accept.includes("image/") || /\.(?:png|jpe?g|gif|bmp|webp)\b/.test(accept);
+}
+
+function looksLikeStickerInput(input: HTMLInputElement): boolean {
+  const context = inputSemanticContext(input);
+  if (STICKER_TERMS.test(context)) return true;
+  const accept = input.accept.toLowerCase().replace(/\s+/g, "");
+  return accept !== "" && /image\/webp|\.webp/.test(accept)
+    && !/image\/\*|image\/png|image\/jpe?g|video\//.test(accept);
+}
+
+function scorePhotoVideoInput(input: HTMLInputElement, preexisting: Set<HTMLInputElement>): number {
+  if (input.type !== "file" || !acceptsImage(input) || looksLikeStickerInput(input)) return -1;
+  const accept = input.accept.toLowerCase();
+  const context = inputSemanticContext(input);
+  let score = 0;
+  if (/video\//.test(accept) || /video\/mp4|video\/3gpp|video\/quicktime/.test(accept)) score += 120;
+  if (/image\/png|image\/jpe?g|\.png|\.jpe?g/.test(accept)) score += 45;
+  if (!preexisting.has(input)) score += 70;
+  if (PHOTO_VIDEO_TERMS.test(context)) score += 35;
+  if (input.closest("#main")) score += 15;
+  if (accept.trim() === "image/*") score += 5;
+  return score;
+}
+
+function bestPhotoVideoInput(preexisting: Set<HTMLInputElement>, minimumScore = 70): SelectorMatch<HTMLInputElement> | null {
+  const ranked = [...document.querySelectorAll<HTMLInputElement>("input[type='file']")]
+    .map((element) => ({ element, score: scorePhotoVideoInput(element, preexisting) }))
+    .filter((candidate) => candidate.score >= minimumScore)
+    .sort((a, b) => b.score - a.score);
+  const first = ranked[0];
+  if (!first) return null;
+  if (ranked[1]?.score === first.score) return null;
+  return {
+    element: first.element,
+    strategy: `photo-input.semantic-score.${first.score}`,
+    selector: `input[type='file'][accept='${first.element.accept.replace(/'/g, "\\'")}']`
+  };
+}
+
+async function capturePhotoVideoInputFromMenuAction(
+  action: HTMLElement,
+  preexisting: Set<HTMLInputElement>
+): Promise<SelectorMatch<HTMLInputElement> | null> {
+  let intercepted: HTMLInputElement | null = null;
+  const onClick = (event: Event): void => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
+    if (!acceptsImage(target) || looksLikeStickerInput(target)) return;
+    event.preventDefault();
+    intercepted = target;
+  };
+  document.addEventListener("click", onClick, true);
+  try {
+    action.click();
+    const resolved = await waitForCondition(() => {
+      if (intercepted) {
+        return {
+          element: intercepted,
+          strategy: "photo-input.photos-videos-action",
+          selector: "Photos & videos → input[type='file']"
+        } satisfies SelectorMatch<HTMLInputElement>;
+      }
+      return bestPhotoVideoInput(preexisting);
+    }, {
+      timeoutMs: 900,
+      description: "el uploader de Fotos y videos de WhatsApp"
+    }).catch(() => null);
+    return resolved;
+  } finally {
+    document.removeEventListener("click", onClick, true);
+  }
+}
+
+async function resolvePhotoVideoFileInput(
+  attach: SelectorMatch<HTMLButtonElement> | null,
+  timeoutMs: number
+): Promise<SelectorMatch<HTMLInputElement>> {
+  const preexisting = new Set(document.querySelectorAll<HTMLInputElement>("input[type='file']"));
+  const initial = bestPhotoVideoInput(preexisting);
+  if (!attach && initial) return initial;
+  if (!attach) {
+    throw new ExtensionError(ERROR_CODES.attachmentUnavailable, "No se encontró el uploader de Fotos y videos de WhatsApp.", {
+      recoverable: false,
+      details: { expectedMediaRoute: "photos_videos", sendAttempted: false }
+    });
+  }
+
+  attach.element.click();
+  const discovered = await waitForCondition(() => {
+    const action = findPhotoVideoMenuAction();
+    return action || bestPhotoVideoInput(preexisting);
+  }, {
+    timeoutMs: Math.min(timeoutMs, 2_500),
+    description: "la opción Fotos y videos de WhatsApp"
+  }).catch(() => null);
+
+  if (discovered instanceof HTMLElement && !(discovered instanceof HTMLInputElement)) {
+    const throughAction = await capturePhotoVideoInputFromMenuAction(discovered, preexisting);
+    if (throughAction) return throughAction;
+  } else if (discovered && "element" in discovered) {
+    return discovered;
+  }
+
+  const fallback = await waitForCondition(() => bestPhotoVideoInput(preexisting), {
+    timeoutMs: Math.min(timeoutMs, 1_500),
+    description: "el input específico de Fotos y videos"
+  }).catch(() => null);
+  if (fallback) return fallback;
+
+  throw new ExtensionError(ERROR_CODES.attachmentUnavailable, "WhatsApp no expuso un uploader verificable de Fotos y videos. No se usará un input genérico porque podría enviar la imagen como sticker.", {
+    recoverable: false,
+    details: {
+      expectedMediaRoute: "photos_videos",
+      availableFileInputs: document.querySelectorAll("input[type='file']").length,
+      sendAttempted: false
+    }
+  });
+}
+
 function qualityStateEnabled(element: HTMLElement): boolean {
   return element.getAttribute("aria-pressed") === "true"
     || element.getAttribute("aria-checked") === "true"
@@ -227,28 +385,16 @@ export async function sendAndVerifyImage(
   const previewTimeoutMs = input.previewTimeoutMs ?? 20_000;
   const confirmationTimeoutMs = input.confirmationTimeoutMs ?? 30_000;
   requireConversationContext(input.expectedPhoneDigits);
-  const baselineOutgoingIds = outgoingMediaMessages().filter((item) => item.stableIdentity).map((item) => item.identity);
+  const baselineOutgoingIds = outgoingPhotoMessages().filter((item) => item.stableIdentity).map((item) => item.identity);
   const before = new Set(baselineOutgoingIds);
 
-  const inputResolution = resolveCapability<HTMLInputElement>("image_file_input");
   const attachResolution = resolveCapability<HTMLButtonElement>("attachment_action", document, { required: true });
-  const existingInput = inputResolution.match;
   const attach = attachResolution.match;
-  if (attach) attach.element.click();
-  if (!attach && !existingInput) {
+  const fileInput = await resolvePhotoVideoFileInput(attach, imageLoadTimeoutMs).catch((error: unknown) => {
+    if (error instanceof ExtensionError) throw error;
     throw capabilityResolutionError(
       attachResolution.discovery,
-      "Se agotaron las estrategias para localizar el mecanismo de adjuntos."
-    );
-  }
-
-  const fileInput = existingInput ?? await waitForCondition(() => findImageFileInput(), {
-    timeoutMs: imageLoadTimeoutMs,
-    description: "el input de imágenes de WhatsApp"
-  }).catch((error: unknown) => {
-    throw capabilityResolutionError(
-      resolveCapability("image_file_input", document, { required: true }).discovery,
-      "Se agotaron las estrategias para localizar el input de imágenes.",
+      "Se agotaron las estrategias para localizar Fotos y videos.",
       error
     );
   });
@@ -282,9 +428,6 @@ export async function sendAndVerifyImage(
     });
   }
 
-  // La extensión entrega a WhatsApp exactamente el archivo local reconstruido;
-  // no usa canvas, resize ni recodificación. Si WhatsApp ofrece un selector HD
-  // accesible y verificable, se solicita antes de resolver el botón de envío.
   const qualityMode = await preferHdQuality(preview.element);
   const currentPreview = findMediaPreview()?.element ?? preview.element;
 
@@ -310,21 +453,23 @@ export async function sendAndVerifyImage(
   sendButton.element.click();
   const verified = await waitForCondition(() => {
     requireConversationContext(input.expectedPhoneDigits);
-    const outgoing = outgoingMediaMessages().find((item) => item.stableIdentity && !before.has(item.identity));
+    const outgoing = outgoingPhotoMessages().find((item) => item.stableIdentity && !before.has(item.identity));
     return outgoing && !elementVisible(currentPreview) ? outgoing : null;
   }, {
     timeoutMs: confirmationTimeoutMs,
-    description: "el nuevo mensaje multimedia saliente y el cierre de su preview"
+    description: "la nueva foto saliente y el cierre de su preview"
   }).catch((error: unknown) => {
     const normalized = toExtensionError(error);
     if (normalized.code === ERROR_CODES.contactContextUnverified) throw normalized;
-    throw new ExtensionError(ERROR_CODES.ambiguousResult, "Se accionó enviar, pero no se pudo confirmar el resultado multimedia.", {
+    throw new ExtensionError(ERROR_CODES.ambiguousResult, "Se accionó enviar, pero no se pudo confirmar una foto saliente normal.", {
       details: {
         imageId: input.imageId,
         sendAttempted: true,
         baselineOutgoingIds,
         previewSelector: preview.selector,
-        qualityMode
+        qualityMode,
+        uploadStrategy: fileInput.strategy,
+        expectedOutgoingKind: "photo"
       },
       cause: error
     });
@@ -339,13 +484,15 @@ export async function sendAndVerifyImage(
     completedAt: new Date().toISOString(),
     verification: {
       outcome: "confirmed",
-      method: "new-outgoing-media-dom+preview-dismissed",
+      method: "new-outgoing-photo-dom+preview-dismissed",
       observedAt: new Date().toISOString(),
       sendAttempted: true,
       outgoingMessageId: verified.identity,
       baselineOutgoingIds,
       details: {
         inputSelector: fileInput.selector,
+        uploadStrategy: fileInput.strategy,
+        expectedOutgoingKind: "photo",
         previewSelector: preview.selector,
         sendSelector: sendButton.selector,
         sendStrategy: sendButton.strategy,
