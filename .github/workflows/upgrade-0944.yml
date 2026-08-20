@@ -9,6 +9,7 @@ permissions:
   statuses: write
 
 # Temporary self-cleaning migration runner. Removed after the verified 0.9.4.4 commit.
+# Trigger: generated-patch import cleanup.
 jobs:
   apply-verify:
     if: github.actor != 'github-actions[bot]'
