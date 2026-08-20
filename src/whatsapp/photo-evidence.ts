@@ -39,7 +39,15 @@ const EMOJI_EVIDENCE_SELECTOR = [
 ].join(", ");
 
 const TEXT_PAYLOAD_SELECTOR = "[data-testid='msg-text'], .selectable-text";
+const MESSAGE_CANDIDATE_SELECTOR = ".message-out, [data-testid='msg-container'], [data-id]";
 const OUTGOING_CANDIDATE_SELECTOR = "#main .message-out, #main [data-testid='msg-container'], #main [data-id]";
+const OUTGOING_ACK_SELECTOR = "[data-icon='msg-check'], [data-icon='msg-dblcheck']";
+const OUTGOING_SELF_LABEL_SELECTOR = [
+  "[aria-label='You:']",
+  "[aria-label='Tú:']",
+  "[aria-label='Vos:']",
+  "[aria-label='Você:']"
+].join(", ");
 
 export type PhotoEvidenceMethod =
   | "stable-outgoing-photo-dom"
@@ -58,6 +66,9 @@ export interface CausalOutgoingPhotoObserver {
     photoObserved: boolean;
     stableIdObserved: boolean;
     evidenceMethod: PhotoEvidenceMethod | null;
+    baselineCandidateCount: number;
+    mutationCount: number;
+    candidateMutationCount: number;
   };
   stop: () => void;
 }
@@ -69,10 +80,16 @@ function messageBubble(candidate: HTMLElement): HTMLElement {
   return candidate.closest<HTMLElement>(".message-out") ?? candidate;
 }
 
+function hasOutgoingSemanticEvidence(element: HTMLElement): boolean {
+  return Boolean(element.querySelector(OUTGOING_ACK_SELECTOR))
+    || Boolean(element.querySelector(OUTGOING_SELF_LABEL_SELECTOR));
+}
+
 function isOutgoingBubble(candidate: HTMLElement, bubble: HTMLElement): boolean {
   if (bubble.classList.contains("message-out") || Boolean(candidate.closest(".message-out"))) return true;
   const dataId = candidate.getAttribute("data-id") || bubble.getAttribute("data-id") || "";
-  return dataId.startsWith("true_");
+  if (dataId.startsWith("true_")) return true;
+  return hasOutgoingSemanticEvidence(bubble) || hasOutgoingSemanticEvidence(candidate);
 }
 
 function stableMessageIdentity(candidate: HTMLElement, bubble: HTMLElement): string {
@@ -118,11 +135,11 @@ function snapshotFromCandidate(candidate: HTMLElement): OutgoingMediaSnapshot | 
 
 function candidateElements(root: ParentNode): HTMLElement[] {
   const result: HTMLElement[] = [];
-  if (root instanceof HTMLElement && root.matches(".message-out, [data-testid='msg-container'], [data-id]")) result.push(root);
+  if (root instanceof HTMLElement && root.matches(MESSAGE_CANDIDATE_SELECTOR)) result.push(root);
   if ("querySelectorAll" in root) {
-    result.push(...root.querySelectorAll<HTMLElement>(".message-out, [data-testid='msg-container'], [data-id]"));
+    result.push(...root.querySelectorAll<HTMLElement>(MESSAGE_CANDIDATE_SELECTOR));
   }
-  return result;
+  return [...new Set(result)];
 }
 
 export function outgoingPhotoMessages(root: ParentNode = document): OutgoingMediaSnapshot[] {
@@ -145,29 +162,47 @@ export function outgoingPhotoMessages(root: ParentNode = document): OutgoingMedi
   return result;
 }
 
-function outgoingBubblesFromAddedNode(node: Node): HTMLElement[] {
+function messageCandidatesFromNode(node: Node): HTMLElement[] {
   if (!(node instanceof HTMLElement)) return [];
-  const bubbles: HTMLElement[] = [];
+  const candidates: HTMLElement[] = [];
   const add = (candidate: HTMLElement | null): void => {
-    if (!candidate || bubbles.includes(candidate)) return;
-    if (candidate.classList.contains("message-out")) bubbles.push(candidate);
-    const nested = candidate.querySelectorAll<HTMLElement>(".message-out");
-    for (const bubble of nested) if (!bubbles.includes(bubble)) bubbles.push(bubble);
+    if (!candidate || candidates.includes(candidate)) return;
+    candidates.push(candidate);
   };
-  add(node);
-  add(node.closest<HTMLElement>(".message-out"));
-  return bubbles;
+
+  if (node.matches(MESSAGE_CANDIDATE_SELECTOR)) add(node);
+  add(node.closest<HTMLElement>(MESSAGE_CANDIDATE_SELECTOR));
+  for (const candidate of node.querySelectorAll<HTMLElement>(MESSAGE_CANDIDATE_SELECTOR)) add(candidate);
+  return candidates;
+}
+
+function nearestMessageCandidate(node: Node): HTMLElement | null {
+  if (!(node instanceof HTMLElement)) return null;
+  if (node.matches(MESSAGE_CANDIDATE_SELECTOR)) return node;
+  return node.closest<HTMLElement>(MESSAGE_CANDIDATE_SELECTOR);
 }
 
 export function startCausalOutgoingPhotoObserver(root: HTMLElement): CausalOutgoingPhotoObserver {
-  const baselineBubbles = new Set(root.querySelectorAll<HTMLElement>(".message-out"));
-  const trackedNewBubbles = new Set<HTMLElement>();
+  const baselineCandidates = new Set(candidateElements(root));
+  const baselineStableIds = new Set(
+    outgoingPhotoMessages(root)
+      .filter((item) => item.stableIdentity)
+      .map((item) => item.identity)
+  );
+  const trackedNewCandidates = new Set<HTMLElement>();
   let observation: CausalOutgoingPhotoObservation | null = null;
+  let mutationCount = 0;
+  let candidateMutationCount = 0;
 
-  const inspectBubble = (bubble: HTMLElement): void => {
-    if (observation || baselineBubbles.has(bubble) || !trackedNewBubbles.has(bubble)) return;
-    const snapshot = snapshotFromCandidate(bubble);
+  const inspectCandidate = (candidate: HTMLElement): void => {
+    if (observation) return;
+    const snapshot = snapshotFromCandidate(candidate);
     if (!snapshot) return;
+
+    const stableIdentityIsNew = snapshot.stableIdentity && !baselineStableIds.has(snapshot.identity);
+    const structurallyNew = trackedNewCandidates.has(candidate) || !baselineCandidates.has(candidate);
+    if (!stableIdentityIsNew && !structurallyNew) return;
+
     observation = {
       snapshot: {
         ...snapshot,
@@ -179,19 +214,22 @@ export function startCausalOutgoingPhotoObserver(root: HTMLElement): CausalOutgo
   };
 
   const observer = new MutationObserver((mutations) => {
+    mutationCount += mutations.length;
     for (const mutation of mutations) {
+      const relatedCandidates = new Set<HTMLElement>();
+
       for (const node of mutation.addedNodes) {
-        for (const bubble of outgoingBubblesFromAddedNode(node)) {
-          if (!baselineBubbles.has(bubble)) trackedNewBubbles.add(bubble);
-          inspectBubble(bubble);
+        for (const candidate of messageCandidatesFromNode(node)) {
+          relatedCandidates.add(candidate);
+          if (!baselineCandidates.has(candidate)) trackedNewCandidates.add(candidate);
         }
       }
 
-      const target = mutation.target;
-      if (target instanceof HTMLElement) {
-        const bubble = target.classList.contains("message-out") ? target : target.closest<HTMLElement>(".message-out");
-        if (bubble && trackedNewBubbles.has(bubble)) inspectBubble(bubble);
-      }
+      const targetCandidate = nearestMessageCandidate(mutation.target);
+      if (targetCandidate) relatedCandidates.add(targetCandidate);
+
+      if (relatedCandidates.size > 0) candidateMutationCount += 1;
+      for (const candidate of relatedCandidates) inspectCandidate(candidate);
     }
   });
 
@@ -199,16 +237,19 @@ export function startCausalOutgoingPhotoObserver(root: HTMLElement): CausalOutgo
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ["src", "srcset", "style", "data-testid", "aria-label", "data-id", "class"]
+    attributeFilter: ["src", "srcset", "style", "data-testid", "data-icon", "aria-label", "data-id", "class"]
   });
 
   return {
     take: () => observation,
     summary: () => ({
-      newOutgoingBubbleCount: trackedNewBubbles.size,
+      newOutgoingBubbleCount: trackedNewCandidates.size,
       photoObserved: Boolean(observation),
       stableIdObserved: Boolean(observation?.snapshot.stableIdentity),
-      evidenceMethod: observation?.method ?? null
+      evidenceMethod: observation?.method ?? null,
+      baselineCandidateCount: baselineCandidates.size,
+      mutationCount,
+      candidateMutationCount
     }),
     stop: () => observer.disconnect()
   };
