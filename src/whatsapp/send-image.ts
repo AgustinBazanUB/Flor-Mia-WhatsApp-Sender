@@ -469,31 +469,45 @@ export async function sendAndVerifyImage(
   }
 
   const causalObserver = startCausalOutgoingPhotoObserver(main);
+  const confirmationAbort = new AbortController();
+  const verificationPromise = waitForCondition(() => {
+    requireConversationContext(input.expectedPhoneDigits);
+    if (elementVisible(currentPreview)) return null;
+
+    const stable = outgoingPhotoMessages().find((item) => item.stableIdentity && !before.has(item.identity));
+    if (stable) {
+      return {
+        snapshot: stable,
+        method: "stable-outgoing-photo-dom",
+        observedAt: new Date().toISOString()
+      } satisfies CausalOutgoingPhotoObservation;
+    }
+
+    const causal = causalObserver.take();
+    return causal && composerReady() ? causal : null;
+  }, {
+    timeoutMs: confirmationTimeoutMs,
+    signal: confirmationAbort.signal,
+    description: "la evidencia causal de la foto saliente"
+  });
+
   let verified: CausalOutgoingPhotoObservation | null = null;
   try {
-    sendButton.element.click();
-    verified = await waitForCondition(() => {
-      requireConversationContext(input.expectedPhoneDigits);
-      if (elementVisible(currentPreview)) return null;
-
-      const stable = outgoingPhotoMessages().find((item) => item.stableIdentity && !before.has(item.identity));
-      if (stable) {
-        return {
-          snapshot: stable,
-          method: "stable-outgoing-photo-dom",
-          observedAt: new Date().toISOString()
-        } satisfies CausalOutgoingPhotoObservation;
-      }
-
-      const causal = causalObserver.take();
-      return causal && composerReady() ? causal : null;
-    }, {
-      timeoutMs: confirmationTimeoutMs,
-      description: "la evidencia causal de la foto saliente"
-    });
+    try {
+      sendButton.element.click();
+    } catch (error: unknown) {
+      confirmationAbort.abort();
+      await verificationPromise.catch(() => undefined);
+      throw new ExtensionError(ERROR_CODES.internal, "No se pudo accionar el envío de la foto en WhatsApp.", {
+        recoverable: true,
+        details: { imageId: input.imageId, sendAttempted: false },
+        cause: error
+      });
+    }
+    verified = await verificationPromise;
   } catch (error: unknown) {
     const normalized = toExtensionError(error);
-    if (normalized.code === ERROR_CODES.contactContextUnverified) throw normalized;
+    if (normalized.code === ERROR_CODES.contactContextUnverified || normalized.details?.sendAttempted === false) throw normalized;
     const observerSummary = causalObserver.summary();
     const previewDismissed = !elementVisible(currentPreview);
     const composerRestored = composerReady();
@@ -523,6 +537,7 @@ export async function sendAndVerifyImage(
       }
     );
   } finally {
+    confirmationAbort.abort();
     causalObserver.stop();
   }
 
