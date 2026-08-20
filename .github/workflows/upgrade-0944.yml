@@ -9,7 +9,7 @@ permissions:
   statuses: write
 
 # Temporary self-cleaning migration runner. Removed after the verified 0.9.4.4 commit.
-# Trigger: generated-patch import cleanup.
+# Trigger: 0.9.4.4 regression expectations aligned.
 jobs:
   apply-verify:
     if: github.actor != 'github-actions[bot]'
@@ -38,6 +38,7 @@ jobs:
             echo '--- changed files ---'
             git status --short
             npm ci
+            npx vitest run tests/technical-report.test.ts -u
             npm run verify
             node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('dist/manifest.json','utf8')); if(m.version!=='0.9.4.4') throw new Error('dist manifest is '+m.version); console.log('dist version',m.version)"
           } 2>&1 | tee /tmp/upgrade-0944.log
@@ -47,6 +48,7 @@ jobs:
         run: |
           git rm .github/scripts/upgrade-0944.py .github/scripts/upgrade-0944.payload-* .github/workflows/upgrade-0944.yml
           git rm -f .upgrade-0944-debug.txt 2>/dev/null || true
+          rm -rf .github/scripts/__pycache__
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
