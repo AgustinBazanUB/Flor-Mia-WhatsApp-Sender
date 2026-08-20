@@ -7,14 +7,18 @@ function readJson(path: string): Record<string, unknown> {
 }
 
 describe("extension release metadata", () => {
-  it("keeps manifest, package and lockfile versions coherent", () => {
+  it("keeps the Chrome release version internally coherent", () => {
     const manifest = readJson("manifest.json");
+
+    expect(manifest.version_name).toBe(manifest.version);
+    expect(String(manifest.version)).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+  });
+
+  it("keeps npm workspace and lockfile metadata coherent", () => {
     const packageJson = readJson("package.json");
     const lock = readJson("package-lock.json");
     const packages = lock.packages as Record<string, Record<string, unknown>>;
 
-    expect(manifest.version).toBe(packageJson.version);
-    expect(manifest.version_name).toBe(packageJson.version);
     expect(lock.version).toBe(packageJson.version);
     expect(packages[""]?.version).toBe(packageJson.version);
     expect(String(packageJson.version)).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
