@@ -395,7 +395,9 @@ export async function sendAndVerifyImage(
   const previewTimeoutMs = input.previewTimeoutMs ?? 20_000;
   const confirmationTimeoutMs = input.confirmationTimeoutMs ?? 8_000;
   requireConversationContext(input.expectedPhoneDigits);
-  const baselineOutgoingIds = outgoingPhotoMessages().filter((item) => item.stableIdentity).map((item) => item.identity);
+  const baselineOutgoingPhotos = outgoingPhotoMessages();
+  const baselineOutgoingIds = baselineOutgoingPhotos.filter((item) => item.stableIdentity).map((item) => item.identity);
+  const baselineOutgoingPhotoCount = baselineOutgoingPhotos.length;
   const before = new Set(baselineOutgoingIds);
 
   const attachResolution = resolveCapability<HTMLButtonElement>("attachment_action", document, { required: true });
@@ -520,6 +522,7 @@ export async function sendAndVerifyImage(
           imageId: input.imageId,
           sendAttempted: true,
           baselineOutgoingIds,
+          baselineOutgoingPhotoCount,
           previewSelector: preview.selector,
           qualityMode,
           uploadStrategy: fileInput.strategy,
@@ -531,7 +534,10 @@ export async function sendAndVerifyImage(
           causalNewOutgoingBubbleCount: observerSummary.newOutgoingBubbleCount,
           causalPhotoObserved: observerSummary.photoObserved,
           causalStableIdObserved: observerSummary.stableIdObserved,
-          causalEvidenceMethod: observerSummary.evidenceMethod
+          causalEvidenceMethod: observerSummary.evidenceMethod,
+          causalBaselineCandidateCount: observerSummary.baselineCandidateCount,
+          causalMutationCount: observerSummary.mutationCount,
+          causalCandidateMutationCount: observerSummary.candidateMutationCount
         },
         cause: error
       }
@@ -542,6 +548,7 @@ export async function sendAndVerifyImage(
   }
 
   requireConversationContext(input.expectedPhoneDigits);
+  const observerSummary = causalObserver.summary();
   const usedCausalFallback = verified.method === "causal-outgoing-photo-mutation";
   const verificationMethod = usedCausalFallback
     ? "causal-outgoing-photo-mutation+preview-dismissed+composer-ready"
@@ -575,6 +582,10 @@ export async function sendAndVerifyImage(
         sourceBytesPreserved: prepared.size === input.size && prepared.type === input.type,
         photoEvidenceMethod: verified.method,
         stablePhotoIdentity: verified.snapshot.stableIdentity,
+        baselineOutgoingPhotoCount,
+        causalBaselineCandidateCount: observerSummary.baselineCandidateCount,
+        causalMutationCount: observerSummary.mutationCount,
+        causalCandidateMutationCount: observerSummary.candidateMutationCount,
         previewDismissed: true,
         composerRestored: usedCausalFallback ? true : composerReady()
       }
