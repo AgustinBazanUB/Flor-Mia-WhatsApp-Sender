@@ -12,7 +12,7 @@ const transitions: Record<CampaignStatus, ReadonlySet<CampaignStatus>> = {
   daily_limit_reached: new Set(["ready", "running", "paused", "stopped", "cancelled", "error"]),
   images_required: new Set(["paused", "ready", "running", "stopped", "cancelled", "error"]),
   error: new Set(["ready", "running", "paused", "stopped", "cancelled"]),
-  stopped: new Set(),
+  stopped: new Set(["cancelled"]),
   cancelled: new Set(),
   completed: new Set(["ready", "running", "daily_limit_reached"])
 };
