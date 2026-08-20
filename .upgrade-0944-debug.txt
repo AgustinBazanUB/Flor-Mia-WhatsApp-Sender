@@ -1,1 +1,1 @@
-missing marker in src/whatsapp/wait.ts: '    const timer = globalThis.setTimeout(() => {\n      finish(() => reject(new ExtensionError(ERROR_CODES.timeout, "Tiempo agotado esperando que WhatsApp Web que'
+missing marker in src/whatsapp/wait.ts: '    observer = new MutationObserver(check);\n    // Sólo cambios estructurales durante esta espera acotada.\n'
