@@ -1,0 +1,64 @@
+name: upgrade-0.9.4.4
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  statuses: write
+
+jobs:
+  apply-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply 0.9.4.4 repair and verify
+        id: work
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          : > /tmp/upgrade-0944.log
+          {
+            python3 -m py_compile .github/scripts/upgrade-0944.py
+            python3 .github/scripts/upgrade-0944.py
+            echo '--- changed files ---'
+            git status --short
+            npm ci
+            npm run verify
+            node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('dist/manifest.json','utf8')); if(m.version!=='0.9.4.4') throw new Error('dist manifest is '+m.version); console.log('dist version',m.version)"
+          } 2>&1 | tee /tmp/upgrade-0944.log
+      - name: Publish functional 0.9.4.4 commit
+        if: steps.work.outcome == 'success'
+        shell: bash
+        run: |
+          git rm .github/scripts/upgrade-0944.py .github/scripts/upgrade-0944.payload-* .github/workflows/upgrade-0944.yml
+          git rm -f .upgrade-0944-debug.txt 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: centralize campaign control and runtime performance in 0.9.4.4"
+          git push origin main
+      - name: Publish failure diagnostic only
+        if: steps.work.outcome != 'success'
+        shell: bash
+        run: |
+          git reset --hard HEAD
+          tail -n 320 /tmp/upgrade-0944.log > .upgrade-0944-debug.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .upgrade-0944-debug.txt
+          git commit -m "chore: capture 0.9.4.4 upgrade failure"
+          git push origin main
+          exit 1
