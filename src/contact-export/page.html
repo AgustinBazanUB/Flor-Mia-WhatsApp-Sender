@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Contactos de WhatsApp · Flor Mía</title>
+    <link rel="stylesheet" href="./page.css" />
+  </head>
+  <body>
+    <main class="contact-app">
+      <header class="hero">
+        <div>
+          <span class="eyebrow">Flor Mía WhatsApp Sender</span>
+          <h1>Contactos de WhatsApp</h1>
+          <p>Exportá contactos de tus etiquetas o listas de WhatsApp Business a un Excel local, sin leer conversaciones ni enviar datos a terceros.</p>
+        </div>
+        <a class="button button--secondary" href="../popup/index.html">Volver al sender</a>
+      </header>
+
+      <section class="card status-card" aria-live="polite">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Estado</span>
+            <h2>WhatsApp Business Web</h2>
+          </div>
+          <button id="refresh-state" class="button button--secondary" type="button">Actualizar</button>
+        </div>
+        <p id="whatsapp-status">Comprobando WhatsApp Web…</p>
+        <p class="hint">WhatsApp puede mostrar esta función como <strong>Etiquetas</strong> o <strong>Listas</strong>, según la versión de tu cuenta.</p>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Paso 1</span>
+            <h2>Etiquetas detectadas</h2>
+          </div>
+          <strong id="label-count">0</strong>
+        </div>
+        <p>La detección usa la interfaz visible de WhatsApp Web. No consulta endpoints privados.</p>
+        <div class="actions">
+          <button id="detect-labels" class="button button--primary" type="button">Detectar etiquetas</button>
+          <button id="select-all" class="button button--secondary" type="button" disabled>Seleccionar todas</button>
+          <button id="select-none" class="button button--secondary" type="button" disabled>Deseleccionar todas</button>
+        </div>
+        <div id="labels" class="label-list" aria-live="polite">
+          <p class="empty">Todavía no se detectaron etiquetas.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Paso 2</span>
+            <h2>Analizar contactos</h2>
+          </div>
+          <strong id="selected-count">0 seleccionadas</strong>
+        </div>
+        <p>Los contactos sin un teléfono internacional comprobable quedan informados como problemáticos; la extensión no inventa números ni países.</p>
+        <div class="actions">
+          <button id="analyze" class="button button--primary" type="button" disabled>Analizar contactos</button>
+          <button id="cancel" class="button button--danger" type="button" hidden>Cancelar análisis</button>
+        </div>
+        <div id="progress-wrap" class="progress-card" hidden>
+          <div class="progress-copy">
+            <strong id="progress-title">Analizando contactos…</strong>
+            <span id="progress-count">0 / ?</span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span id="progress-bar"></span>
+          </div>
+          <div class="progress-meta">
+            <span id="progress-percent">— %</span>
+            <span id="progress-label">Etiqueta actual: —</span>
+            <span id="progress-contact">Contacto actual: 0</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-live="polite">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Resultado</span>
+            <h2>Resumen y vista previa</h2>
+          </div>
+          <strong id="analysis-status">Sin analizar</strong>
+        </div>
+        <div class="stats">
+          <div><strong id="stat-found">0</strong><span>Total encontrados</span></div>
+          <div><strong id="stat-valid">0</strong><span>Contactos válidos</span></div>
+          <div><strong id="stat-duplicates">0</strong><span>Duplicados eliminados</span></div>
+          <div><strong id="stat-phone">0</strong><span>Sin teléfono</span></div>
+          <div><strong id="stat-name">0</strong><span>Sin nombre</span></div>
+          <div><strong id="stat-noncontacts">0</strong><span>No-contactos excluidos</span></div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Telefono</th><th>Nombre y Apellido</th><th>Zona</th></tr></thead>
+            <tbody id="preview-body"><tr><td colspan="3" class="empty">La vista previa aparecerá después del análisis.</td></tr></tbody>
+          </table>
+        </div>
+        <p id="preview-note" class="hint">Se muestran hasta 25 registros. El Excel incluye todos los contactos válidos.</p>
+        <div class="actions">
+          <button id="export-excel" class="button button--primary" type="button" disabled>Exportar Excel</button>
+          <button id="reset-export" class="button button--secondary" type="button">Limpiar resultados</button>
+        </div>
+      </section>
+
+      <section id="problem-card" class="card problem-card" hidden>
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Revisión</span>
+            <h2>Contactos problemáticos</h2>
+          </div>
+          <strong id="problem-count">0</strong>
+        </div>
+        <p>Estos elementos no se exportaron porque faltaba un teléfono comprobable o porque no eran contactos individuales.</p>
+        <ul id="problem-list"></ul>
+      </section>
+
+      <section class="card diagnostic-card">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Diagnóstico</span>
+            <h2 id="diagnostic-status">Sin comprobar</h2>
+          </div>
+          <button id="codex-report" class="button button--secondary" type="button">Descargar reporte para Codex</button>
+        </div>
+        <dl class="diagnostic-grid">
+          <div><dt>Último paso funcional</dt><dd id="diagnostic-last">—</dd></div>
+          <div><dt>Paso fallido</dt><dd id="diagnostic-failed">—</dd></div>
+          <div><dt>Etiqueta</dt><dd id="diagnostic-label">—</dd></div>
+          <div><dt>Estrategia</dt><dd id="diagnostic-strategy">—</dd></div>
+          <div><dt>Elemento esperado</dt><dd id="diagnostic-expected">—</dd></div>
+          <div><dt>Candidatos encontrados</dt><dd id="diagnostic-candidates">0</dd></div>
+        </dl>
+        <p id="ui-error" class="error" role="alert" hidden></p>
+      </section>
+
+      <footer>
+        <strong>Privacidad:</strong> teléfono, nombre y etiquetas permanecen dentro de tu navegador. Los resultados temporales se guardan sólo en la sesión de la extensión.
+      </footer>
+    </main>
+    <script type="module" src="./page.js"></script>
+  </body>
+</html>
