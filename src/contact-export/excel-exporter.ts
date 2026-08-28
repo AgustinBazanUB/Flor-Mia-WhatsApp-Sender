@@ -33,7 +33,7 @@ export function buildContactExportWorkbook(input: ContactExportWorkbookInput): U
     String(contact.name || ""),
     String(contact.zone || "")
   ]);
-  const worksheet = XLSX.utils.aoa_to_sheet([CONTACT_EXPORT_HEADERS, ...rows]);
+  const worksheet = XLSX.utils.aoa_to_sheet([[...CONTACT_EXPORT_HEADERS], ...rows]);
   worksheet["!cols"] = [{ wch: 20 }, { wch: 34 }, { wch: 34 }];
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Contactos");
@@ -45,7 +45,11 @@ export function downloadContactExportWorkbook(input: ContactExportWorkbookInput)
   try {
     const data = buildContactExportWorkbook(input);
     const filename = contactExportFilename(input.selectedLabels, input.date);
-    const blob = new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    // Copia a un ArrayBuffer propio para mantener compatibilidad estricta con BlobPart
+    // aun cuando los typings de una dependencia declaren ArrayBufferLike.
+    const bytes = new Uint8Array(data.byteLength);
+    bytes.set(data);
+    const blob = new Blob([bytes.buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
