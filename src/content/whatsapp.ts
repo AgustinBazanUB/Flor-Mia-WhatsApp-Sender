@@ -24,10 +24,41 @@ import { CONTACT_EXPORT_ERROR_CODES } from "../contact-export/types";
 
 const proofControllers = new Map<string, AbortController>();
 const contactExportControllers = new Map<string, AbortController>();
+const CONTACT_EXPORT_PROGRESS_CHANNEL = "flormia_contact_export_progress_v1";
 installConversationInteractionGuard(document);
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
   return { ok: true, requestId, data };
+}
+
+function abortActiveContactExports(reason: string): void {
+  if (!contactExportControllers.size) return;
+  for (const controller of contactExportControllers.values()) controller.abort();
+  logger.info("contact_export.preempted", { reason, activeOperations: contactExportControllers.size });
+}
+
+async function publishContactExportProgress(
+  operationId: string,
+  progress: {
+    processed: number;
+    totalHint: number | null;
+    percent: number | null;
+    currentLabel: string | null;
+    labelIndex: number;
+    totalLabels: number;
+    currentContact: number;
+  }
+): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage({
+      channel: CONTACT_EXPORT_PROGRESS_CHANNEL,
+      operationId,
+      ...progress
+    });
+  } catch {
+    // El progreso es informativo. Una pérdida temporal del listener de background
+    // no debe detener la extracción ni reenviar información a servicios externos.
+  }
 }
 
 function beforeSendCheckpoint(operationId: string, required: boolean) {
@@ -47,6 +78,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (sender.id !== chrome.runtime.id || !isInternalEnvelope(message) || message.source !== "service-worker") return false;
 
   if (message.type === INTERNAL_MESSAGE_TYPES.whatsappOpenConversation) {
+    abortActiveContactExports("sender_open_conversation");
     const payload = message.payload as InternalRequestMap["WA_OPEN_CONVERSATION"];
     if (!/^\d{8,15}$/.test(payload.phoneDigits) || !payload.navigationRequestId) {
       sendResponse({ ok: false, requestId: message.requestId, error: serializeError(new ExtensionError(ERROR_CODES.invalidInput, "Navegación interna inválida.")) });
@@ -116,12 +148,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         try {
           const candidates = await collectContactsForLabels(payload.labels, {
             signal: controller.signal,
-            progress: async (progress) => {
-              await sendRuntimeRequest("whatsapp-content", INTERNAL_MESSAGE_TYPES.contactExportProgress, {
-                operationId: payload.operationId,
-                ...progress
-              });
-            }
+            progress: (progress) => publishContactExportProgress(payload.operationId, progress)
           });
           sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_ANALYZE"]>(message.requestId, {
             candidates,
@@ -145,6 +172,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappProveConversation) {
+        abortActiveContactExports("sender_prove_conversation");
         const payload = message.payload as InternalRequestMap["WA_PROVE_CONVERSATION"];
         if (payload.expectedContentInstanceId && payload.expectedContentInstanceId !== CONTENT_INSTANCE_ID) {
           throw new ExtensionError(
@@ -199,6 +227,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendText) {
+        abortActiveContactExports("sender_send_text");
         const payload = message.payload as InternalRequestMap["WA_SEND_TEXT"];
         const data = await sendAndVerifyText(payload, {
           beforeSend: beforeSendCheckpoint(payload.operationId, payload.checkpointRequired === true)
@@ -207,6 +236,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendImage) {
+        abortActiveContactExports("sender_send_image");
         const payload = message.payload as InternalRequestMap["WA_SEND_IMAGE"];
         const data = await sendAndVerifyImage(payload, {
           beforeSend: beforeSendCheckpoint(payload.operationId, payload.checkpointRequired === true)
@@ -215,6 +245,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappReconcileStep) {
+        abortActiveContactExports("sender_reconcile");
         const data = await reconcileWhatsAppStep(message.payload as Parameters<typeof reconcileWhatsAppStep>[0]);
         sendResponse(success(message.requestId, data));
         return;
