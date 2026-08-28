@@ -22,12 +22,15 @@ manifest.host_permissions = [...new Set(["https://web.whatsapp.com/*", ...webApp
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(resolve(dist, "popup"), { recursive: true });
+await mkdir(resolve(dist, "contacts"), { recursive: true });
 await mkdir(resolve(dist, "diagnostics"), { recursive: true });
 await writeFile(resolve(dist, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 await cp(resolve(root, "src/popup/index.html"), resolve(dist, "popup/index.html"));
 await cp(resolve(root, "src/popup/popup.css"), resolve(dist, "popup/popup.css"));
 await cp(resolve(root, "src/popup/user-facing.css"), resolve(dist, "popup/user-facing.css"));
 await cp(resolve(root, "src/popup/optimistic-controls.js"), resolve(dist, "popup/optimistic-controls.js"));
+await cp(resolve(root, "src/contact-export/page.html"), resolve(dist, "contacts/index.html"));
+await cp(resolve(root, "src/contact-export/page.css"), resolve(dist, "contacts/page.css"));
 await cp(resolve(root, "src/diagnostics/report.html"), resolve(dist, "diagnostics/report.html"));
 await cp(resolve(root, "src/diagnostics/report.css"), resolve(dist, "diagnostics/report.css"));
 
@@ -50,6 +53,11 @@ const builds = [
   {
     entryPoints: [resolve(root, "src/popup/popup.ts")],
     outfile: resolve(dist, "popup/popup.js"),
+    format: "esm"
+  },
+  {
+    entryPoints: [resolve(root, "src/contact-export/page.ts")],
+    outfile: resolve(dist, "contacts/page.js"),
     format: "esm"
   },
   {
