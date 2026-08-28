@@ -1,0 +1,51 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f3; color: #252525; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input { font: inherit; }
+.contact-app { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 48px; }
+.hero, .section-heading, .actions, .progress-copy, .progress-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.hero { margin-bottom: 20px; align-items: flex-start; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 8px; font-size: clamp(1.7rem, 3vw, 2.4rem); }
+h2 { margin-bottom: 0; font-size: 1.05rem; }
+.eyebrow { display: block; margin-bottom: 5px; color: #6f6b5f; font-size: .75rem; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+.card { background: #fff; border: 1px solid #deddd8; border-radius: 16px; padding: 20px; margin-bottom: 16px; box-shadow: 0 5px 18px rgba(0,0,0,.035); }
+.section-heading { align-items: flex-start; margin-bottom: 14px; }
+.actions { justify-content: flex-start; flex-wrap: wrap; margin: 14px 0; }
+.button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; border-radius: 10px; border: 1px solid #c8c6bf; padding: 0 14px; text-decoration: none; cursor: pointer; transition: opacity .15s ease, transform .15s ease; }
+.button:hover:not(:disabled) { transform: translateY(-1px); }
+.button:disabled { opacity: .45; cursor: not-allowed; }
+.button--primary { color: #fff; background: #303b2d; border-color: #303b2d; }
+.button--secondary { color: #30332d; background: #f7f7f4; }
+.button--danger { color: #7f1d1d; border-color: #efb7b7; background: #fff2f2; }
+.hint { color: #716f69; font-size: .88rem; }
+.label-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 9px; }
+.label-option { display: flex; gap: 10px; align-items: center; border: 1px solid #e3e2dd; border-radius: 10px; padding: 11px 12px; background: #fbfbf9; }
+.label-option input { width: 18px; height: 18px; }
+.label-option small { color: #77746d; margin-left: auto; }
+.progress-card { margin-top: 16px; border-radius: 12px; padding: 14px; background: #f7f7f4; }
+.progress-track { height: 9px; margin: 12px 0; border-radius: 100px; overflow: hidden; background: #deddd8; }
+.progress-track span { display: block; width: 0; height: 100%; background: #596b52; transition: width .2s ease; }
+.progress-meta { justify-content: flex-start; flex-wrap: wrap; color: #66635e; font-size: .85rem; }
+.stats { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 10px; margin: 16px 0; }
+.stats div { padding: 12px; border: 1px solid #e6e5df; border-radius: 12px; background: #fafaf8; }
+.stats strong, .stats span { display: block; }
+.stats strong { font-size: 1.3rem; }
+.stats span { margin-top: 4px; font-size: .78rem; color: #74716b; }
+.table-wrap { overflow-x: auto; border: 1px solid #e0dfda; border-radius: 12px; }
+table { width: 100%; border-collapse: collapse; min-width: 650px; }
+th, td { padding: 10px 12px; border-bottom: 1px solid #ecebe6; text-align: left; vertical-align: top; }
+th { background: #f6f6f2; font-size: .82rem; }
+td { font-size: .88rem; }
+.empty { color: #8b8881; text-align: center; }
+.problem-card { border-color: #efd6ad; }
+.problem-card ul { margin: 0; padding-left: 20px; }
+.diagnostic-card[data-status="green"] { border-left: 5px solid #4f7b55; }
+.diagnostic-card[data-status="red"] { border-left: 5px solid #a63a3a; }
+.diagnostic-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 16px; }
+.diagnostic-grid div { padding: 9px 0; border-bottom: 1px solid #ecebe6; }
+.diagnostic-grid dt { color: #77746d; font-size: .75rem; }
+.diagnostic-grid dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.error { color: #8b1e1e; background: #fff1f1; border-radius: 10px; padding: 10px 12px; margin: 14px 0 0; }
+footer { color: #66635e; font-size: .82rem; padding: 4px 2px; }
+@media (max-width: 780px) { .contact-app { width: min(100% - 20px, 1120px); padding-top: 16px; } .hero { display: block; } .hero .button { margin-top: 12px; } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .diagnostic-grid { grid-template-columns: 1fr; } }
