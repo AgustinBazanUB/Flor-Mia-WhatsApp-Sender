@@ -16,8 +16,14 @@ import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
 import { waitForConversationContext } from "../whatsapp/conversation-context";
 import { snapshotRuntimeMetrics } from "../performance/runtime-metrics";
+import {
+  collectContactsForLabels,
+  detectWhatsAppLabels
+} from "../contact-export/whatsapp-contact-adapter";
+import { CONTACT_EXPORT_ERROR_CODES } from "../contact-export/types";
 
 const proofControllers = new Map<string, AbortController>();
+const contactExportControllers = new Map<string, AbortController>();
 installConversationInteractionGuard(document);
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
@@ -72,6 +78,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     return false;
   }
 
+  if (message.type === INTERNAL_MESSAGE_TYPES.whatsappContactExportCancel) {
+    const payload = message.payload as InternalRequestMap["WA_CONTACT_EXPORT_CANCEL"];
+    const controller = contactExportControllers.get(payload.operationId);
+    controller?.abort();
+    sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_CANCEL"]>(message.requestId, { cancelled: Boolean(controller) }));
+    return false;
+  }
+
   void (async () => {
     try {
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappDiagnosticSnapshot) {
@@ -80,6 +94,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           documentReadyState: document.readyState,
           composerPresent: Boolean(document.querySelector("#main footer [role='textbox'][contenteditable='true'], #main footer [contenteditable='true']")),
           activeProofControllers: proofControllers.size,
+          activeContactExportControllers: contactExportControllers.size,
           runtimeMetrics: snapshotRuntimeMetrics() as unknown as Record<string, unknown>
         }));
         return;
@@ -87,6 +102,46 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappPreflight) {
         const data = await runWhatsAppPreflight(message.payload as InternalRequestMap["WA_PREFLIGHT"]);
         sendResponse(success(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappContactExportDetectLabels) {
+        const data = await detectWhatsAppLabels();
+        sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_DETECT_LABELS"]>(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappContactExportAnalyze) {
+        const payload = message.payload as InternalRequestMap["WA_CONTACT_EXPORT_ANALYZE"];
+        const controller = new AbortController();
+        contactExportControllers.set(payload.operationId, controller);
+        try {
+          const candidates = await collectContactsForLabels(payload.labels, {
+            signal: controller.signal,
+            progress: async (progress) => {
+              await sendRuntimeRequest("whatsapp-content", INTERNAL_MESSAGE_TYPES.contactExportProgress, {
+                operationId: payload.operationId,
+                ...progress
+              });
+            }
+          });
+          sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_ANALYZE"]>(message.requestId, {
+            candidates,
+            strategy: "semantic-label-iteration"
+          }));
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw new ExtensionError(ERROR_CODES.contactExportCancelled, "La extracción de contactos fue cancelada.", {
+              recoverable: true,
+              details: {
+                contactExportCode: CONTACT_EXPORT_ERROR_CODES.cancelled,
+                stage: "cancelled",
+                strategy: "semantic-label-iteration"
+              }
+            });
+          }
+          throw error;
+        } finally {
+          if (contactExportControllers.get(payload.operationId) === controller) contactExportControllers.delete(payload.operationId);
+        }
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappProveConversation) {
