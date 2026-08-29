@@ -22,7 +22,7 @@ export function createContactExportDiagnosticBundle(
     .filter((label) => state.selectedLabelIds.includes(label.id))
     .map((label) => sanitizeDiagnosticText(label.name, { maxStringLength: 100 }));
   const report = {
-    reportSchemaVersion: 1,
+    reportSchemaVersion: 2,
     reportType: "CONTACT_EXPORT_DIAGNOSTIC",
     generatedAt,
     extension: {
@@ -30,6 +30,7 @@ export function createContactExportDiagnosticBundle(
       version: extensionVersion,
       manifestVersion: 3
     },
+    feature: "Contact Export",
     contactExport: {
       status: state.status,
       labelsDetected: state.labels.length,
@@ -37,6 +38,8 @@ export function createContactExportDiagnosticBundle(
       lastSuccessfulStep: diagnostic.lastSuccessfulStep,
       failedStep: diagnostic.failedStep,
       label: diagnostic.labelName ? sanitizeDiagnosticText(diagnostic.labelName, { maxStringLength: 100 }) : null,
+      reportedContacts: diagnostic.reportedCount,
+      collectedUniqueContacts: diagnostic.collectedUniqueContacts,
       strategy: diagnostic.strategy,
       expectedElement: diagnostic.expectedElement,
       candidatesFound: diagnostic.candidateCount,
@@ -45,7 +48,19 @@ export function createContactExportDiagnosticBundle(
       errorCode: diagnostic.errorCode,
       errorMessage: diagnostic.errorMessage ? sanitizeDiagnosticText(diagnostic.errorMessage, { maxStringLength: 500 }) : null,
       stack: sanitizeStackTrace(diagnostic.stack),
-      summary: state.summary
+      summary: state.summary,
+      metrics: state.metrics,
+      labelResults: state.labelResults.map((result) => ({
+        labelId: result.labelId,
+        labelName: sanitizeDiagnosticText(result.labelName, { maxStringLength: 100 }),
+        reportedCount: result.reportedCount,
+        collectedUniqueContacts: result.collectedUniqueContacts,
+        resolvedPhones: result.resolvedPhones,
+        unresolvedPhones: result.unresolvedPhones,
+        rowScans: result.rowScans,
+        scrollOperations: result.scrollOperations,
+        scopeStrategy: result.scopeStrategy
+      }))
     },
     privacy: {
       localOnly: true,
@@ -54,6 +69,7 @@ export function createContactExportDiagnosticBundle(
     },
     probableFiles: [
       "src/contact-export/whatsapp-contact-adapter.ts",
+      "src/contact-export/contact-deduplicator.ts",
       "src/contact-export/contact-export-store.ts",
       "src/background/contact-export-runtime.ts",
       "src/content/whatsapp.ts",
@@ -62,21 +78,24 @@ export function createContactExportDiagnosticBundle(
   };
 
   const lines = [
-    "REPORTE PARA CODEX — CONTACT EXPORT DIAGNOSTIC",
+    "REPORTE PARA CODEX / CHATGPT — CONTACT EXPORT DIAGNOSTIC",
     "",
-    `Versión de la extensión: ${extensionVersion}`,
+    `Version: ${extensionVersion}`,
+    "Feature: Contact Export",
     `Fecha: ${generatedAt}`,
     `Estado: ${state.status}`,
-    `Último paso funcional: ${valueOrDash(diagnostic.lastSuccessfulStep)}`,
-    `Paso fallido: ${valueOrDash(diagnostic.failedStep)}`,
-    `Etiqueta: ${valueOrDash(diagnostic.labelName)}`,
-    `Estrategia utilizada: ${valueOrDash(diagnostic.strategy)}`,
-    `Elemento esperado: ${valueOrDash(diagnostic.expectedElement)}`,
-    `Candidatos encontrados: ${diagnostic.candidateCount}`,
-    `Cantidad procesada: ${diagnostic.processedCount}`,
-    `Último contacto procesado (ID anónimo): ${valueOrDash(diagnostic.lastContactCorrelationId)}`,
+    `Label: ${valueOrDash(diagnostic.labelName)}`,
+    `Reported contacts: ${valueOrDash(diagnostic.reportedCount)}`,
+    `Collected unique contacts: ${valueOrDash(diagnostic.collectedUniqueContacts)}`,
+    `Last successful step: ${valueOrDash(diagnostic.lastSuccessfulStep)}`,
+    `Failed step: ${valueOrDash(diagnostic.failedStep)}`,
+    `Strategy: ${valueOrDash(diagnostic.strategy)}`,
+    `Expected element: ${valueOrDash(diagnostic.expectedElement)}`,
+    `Candidates found: ${diagnostic.candidateCount}`,
+    `Processed count: ${diagnostic.processedCount}`,
+    `Last contact (anonymous ID): ${valueOrDash(diagnostic.lastContactCorrelationId)}`,
     `Error: ${valueOrDash(diagnostic.errorCode)}`,
-    `Detalle: ${valueOrDash(diagnostic.errorMessage)}`,
+    `Detail: ${valueOrDash(diagnostic.errorMessage)}`,
     `Stack: ${valueOrDash(sanitizeStackTrace(diagnostic.stack))}`,
     "",
     `Etiquetas detectadas: ${state.labels.length}`,
@@ -84,9 +103,16 @@ export function createContactExportDiagnosticBundle(
     `Total encontrados: ${state.summary.found}`,
     `Contactos válidos: ${state.summary.valid}`,
     `Duplicados eliminados: ${state.summary.duplicatesRemoved}`,
-    `Sin teléfono: ${state.summary.withoutPhone}`,
+    `PHONE_UNRESOLVED / inválidos: ${state.summary.withoutPhone}`,
     `Sin nombre: ${state.summary.withoutName}`,
     `No-contactos excluidos: ${state.summary.excludedNonContacts}`,
+    "",
+    `Tiempo total: ${state.metrics ? `${state.metrics.durationMs} ms` : "—"}`,
+    `Contactos/segundo: ${valueOrDash(state.metrics?.contactsPerSecond)}`,
+    `Filas inspeccionadas: ${valueOrDash(state.metrics?.rowScans)}`,
+    `Scrolls del contenedor de etiqueta: ${valueOrDash(state.metrics?.scrollOperations)}`,
+    `Operaciones visuales: ${valueOrDash(state.metrics?.visualOperations)}`,
+    `Chats abiertos durante extracción normal: ${valueOrDash(state.metrics?.chatsOpened)}`,
     "",
     "Privacidad: este reporte no incluye nombres de contactos, teléfonos completos ni contenido de conversaciones."
   ];
