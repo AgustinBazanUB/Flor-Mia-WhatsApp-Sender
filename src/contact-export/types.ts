@@ -107,6 +107,13 @@ export interface ContactExportLabelResult {
   scopeStrategy: string;
 }
 
+export interface ContactExportCollectionResult {
+  candidates: RawContactCandidate[];
+  strategy: string;
+  labelResults: ContactExportLabelResult[];
+  metrics: ContactExportMetrics;
+}
+
 export interface ContactExportProgress {
   operationId: string;
   processed: number;
