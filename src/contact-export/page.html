@@ -10,9 +10,9 @@
     <main class="contact-app">
       <header class="hero">
         <div>
-          <span class="eyebrow">Flor Mía WhatsApp Sender</span>
+          <span class="eyebrow">Flor Mía WhatsApp Sender · versión <strong id="module-version">—</strong></span>
           <h1>Contactos de WhatsApp</h1>
-          <p>Exportá contactos de tus etiquetas o listas de WhatsApp Business a un Excel local, sin leer conversaciones ni enviar datos a terceros.</p>
+          <p>Exportá contactos de tus etiquetas o listas de WhatsApp Business a un Excel local, sin abrir chats uno por uno, leer conversaciones ni enviar datos a terceros.</p>
         </div>
         <a class="button button--secondary" href="../popup/index.html">Volver al sender</a>
       </header>
@@ -37,7 +37,7 @@
           </div>
           <strong id="label-count">0</strong>
         </div>
-        <p>La detección usa la interfaz visible de WhatsApp Web. No consulta endpoints privados.</p>
+        <p>La detección usa la interfaz local de WhatsApp Web. No consulta endpoints privados.</p>
         <div class="actions">
           <button id="detect-labels" class="button button--primary" type="button">Detectar etiquetas</button>
           <button id="select-all" class="button button--secondary" type="button" disabled>Seleccionar todas</button>
@@ -56,7 +56,7 @@
           </div>
           <strong id="selected-count">0 seleccionadas</strong>
         </div>
-        <p>Los contactos sin un teléfono internacional comprobable quedan informados como problemáticos; la extensión no inventa números ni países.</p>
+        <p>El análisis es <strong>phone-first</strong> y queda limitado a la etiqueta seleccionada. Si no puede demostrar el teléfono, lo informa como <strong>PHONE_UNRESOLVED</strong> y no inventa datos.</p>
         <div class="actions">
           <button id="analyze" class="button button--primary" type="button" disabled>Analizar contactos</button>
           <button id="cancel" class="button button--danger" type="button" hidden>Cancelar análisis</button>
@@ -89,9 +89,16 @@
           <div><strong id="stat-found">0</strong><span>Total encontrados</span></div>
           <div><strong id="stat-valid">0</strong><span>Contactos válidos</span></div>
           <div><strong id="stat-duplicates">0</strong><span>Duplicados eliminados</span></div>
-          <div><strong id="stat-phone">0</strong><span>Sin teléfono</span></div>
+          <div><strong id="stat-phone">0</strong><span>PHONE_UNRESOLVED</span></div>
           <div><strong id="stat-name">0</strong><span>Sin nombre</span></div>
           <div><strong id="stat-noncontacts">0</strong><span>No-contactos excluidos</span></div>
+        </div>
+        <div class="stats">
+          <div><strong id="metric-duration">—</strong><span>Tiempo total</span></div>
+          <div><strong id="metric-rate">—</strong><span>Contactos / segundo</span></div>
+          <div><strong id="metric-scrolls">—</strong><span>Scrolls de etiqueta</span></div>
+          <div><strong id="metric-visual">—</strong><span>Operaciones visuales</span></div>
+          <div><strong id="metric-chats">—</strong><span>Chats abiertos</span></div>
         </div>
 
         <div class="table-wrap">
@@ -111,7 +118,7 @@
         <div class="section-heading">
           <div>
             <span class="eyebrow">Revisión</span>
-            <h2>Contactos problemáticos</h2>
+            <h2>Pendientes / No resueltos</h2>
           </div>
           <strong id="problem-count">0</strong>
         </div>
@@ -125,7 +132,7 @@
             <span class="eyebrow">Diagnóstico</span>
             <h2 id="diagnostic-status">Sin comprobar</h2>
           </div>
-          <button id="codex-report" class="button button--secondary" type="button">Descargar reporte para Codex</button>
+          <button id="codex-report" class="button button--secondary" type="button">Descargar reporte para Codex / ChatGPT</button>
         </div>
         <dl class="diagnostic-grid">
           <div><dt>Último paso funcional</dt><dd id="diagnostic-last">—</dd></div>
@@ -133,6 +140,8 @@
           <div><dt>Etiqueta</dt><dd id="diagnostic-label">—</dd></div>
           <div><dt>Estrategia</dt><dd id="diagnostic-strategy">—</dd></div>
           <div><dt>Elemento esperado</dt><dd id="diagnostic-expected">—</dd></div>
+          <div><dt>Cantidad informada</dt><dd id="diagnostic-reported">—</dd></div>
+          <div><dt>Únicos recolectados</dt><dd id="diagnostic-collected">—</dd></div>
           <div><dt>Candidatos encontrados</dt><dd id="diagnostic-candidates">0</dd></div>
         </dl>
         <p id="ui-error" class="error" role="alert" hidden></p>
