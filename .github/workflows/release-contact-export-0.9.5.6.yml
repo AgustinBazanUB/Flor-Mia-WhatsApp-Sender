@@ -23,6 +23,26 @@ jobs:
           cache: npm
       - name: Apply 0.9.5.6 patch
         run: python scripts/release-0.9.5.6.py
+      - name: Fix strict TypeScript guards
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          resolver = Path('src/contact-export/whatsapp-main-world-resolver.ts')
+          text = resolver.read_text(encoding='utf-8')
+          old = '''    const [phone, sources] = [...byPhone.entries()][0];\n    phones[id] = phone;'''
+          new = '''    const onlyEntry = [...byPhone.entries()][0];\n    if (!onlyEntry) continue;\n    const [phone, sources] = onlyEntry;\n    phones[id] = phone;'''
+          if old not in text:
+              raise SystemExit('history unique-entry guard target not found')
+          resolver.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test = Path('tests/contact-export-hydration.test.ts')
+          text = test.read_text(encoding='utf-8')
+          old = '''      const id = ids[index];\n      chats.set(id, {'''
+          new = '''      const id = ids[index]!;\n      chats.set(id, {'''
+          if old not in text:
+              raise SystemExit('210-LID test id target not found')
+          test.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Install locked dependencies
         run: npm ci
       - name: Verify before commit
