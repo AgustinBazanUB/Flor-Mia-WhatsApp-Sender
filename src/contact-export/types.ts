@@ -42,6 +42,7 @@ export interface WhatsAppLabelInfo {
 
 export type ContactKind = "contact" | "group" | "community" | "channel" | "status" | "system" | "unknown";
 export type PhoneResolutionStatus = "resolved" | "unresolved" | "invalid";
+export type ContactPhoneSource = "jid" | "structured_phone" | "tel_link" | "visible_international" | "href_phone" | "none";
 
 export interface RawContactCandidate {
   sourceId: string;
@@ -50,7 +51,7 @@ export interface RawContactCandidate {
   labelName: string;
   name: string;
   phoneCandidate: string | null;
-  phoneSource: "jid" | "tel_link" | "visible_international" | "href_phone" | "none";
+  phoneSource: ContactPhoneSource;
   phoneStatus: PhoneResolutionStatus;
   kind: ContactKind;
   strategy: string;
