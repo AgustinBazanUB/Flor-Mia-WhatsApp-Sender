@@ -33,6 +33,8 @@ export class ContactExportRuntime {
       selectedLabelIds: [],
       contacts: [],
       problems: [],
+      metrics: null,
+      labelResults: [],
       progress: null,
       diagnostic: {
         status: "unknown",
@@ -43,6 +45,8 @@ export class ContactExportRuntime {
         expectedElement: "Etiquetas/Listas de WhatsApp Business",
         candidateCount: 0,
         processedCount: 0,
+        reportedCount: null,
+        collectedUniqueContacts: null,
         lastContactCorrelationId: null,
         errorCode: null,
         errorMessage: null,
@@ -72,6 +76,8 @@ export class ContactExportRuntime {
           expectedElement: "Etiquetas/Listas de WhatsApp Business",
           candidateCount: result.candidateCount,
           processedCount: 0,
+          reportedCount: null,
+          collectedUniqueContacts: null,
           lastContactCorrelationId: null,
           errorCode: null,
           errorMessage: null,
@@ -99,6 +105,8 @@ export class ContactExportRuntime {
       selectedLabelIds: labels.map((label) => label.id),
       contacts: [],
       problems: [],
+      metrics: null,
+      labelResults: [],
       progress: {
         operationId,
         processed: 0,
@@ -116,7 +124,11 @@ export class ContactExportRuntime {
         lastSuccessfulStep: "labels_selected",
         failedStep: null,
         labelName: labels[0]?.name ?? null,
-        expectedElement: "Listado de chats/contactos de la etiqueta",
+        expectedElement: "Listado exclusivo de la etiqueta seleccionada",
+        candidateCount: 0,
+        processedCount: 0,
+        reportedCount: labels[0]?.countHint ?? null,
+        collectedUniqueContacts: 0,
         errorCode: null,
         errorMessage: null,
         stack: null,
@@ -133,12 +145,16 @@ export class ContactExportRuntime {
         Math.max(60_000, labels.length * 60_000)
       );
       const deduplicated = deduplicateContactCandidates(result.candidates);
+      const latest = await this.store.load();
+      const lastLabelResult = latest.labelResults.at(-1) ?? null;
       return this.store.patch({
         status: "completed",
         operationId: null,
         contacts: deduplicated.contacts,
         problems: deduplicated.problems,
         summary: deduplicated.summary,
+        metrics: latest.metrics,
+        labelResults: latest.labelResults,
         progress: {
           operationId,
           processed: deduplicated.summary.found,
@@ -148,16 +164,20 @@ export class ContactExportRuntime {
           labelIndex: labels.length,
           totalLabels: labels.length,
           currentContact: deduplicated.summary.found,
+          ...(latest.metrics ? { metrics: latest.metrics } : {}),
+          ...(latest.labelResults.length ? { labelResults: latest.labelResults } : {}),
           updatedAt: new Date().toISOString()
         },
         diagnostic: {
           ...deduplicated.diagnostic,
           status: "green",
-          lastSuccessfulStep: "contact_export_analysis_completed",
+          lastSuccessfulStep: "label_scoped_phone_first_analysis_completed",
           labelName: labels.at(-1)?.name ?? null,
           strategy: result.strategy,
           candidateCount: result.candidates.length,
           processedCount: deduplicated.summary.found,
+          reportedCount: lastLabelResult?.reportedCount ?? null,
+          collectedUniqueContacts: lastLabelResult?.collectedUniqueContacts ?? deduplicated.summary.found,
           updatedAt: new Date().toISOString()
         }
       });
@@ -170,7 +190,7 @@ export class ContactExportRuntime {
         return this.store.patch({ status: "cancelled", operationId: null });
       }
       const latest = await this.store.load();
-      await this.recordFailure(error, "analyze_contacts", latest.progress?.currentLabel ?? null, "Listado de chats/contactos de la etiqueta");
+      await this.recordFailure(error, "label_scoped_contact_extraction", latest.progress?.currentLabel ?? null, "Listado exclusivo de la etiqueta seleccionada");
       throw error;
     }
   }
@@ -197,15 +217,31 @@ export class ContactExportRuntime {
       ...payload,
       updatedAt: new Date().toISOString()
     };
-    return this.store.patch({ progress });
+    const lastLabel = payload.labelResults?.at(-1) ?? current.labelResults.at(-1) ?? null;
+    return this.store.patch({
+      progress,
+      ...(payload.metrics ? { metrics: payload.metrics } : {}),
+      ...(payload.labelResults ? { labelResults: payload.labelResults } : {}),
+      diagnostic: {
+        ...current.diagnostic,
+        lastSuccessfulStep: "label_scoped_contact_extraction",
+        labelName: payload.currentLabel,
+        strategy: lastLabel?.scopeStrategy ?? current.diagnostic.strategy,
+        candidateCount: payload.processed,
+        processedCount: payload.processed,
+        reportedCount: lastLabel?.reportedCount ?? current.diagnostic.reportedCount,
+        collectedUniqueContacts: lastLabel?.collectedUniqueContacts ?? current.diagnostic.collectedUniqueContacts,
+        updatedAt: new Date().toISOString()
+      }
+    });
   }
 
   private async recordFailure(error: unknown, failedStep: string, labelName: string | null, expectedElement: string): Promise<void> {
     const current = await this.store.load();
     const serialized = serializeError(error);
-    const contactCode = String(serialized.details?.contactExportCode || "") as keyof typeof CONTACT_EXPORT_ERROR_CODES;
-    const recognized = Object.values(CONTACT_EXPORT_ERROR_CODES).includes(contactCode as never)
-      ? contactCode as ContactExportState["diagnostic"]["errorCode"]
+    const rawContactCode = String(serialized.details?.contactExportCode || "");
+    const recognized = Object.values(CONTACT_EXPORT_ERROR_CODES).includes(rawContactCode as never)
+      ? rawContactCode as ContactExportState["diagnostic"]["errorCode"]
       : serialized.code === ERROR_CODES.whatsappNotOpen
         ? CONTACT_EXPORT_ERROR_CODES.whatsappNotReady
         : CONTACT_EXPORT_ERROR_CODES.contactExtractionFailed;
@@ -215,12 +251,14 @@ export class ContactExportRuntime {
       diagnostic: {
         status: "red",
         lastSuccessfulStep: current.diagnostic.lastSuccessfulStep,
-        failedStep,
+        failedStep: typeof serialized.details?.stage === "string" ? serialized.details.stage : failedStep,
         labelName,
         strategy: typeof serialized.details?.strategy === "string" ? serialized.details.strategy : current.diagnostic.strategy,
         expectedElement,
         candidateCount: Number(serialized.details?.candidateCount || current.diagnostic.candidateCount || 0),
         processedCount: current.progress?.processed ?? 0,
+        reportedCount: serialized.details?.expectedCount == null ? current.diagnostic.reportedCount : Number(serialized.details.expectedCount),
+        collectedUniqueContacts: serialized.details?.collectedCount == null ? current.diagnostic.collectedUniqueContacts : Number(serialized.details.collectedCount),
         lastContactCorrelationId: current.diagnostic.lastContactCorrelationId,
         errorCode: recognized,
         errorMessage: serialized.message,
