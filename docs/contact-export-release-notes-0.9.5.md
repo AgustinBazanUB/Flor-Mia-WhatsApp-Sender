@@ -1,47 +1,34 @@
-# Corte 0.9.5 — Contactos de WhatsApp
+# Contact Export 0.9.5 — reemplazado por 9.5.1
 
-## Decisiones técnicas
+La primera implementación del módulo Contact Export quedó reemplazada por la arquitectura 9.5.1.
 
-- La funcionalidad se implementa fuera de `CampaignEngine` y fuera de la cola durable de campañas.
-- El Service Worker histórico del sender no necesita conocer teléfonos/nombres exportados.
-- El único punto compartido es el Content Script de WhatsApp. Si llega una acción de sender (`openConversation`, proof, send o reconcile), cualquier exportación activa se aborta antes de continuar.
-- Datos sensibles del exportador se conservan únicamente en `chrome.storage.session`.
-- El XLSX se genera localmente con SheetJS 0.18.5, empaquetado por esbuild; no se carga desde CDN.
-- No se usan APIs privadas de WhatsApp ni contenido de mensajes.
-- La capa de DOM está centralizada en `whatsapp-contact-adapter.ts`.
-- Teléfonos locales ambiguos se rechazan; nunca se agrega un país por inferencia.
-- Contactos repetidos se deduplican por teléfono normalizado.
-- Múltiples etiquetas se conservan en una sola celda `Zona`, separadas con ` | `, porque Clientes Fidelizados modela una sola zona/cadena por cliente.
-- La UI completa se abre como página interna `contacts/`; el popup sólo incorpora un acceso, evitando cargar SheetJS o tablas cuando se usa el sender.
+## Motivo
 
-## Archivos principales agregados
+La auditoría posterior encontró que 0.9.5 podía aceptar `#pane-side` como lista inmediatamente después de seleccionar una etiqueta. Ese contenedor también podía seguir representando el listado global de chats, permitiendo escapar del scope seleccionado.
 
-- `src/contact-export/types.ts`
-- `src/contact-export/phone-normalizer.ts`
-- `src/contact-export/contact-deduplicator.ts`
-- `src/contact-export/whatsapp-contact-adapter.ts`
-- `src/contact-export/contact-export-store.ts`
-- `src/contact-export/excel-exporter.ts`
-- `src/contact-export/contact-export-diagnostics.ts`
-- `src/contact-export/page.html`
-- `src/contact-export/page.css`
-- `src/contact-export/page.ts`
-- `src/background/contact-export-runtime.ts`
-- `src/background/contact-export-bootstrap.ts`
+Además, cuando una fila no exponía un teléfono confiable, 0.9.5 intentaba resolverlo abriendo el chat y, en algunos casos, la ficha del contacto.
 
-## Archivos existentes modificados
+Esto explicaba:
 
-- `src/shared/protocol.ts`
-- `src/shared/errors.ts`
-- `src/content/whatsapp.ts`
-- `src/background/recovery-bootstrap.ts`
-- `src/popup/optimistic-controls.js`
-- `scripts/build.mjs`
-- `scripts/validate-build.mjs`
-- `package.json`
-- `package-lock.json`
-- `manifest.json`
+- etiquetas pequeñas terminando con muchos candidatos externos;
+- extracción lenta por navegación y esperas visuales contacto por contacto.
 
-## Riesgo que exige prueba manual
+## Decisiones que se conservan
 
-WhatsApp Web no ofrece un contrato DOM público estable para enumerar etiquetas/listas y todos sus contactos. Los tests verifican las estrategias con DOM controlado, pero la compatibilidad con la sesión real de Flor Mía debe probarse en Chrome antes de una exportación grande.
+- módulo fuera de `CampaignEngine`;
+- resultados sensibles sólo en `chrome.storage.session`;
+- XLSX local con SheetJS;
+- no endpoints privados de WhatsApp;
+- no lectura de mensajes;
+- deduplicación final por teléfono;
+- Zona compatible con Clientes Fidelizados;
+- sender con prioridad sobre una extracción activa.
+
+## Reemplazo 9.5.1
+
+Consultar:
+
+- `docs/whatsapp-contact-export.md`
+- `docs/contact-export-release-notes-9.5.1.md`
+
+9.5.1 agrega extracción **label-scoped + phone-first + no-chat-opening**, recorrido virtualizado acotado, validación de cantidad y diagnóstico fail-closed cuando el scope no puede demostrarse.
