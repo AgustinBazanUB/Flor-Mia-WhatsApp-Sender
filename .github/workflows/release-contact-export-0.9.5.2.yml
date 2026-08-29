@@ -23,6 +23,15 @@ jobs:
           cache: npm
       - name: Apply 0.9.5.2 patch
         run: python scripts/release-0.9.5.2.py
+      - name: Complete diagnostic initialization
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/background/contact-export-runtime.ts')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('          stack: null,\n          updatedAt: new Date().toISOString()', '          stack: null,\n          technicalDetails: {},\n          updatedAt: new Date().toISOString()')
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Install locked dependencies
         run: npm ci
       - name: Verify before commit
