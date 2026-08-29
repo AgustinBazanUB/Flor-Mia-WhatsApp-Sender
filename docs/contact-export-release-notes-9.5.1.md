@@ -79,3 +79,9 @@ Antes de usar cientos de contactos, probar una etiqueta cuyo total sea conocido 
 7. XLSX correcto;
 8. sender operativo después de la extracción;
 9. VERDE en éxito y ROJO + reporte útil ante rotura deliberada.
+
+## Hotfix de validación con sesión real — 2026-08-29
+
+Un reporte real de `Falta Enviar` mostró `Reported contacts: 10`, `Processed count: 1` y `Collected unique contacts: 0`. La causa era doble: el role=list podía no ser el viewport scrollable real y una fila sin JID/teléfono/posición se procesaba como pendiente sin entrar al contador de recorrido.
+
+9.5.1 ahora reevalúa el scroll root por ancestros/viewport, no interpreta un nodo no-scrollable como final de lista, mantiene identidad anónima sólo para recorrido de pendientes (sin convertirla en teléfono válido) y publica resultados parciales para que el diagnóstico conserve `collectedUniqueContacts` aunque la extracción falle.

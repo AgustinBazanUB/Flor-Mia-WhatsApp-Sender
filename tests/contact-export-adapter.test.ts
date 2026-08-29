@@ -202,6 +202,45 @@ describe("WhatsApp contact export semantic adapter", () => {
     expect(result.result.scrollOperations).toBeGreaterThan(0);
   });
 
+  it("counts a phone-unresolved row instead of reporting processed 1 but collected 0", async () => {
+    document.body.innerHTML = `<section id="scope"><h2 id="marker">Zona Tribunales</h2><div id="list" role="list"><div role="listitem"><span title="Cliente pendiente">Cliente pendiente</span></div></div></section>`;
+    const scope = document.getElementById("scope")!;
+    const list = document.getElementById("list")!;
+    const markerElement = document.getElementById("marker")!;
+    setScrollGeometry(list, { clientHeight: 500, scrollHeight: 500 });
+    const view: LabelScopedView = { scopeRoot: scope, listRoot: list, scrollRoot: list, marker: markerElement, strategy: "test-scoped-list" };
+    const result = await collectScopedLabelRows(view, label({ countHint: 1 }), {}, 1, 1);
+    expect(result.result.collectedUniqueContacts).toBe(1);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.phoneStatus).toBe("unresolved");
+  });
+
+  it("finds a real outer scroll viewport when the semantic list itself is not scrollable", async () => {
+    document.body.innerHTML = `<div id="viewport"><section id="scope"><h2 id="marker">Zona Tribunales</h2><div id="list" role="list"></div></section></div>`;
+    const viewport = document.getElementById("viewport")!;
+    const scope = document.getElementById("scope")!;
+    const list = document.getElementById("list")!;
+    const markerElement = document.getElementById("marker")!;
+    let page = 0;
+    const renderPage = () => {
+      list.innerHTML = row(`54911700000${page}`, `Cliente ${page}`, page + 1);
+    };
+    renderPage();
+    setScrollGeometry(list, { clientHeight: 400, scrollHeight: 400 });
+    setScrollGeometry(viewport, { clientHeight: 400, scrollHeight: 5000 });
+    viewport.addEventListener("scroll", () => {
+      if (page < 9) {
+        page += 1;
+        renderPage();
+      }
+    });
+    const view: LabelScopedView = { scopeRoot: scope, listRoot: list, scrollRoot: list, marker: markerElement, strategy: "real-session-regression" };
+    const result = await collectScopedLabelRows(view, label({ countHint: 10 }), {}, 1, 1);
+    expect(result.result.collectedUniqueContacts).toBe(10);
+    expect(result.candidates).toHaveLength(10);
+    expect(result.result.scrollOperations).toBeGreaterThan(0);
+  });
+
   it("classifies group, broadcast and newsletter identifiers as non-contact structures", () => {
     expect(isClearlyNonContactStructuredId("120363001234567890@g.us")).toBe(true);
     expect(isClearlyNonContactStructuredId("12345@newsletter")).toBe(true);
