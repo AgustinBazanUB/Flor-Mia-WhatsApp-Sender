@@ -1,171 +1,196 @@
-# Exportación de contactos de WhatsApp Business
+# Exportación de contactos de WhatsApp Business — 9.5.1
 
 ## Objetivo
 
-Flor Mía WhatsApp Sender incorpora un módulo independiente **Contactos de WhatsApp → Exportar contactos de WhatsApp**. Su objetivo es recorrer etiquetas/listas visibles en la sesión local de WhatsApp Business Web y preparar un archivo Excel para Clientes Fidelizados de Flor Mía.
+Flor Mía WhatsApp Sender incluye el módulo **Contactos de WhatsApp → Exportar contactos de WhatsApp**. En 9.5.1 el núcleo del extractor fue reemplazado por una estrategia **label-scoped + phone-first + no-chat-opening**.
 
-La función no envía mensajes y no reutiliza CampaignEngine. El sender conserva prioridad: si una campaña necesita volver a manipular WhatsApp mientras existe un análisis de contactos, el Content Script cancela el análisis antes de abrir/enviar/reconciliar contenido.
+La función no envía mensajes, no lee conversaciones y no reutiliza CampaignEngine. El sender conserva prioridad: si una campaña necesita manipular WhatsApp mientras existe un análisis, el Content Script cancela la extracción antes de abrir, enviar o reconciliar contenido.
 
-## Privacidad
+## Problema corregido en 9.5.1
 
-- No se usan APIs web externas para procesar datos.
-- No se consultan endpoints privados/no documentados de WhatsApp.
-- No se extrae ni almacena el contenido de conversaciones.
-- Teléfonos, nombres y relaciones con etiquetas se mantienen dentro del navegador.
-- Los resultados temporales se guardan en `chrome.storage.session`, no en `chrome.storage.local`, Firebase, GitHub ni Netlify.
-- El reporte para Codex no incluye nombres de contactos ni teléfonos completos; usa IDs de correlación anónimos.
+La implementación 0.9.5 podía producir un resultado como:
 
-## Arquitectura
+`Etiqueta con 10 contactos → 56 candidatos`
 
-La implementación está separada en:
+La auditoría encontró dos causas concretas en `whatsapp-contact-adapter.ts`:
 
-- `src/contact-export/whatsapp-contact-adapter.ts`: única capa que conoce la interfaz de WhatsApp Web. Centraliza estrategias semánticas y fallbacks.
-- `src/contact-export/phone-normalizer.ts`: normaliza únicamente teléfonos cuyo país está explícito o proviene de un JID personal inequívoco.
-- `src/contact-export/contact-deduplicator.ts`: deduplica por teléfono internacional y combina etiquetas.
-- `src/contact-export/contact-export-store.ts`: estado temporal en `chrome.storage.session`.
-- `src/background/contact-export-runtime.ts`: orquestación de detectar, analizar, cancelar y resumir estado.
-- `src/background/contact-export-bootstrap.ts`: listener de background aislado del Service Worker de campañas.
-- `src/contact-export/excel-exporter.ts`: generación local del XLSX.
-- `src/contact-export/contact-export-diagnostics.ts`: reporte específico para Codex, saneado.
-- `src/contact-export/page.ts`: UI completa del módulo.
+1. después de hacer click en una etiqueta, el extractor aceptaba inmediatamente `#pane-side` como lista de contactos. Ese nodo también representa el listado global de chats y puede existir antes de que WhatsApp haya aplicado el filtro de la etiqueta;
+2. cuando una fila no exponía teléfono/JID, el fallback hacía click en la fila, esperaba que cargara el chat y podía abrir la ficha del contacto para buscar el número.
 
-## Etiquetas y Listas
+El primer punto podía hacer que la extracción escapara de la etiqueta seleccionada. El segundo hacía el proceso lento y visual.
 
-La UI de WhatsApp puede presentar la organización comercial como **Etiquetas / Labels** o **Listas / Lists**. El adaptador contempla ambos nombres y no hardcodea zonas concretas como Microcentro o Tribunales.
+## Arquitectura 9.5.1
 
-La detección intenta, en orden, encontrar una entrada semántica directa y, cuando hace falta, el menú/herramientas comerciales. Nunca hace click por coordenadas.
+La implementación sigue separada en:
 
-## Cómo se determina un contacto
+- `src/contact-export/whatsapp-contact-adapter.ts`: única capa que conoce el DOM de WhatsApp; prueba el scope de etiqueta, recorre listas virtualizadas y resuelve teléfonos desde la fila;
+- `src/contact-export/phone-normalizer.ts`: valida fuentes internacionales/JID sin inventar país;
+- `src/contact-export/contact-deduplicator.ts`: deduplica por teléfono y combina etiquetas seleccionadas;
+- `src/contact-export/contact-export-store.ts`: estado temporal en `chrome.storage.session`;
+- `src/background/contact-export-runtime.ts`: orquestación, scope/count diagnostics y estado;
+- `src/background/contact-export-bootstrap.ts`: listener aislado del Service Worker de campañas;
+- `src/contact-export/excel-exporter.ts`: XLSX local;
+- `src/contact-export/contact-export-diagnostics.ts`: reporte saneado TXT/JSON;
+- `src/contact-export/page.ts`: UI, preview y métricas.
 
-El extractor excluye cuando puede identificar de forma estructurada:
+## Regla de scope
 
-- grupos (`@g.us`);
-- estados/broadcast;
-- canales/newsletters;
-- comunidades;
-- elementos de sistema.
+Cada ejecución conserva `labelId`, `labelName` y, cuando WhatsApp lo aporta, `sourceId` y `countHint`.
 
-Para un contacto individual busca primero evidencia estructurada en la fila/listado. Si el teléfono no está disponible allí, puede seleccionar la conversación y abrir la ficha del contacto para buscar:
+Después de seleccionar una etiqueta el adaptador no acepta una lista sólo porque exista. Debe demostrar una relación entre el nombre exacto de la etiqueta activa y un listado contenido en ese estado. `#pane-side` sólo puede actuar como fallback si cambió respecto del listado previo y existe evidencia semántica de la etiqueta seleccionada.
 
-1. JID personal (`@c.us` / `@s.whatsapp.net`);
-2. enlace `tel:` con número internacional;
-3. teléfono internacional visible que comienza con `+`.
+Si no puede demostrar el contenedor:
 
-No se inspecciona el texto de mensajes.
+`LABEL_CONTAINER_NOT_FOUND`
 
-### Limitación importante
+No recurre silenciosamente al listado global.
 
-WhatsApp Web no garantiza una API DOM pública estable para enumerar etiquetas/contactos. Por eso la detección real debe validarse manualmente en la cuenta de Flor Mía. Si una fila no expone un teléfono internacional confiable, se informa `PHONE_NOT_AVAILABLE` y no se inventa país/característica.
+Si WhatsApp informa 10 contactos y se observan más de 10 identidades únicas:
 
-El fallback que abre la conversación/ficha puede cambiar visualmente el chat seleccionado y, dependiendo de WhatsApp, podría marcar una conversación como leída. Esta es una consecuencia de trabajar únicamente con la interfaz local visible, sin endpoints privados.
+`EXTRACTION_SCOPE_BROKEN`
+
+El análisis termina ROJO y no exporta los elementos extra.
+
+Si llega al final pero la cantidad final no coincide:
+
+`LABEL_CONTACT_COUNT_MISMATCH`
+
+Cuando WhatsApp no expone un contador confiable, la extracción puede terminar usando el final de scroll + estabilidad de IDs sin inventar una cantidad esperada.
+
+## Phone-first
+
+Un registro válido necesita teléfono. La resolución normal no abre la conversación.
+
+Prioridad:
+
+1. JID personal estructurado (`@c.us` / `@s.whatsapp.net`);
+2. atributos semánticos de teléfono (`data-phone`, `data-phone-number`, `data-number`, `data-tel`);
+3. enlaces locales confiables (`tel:`, `?phone=`, `wa.me/...`);
+4. teléfono internacional visible que comience explícitamente con `+`;
+5. `PHONE_UNRESOLVED`.
+
+No se agrega `+54`, `9`, característica ni país por inferencia. Un número local ambiguo no se exporta como resuelto.
+
+No se utiliza un número telefónico como nombre. Si WhatsApp muestra sólo el teléfono, `Nombre y Apellido` queda vacío.
+
+## Sin apertura de chats
+
+La ruta de análisis normal de 9.5.1 no contiene el fallback anterior de:
+
+`fila → click → esperar chat → abrir ficha → leer teléfono`
+
+La métrica `chatsOpened` del extractor normal es `0` por diseño. Si una fila no permite resolver el teléfono desde datos locales de la lista, queda en **Pendientes / No resueltos**.
+
+No se implementó automáticamente un modo de “resolver pendientes abriendo chats”. Si se agrega en el futuro debe ser una acción manual separada.
+
+## Listas virtualizadas
+
+El DOM de WhatsApp puede contener sólo las filas visibles. El extractor:
+
+1. identifica el contenedor de la etiqueta;
+2. lee sólo filas de ese contenedor;
+3. genera claves por teléfono, contactId estructurado o posición accesible estable;
+4. agrega sólo claves nuevas;
+5. desplaza únicamente el scrollRoot de la etiqueta;
+6. vuelve a leer;
+7. termina por countHint o por final + varias pasadas sin crecimiento;
+8. aborta con `VIRTUAL_LIST_STALLED` si la lista deja de producir IDs nuevos sin llegar al final.
+
+Existe un máximo de pasadas para evitar loops infinitos.
+
+## Deduplicación y Zona
+
+Prioridad de identidad:
+
+1. teléfono normalizado;
+2. contactId estructurado;
+3. identidad posicional de la lista mientras se recolecta.
+
+La exportación final deduplica por teléfono; nunca por nombre.
+
+Para una sola etiqueta:
+
+`Zona = labelName` literalmente.
+
+Ejemplo: `Falta enviar` permanece exactamente `Falta enviar`.
+
+Si el mismo teléfono aparece en varias etiquetas seleccionadas, se conserva una sola fila y `Zona` combina las etiquetas con ` | ` para mantener compatibilidad con el modelo actual de Clientes Fidelizados.
 
 ## Formato Excel
 
-El archivo contiene exactamente una hoja:
+Hoja única: `Contactos`.
 
-`Contactos`
-
-Y exactamente tres columnas:
+Columnas exactas:
 
 | Telefono | Nombre y Apellido | Zona |
 | --- | --- | --- |
-| +5491123456789 | Juan Pérez | Microcentro |
+| +5491123456789 | Juan Pérez | Zona Tribunales |
+| +5491198765432 |  | Zona Tribunales |
 
-### Teléfono
+El XLSX se genera localmente con SheetJS. No se usa un servicio externo.
 
-Se exporta en una representación internacional consistente (`+` + dígitos) cuando la fuente lo permite. La extensión no agrega silenciosamente código de país ni el indicador móvil argentino.
+## Métricas
 
-### Nombre
+La pantalla y el reporte registran:
 
-El nombre puede quedar vacío si existe teléfono confiable pero WhatsApp no muestra un nombre utilizable.
+- tiempo total;
+- contactos por segundo;
+- filas inspeccionadas;
+- scrolls del contenedor de etiqueta;
+- operaciones visuales;
+- chats abiertos durante extracción normal;
+- contador informado por etiqueta;
+- únicos recolectados.
 
-### Zona
+Estas métricas permiten comparar la sesión real sin inventar una mejora de velocidad basada sólo en tests.
 
-Cada etiqueta seleccionada se usa como zona. Un mismo teléfono visto en varias etiquetas se exporta una sola vez y combina las etiquetas de forma legible:
-
-`Microcentro | Premium`
-
-## Compatibilidad con Clientes Fidelizados
-
-Clientes Fidelizados actualmente modela una única zona por cliente (`zoneId` o `customZone`). Por eso se eligió una sola fila por teléfono y una sola celda `Zona`. Si el valor coincide con una zona configurada puede vincularse a ella; si es una combinación como `Microcentro | Premium`, se conserva como zona personalizada.
-
-El importador de Flor Mía debe:
-
-- aceptar exactamente `Telefono`, `Nombre y Apellido`, `Zona`;
-- normalizar/validar teléfono;
-- deduplicar dentro del archivo;
-- comparar con clientes existentes por teléfono;
-- mostrar preview antes de confirmar;
-- omitir existentes en vez de crear duplicados.
-
-## Progreso y cancelación
-
-Durante el análisis se informa:
-
-- procesados;
-- total estimado cuando WhatsApp lo expone;
-- porcentaje estimado;
-- etiqueta actual;
-- número de contacto actual.
-
-La extracción recorre listas virtualizadas mediante scroll semántico y cede el event loop entre cargas. Cancelar aborta el `AbortController` activo y conserva el estado de la extensión.
-
-## Diagnóstico
+## Diagnóstico 9.5.1
 
 Errores relevantes:
 
 - `LABELS_NOT_FOUND`
-- `CONTACT_LIST_NOT_FOUND`
-- `PHONE_NOT_AVAILABLE`
+- `LABEL_NOT_FOUND`
+- `LABEL_CONTAINER_NOT_FOUND`
+- `LABEL_CONTACT_COUNT_MISMATCH`
+- `CONTACT_ID_NOT_FOUND`
+- `PHONE_UNRESOLVED`
+- `PHONE_INVALID`
+- `VIRTUAL_LIST_STALLED`
+- `WHATSAPP_STRUCTURE_CHANGED`
+- `EXTRACTION_SCOPE_BROKEN`
 - `CONTACT_EXTRACTION_FAILED`
 - `WHATSAPP_NOT_READY`
 - `EXPORT_FAILED`
 - `CONTACT_EXPORT_CANCELLED`
 
-El módulo puede descargar un `CONTACT EXPORT DIAGNOSTIC` para Codex con:
+El módulo permite descargar reporte TXT o JSON. Incluye versión, feature, etiqueta, count informado/recolectado, último paso, paso fallido, estrategia, métricas, error y stack saneado.
 
-- versión;
-- fecha;
-- último paso funcional;
-- paso fallido;
-- etiqueta;
-- estrategia;
-- elemento esperado;
-- candidatos encontrados;
-- cantidad procesada;
-- último contacto como ID anónimo;
-- error/stack saneado.
+No incluye nombres de contactos, teléfonos completos ni contenido de conversaciones.
 
-## Troubleshooting
+## Estructuras internas y limitaciones
 
-### No detecta etiquetas
+WhatsApp Web no ofrece una API pública estable para enumerar etiquetas y contactos. 9.5.1 utiliza únicamente información disponible localmente en la UI/DOM accesible a la extensión y no se engancha a módulos privados de webpack ni endpoints internos no documentados.
 
-1. Confirmar que WhatsApp Business Web está autenticado.
-2. Abrir manualmente la sección donde WhatsApp muestra Etiquetas/Listas y volver a `Detectar etiquetas`.
-3. Si sigue fallando, descargar `Reporte para Codex`.
+La consecuencia intencional es: si la fila contiene sólo un identificador opaco que no puede traducirse de manera confiable a teléfono desde la superficie disponible, se devuelve `PHONE_UNRESOLVED` en lugar de abrir automáticamente el chat o inventar información.
 
-### Detecta etiqueta pero no contactos
+Un cambio futuro de WhatsApp puede exigir actualizar el adaptador. Los selectores/estrategias específicos están centralizados allí para evitar cambios dispersos.
 
-El reporte debe mostrar `CONTACT_LIST_NOT_FOUND` o `CONTACT_EXTRACTION_FAILED` y la estrategia utilizada. No cambiar selectores dispersos: reparar `whatsapp-contact-adapter.ts` y agregar una regresión.
+## Privacidad
 
-### Hay contactos sin teléfono
+- No se usan servicios externos para extraer ni generar Excel.
+- No se extraen mensajes.
+- Resultados temporales: `chrome.storage.session`.
+- No se guardan teléfonos/nombres de la exportación en el reporte técnico.
 
-No completar manualmente desde el extractor. Revisar si la ficha de WhatsApp muestra un teléfono internacional. Si no hay evidencia suficiente, el contacto debe permanecer en problemáticos.
+## Prueba real obligatoria
 
-## Pruebas reales obligatorias
+Los tests de DOM controlado no demuestran la estructura de una cuenta real de WhatsApp Business. Antes de una extracción grande se debe probar una etiqueta cuyo total sea conocido y verificar:
 
-Tests unitarios/build no demuestran la estructura actual de la cuenta real de WhatsApp Business. Antes de usarlo con cientos de contactos se debe validar, como mínimo:
-
-1. una etiqueta con 3 contactos;
-2. contacto sin nombre;
-3. número argentino;
-4. número extranjero;
-5. contacto en dos etiquetas;
-6. duplicado de un mismo teléfono;
-7. etiqueta vacía;
-8. múltiples etiquetas;
-9. seleccionar todas;
-10. WhatsApp cerrado;
-11. sesión cerrada;
-12. detección rota deliberadamente/fixture de regresión;
-13. lote grande observando que la UI mantiene progreso y responde a Cancelar.
+- count esperado = count recolectado;
+- `Chats abiertos = 0`;
+- teléfonos correctos;
+- nombre opcional;
+- Zona literal;
+- pendientes sin teléfono informados;
+- XLSX correcto;
+- sender operativo después de la extracción.
