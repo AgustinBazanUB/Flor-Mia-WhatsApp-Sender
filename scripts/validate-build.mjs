@@ -65,7 +65,7 @@ if (!whatsappContent.includes("label-scoped-phone-first-no-chat-opening")) {
 if (!backgroundWorker.includes("WAWebCollections") || !backgroundWorker.includes("WAWebApiContact") || !backgroundWorker.includes("main-world-label-store+local-lid-map")) {
   throw new Error("El build no contiene el resolver estructurado local de etiquetas/LID de 0.9.5.6.");
 }
-if (!backgroundWorker.includes("message-user-receipt") || !backgroundWorker.includes("history-metadata-lid-map") || !backgroundWorker.includes("phoneLookupServerSkipped")) {
+if (!backgroundWorker.includes("message-user-receipt") || !backgroundWorker.includes("history-metadata-lid-map") || !backgroundWorker.includes("phoneLookupServerSkipped") || !backgroundWorker.includes("model-storage") || !backgroundWorker.includes("phoneHistoryIndexedDbMessagesScanned")) {
   throw new Error("El build no contiene la correlación histórica LID→PN no visual de 0.9.5.6.");
 }
 if (!backgroundWorker.includes("virtualized-lid-hydration") || !whatsappContent.includes("flormia_contact_export_lid_resolve_v1")) {

@@ -43,6 +43,9 @@ const CONTACT_EXPORT_TECHNICAL_DETAIL_KEYS = [
   "phoneHistoryMessagesScanned",
   "phoneHistoryChatsPresent",
   "phoneHistoryConflicts",
+  "phoneHistoryIndexedDbSupported",
+  "phoneHistoryIndexedDbMessagesScanned",
+  "phoneHistoryIndexedDbError",
   "visualHydrationUsed"
 ] as const;
 
@@ -193,7 +196,8 @@ export class ContactExportRuntime {
       let resolutionStats = {
         attempted: 0, localResolved: 0, serverQueried: 0, serverResolved: 0,
         remaining: 0, querySupported: false, historyResolved: 0,
-        historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0
+        historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0,
+        historyIndexedDbSupported: false, historyIndexedDbMessagesScanned: 0, historyIndexedDbError: false
       };
       let structuredResult = structured;
       if (structured) {
@@ -221,7 +225,10 @@ export class ContactExportRuntime {
             historyResolved: batch.historyResolved,
             historyMessagesScanned: batch.historyMessagesScanned,
             historyChatsPresent: batch.historyChatsPresent,
-            historyConflicts: batch.historyConflicts
+            historyConflicts: batch.historyConflicts,
+            historyIndexedDbSupported: batch.historyIndexedDbSupported,
+            historyIndexedDbMessagesScanned: batch.historyIndexedDbMessagesScanned,
+            historyIndexedDbError: batch.historyIndexedDbError
           };
         }
 
@@ -296,6 +303,9 @@ export class ContactExportRuntime {
             phoneHistoryMessagesScanned: resolutionStats.historyMessagesScanned,
             phoneHistoryChatsPresent: resolutionStats.historyChatsPresent,
             phoneHistoryConflicts: resolutionStats.historyConflicts,
+            phoneHistoryIndexedDbSupported: resolutionStats.historyIndexedDbSupported,
+            phoneHistoryIndexedDbMessagesScanned: resolutionStats.historyIndexedDbMessagesScanned,
+            phoneHistoryIndexedDbError: resolutionStats.historyIndexedDbError,
             visualHydrationUsed: false
           } : {},
           updatedAt: new Date().toISOString()

@@ -36,3 +36,9 @@ Un teléfono sólo se acepta cuando está ligado al LID exacto por una de esas r
 ## Límite real
 
 Si WhatsApp nunca sincronizó un PN para un LID histórico, ningún algoritmo local puede reconstruir ese número a partir de los dígitos del LID. En ese caso se necesita una fuente externa/previa del mapping o esperar una futura interacción que vuelva a incluir PN metadata.
+
+## Persistencia histórica IndexedDB
+
+Además de los modelos que WhatsApp mantiene cargados en memoria, 0.9.5.6 inspecciona de forma read-only el `model-storage` / object store `message`, el mismo origen que WA-JS expone mediante `WPP.indexdb.getMessagesFromRowId`. El cursor está limitado a 250.000 registros por análisis y sólo se acceden campos de addressing/receipt necesarios para correlacionar el LID exacto con un PN; no se accede ni se persiste `body`, media ni contenido conversacional.
+
+Diagnóstico adicional: `phoneHistoryIndexedDbSupported`, `phoneHistoryIndexedDbMessagesScanned` y `phoneHistoryIndexedDbError`.

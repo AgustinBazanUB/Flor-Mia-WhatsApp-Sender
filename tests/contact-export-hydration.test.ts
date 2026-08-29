@@ -182,6 +182,82 @@ describe("Contact Export historical LID resolution", () => {
     expect(document.querySelectorAll("[role='listitem']")).toHaveLength(0);
   });
 
+  it("resolves a LID from persisted model-storage history when no chat or message is loaded in memory", async () => {
+    const lid = "123456789012345@lid";
+    const phone = "5491123456789@c.us";
+    const originalIndexedDb = globalThis.indexedDB;
+    try {
+      const fakeIndexedDb = {
+        databases: async () => [{ name: "model-storage" }],
+        open: () => {
+          const request: Record<string, unknown> = {};
+          queueMicrotask(() => {
+            const db = {
+              objectStoreNames: { contains: (name: string) => name === "message" },
+              close: () => undefined,
+              transaction: () => ({
+                objectStore: () => ({
+                  openCursor: () => {
+                    const cursorRequest: Record<string, unknown> = {};
+                    queueMicrotask(() => {
+                      const cursor = {
+                        value: { from: lid, fromPn: phone, body: "THIS MUST NOT BE NEEDED" },
+                        continue: () => queueMicrotask(() => {
+                          cursorRequest.result = null;
+                          const handler = cursorRequest.onsuccess as (() => void) | undefined;
+                          handler?.();
+                        })
+                      };
+                      cursorRequest.result = cursor;
+                      const handler = cursorRequest.onsuccess as (() => void) | undefined;
+                      handler?.();
+                    });
+                    return cursorRequest;
+                  }
+                }),
+                onabort: null,
+                onerror: null
+              })
+            };
+            request.result = db;
+            const handler = request.onsuccess as (() => void) | undefined;
+            handler?.();
+          });
+          return request;
+        }
+      };
+      Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: fakeIndexedDb });
+      Object.defineProperty(window, "require", {
+        configurable: true,
+        value: (moduleName: string) => {
+          if (moduleName === "WAWebWidFactory") return { createWid: (id: string) => ({ _serialized: id, server: "lid" }) };
+          if (moduleName === "WAWebApiContact") return {
+            getPhoneNumber: () => undefined,
+            lidPnCache: { getPhoneNumber: () => undefined, getLidEntry: () => undefined }
+          };
+          if (moduleName === "WAWebCollections") return {
+            Contact: { get: () => undefined },
+            Chat: { get: () => undefined },
+            Msg: { getModelsArray: () => [] },
+            Label: { getModelsArray: () => [] }
+          };
+          return {};
+        }
+      });
+
+      const result = await inspectWhatsAppLidsMainWorld([lid]);
+      expect(result.resolved).toBe(1);
+      expect(result.phones[lid]).toBe(phone);
+      expect(result.historyResolved).toBe(1);
+      expect(result.historyIndexedDbSupported).toBe(true);
+      expect(result.historyIndexedDbMessagesScanned).toBe(1);
+      expect(result.historyIndexedDbError).toBe(false);
+      expect(result.strategies[lid]).toContain("message-from-pn");
+    } finally {
+      Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: originalIndexedDb });
+    }
+  });
+
   it("fails closed when historical metadata gives two different phone numbers for the same LID", async () => {
     const lid = "123456789012345@lid";
     Object.defineProperty(window, "require", {

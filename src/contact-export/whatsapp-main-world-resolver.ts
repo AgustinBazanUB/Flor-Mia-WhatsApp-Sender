@@ -244,6 +244,9 @@ export interface MainWorldLidResolutionBatch {
   historyMessagesScanned: number;
   historyChatsPresent: number;
   historyConflicts: number;
+  historyIndexedDbSupported: boolean;
+  historyIndexedDbMessagesScanned: number;
+  historyIndexedDbError: boolean;
 }
 
 /**
@@ -298,7 +301,8 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
   const empty: MainWorldLidResolutionBatch = {
     phones: {}, strategies: {}, attempted: contactIds.length, resolved: 0,
     localResolved: 0, serverQueried: 0, serverResolved: 0, querySupported: false,
-    historyResolved: 0, historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0
+    historyResolved: 0, historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0,
+    historyIndexedDbSupported: false, historyIndexedDbMessagesScanned: 0, historyIndexedDbError: false
   };
   if (typeof requireFn !== "function") return empty;
   const safeRequire = (name: string): unknown => { try { return requireFn(name); } catch { return undefined; } };
@@ -428,11 +432,17 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
       addHistoryCandidate(senderId, key?.senderPn, "message-sender-pn");
       addHistoryCandidate(senderId, record.senderPn, "message-sender-pn");
       addHistoryCandidate(senderId, record.authorPn, "message-author-pn");
+      addHistoryCandidate(senderId, record.fromPn, "message-from-pn");
+      addHistoryCandidate(senderId, record.fromAlt, "message-from-alt");
     }
 
     const to = record.to;
     const toId = serializedId(to).toLowerCase();
-    if (targetIds.has(toId)) addHistoryCandidate(toId, record.toAlt ?? record.recipientPn, "message-recipient-alt");
+    if (targetIds.has(toId)) {
+      addHistoryCandidate(toId, record.toAlt, "message-to-alt");
+      addHistoryCandidate(toId, record.toPn, "message-to-pn");
+      addHistoryCandidate(toId, record.recipientPn, "message-recipient-pn");
+    }
   };
 
   // 1) Label-item metadata: some builds keep the alternate PN beside parentId.
@@ -478,6 +488,89 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
   const startAt = Math.max(0, globalMessages.length - maxMessages);
   for (let index = startAt; index < globalMessages.length; index += 1) scanMessageMetadata(globalMessages[index]);
 
+  // 4) Historical messages persisted by WhatsApp Web in IndexedDB.
+  // WPPConnect/WA-JS currently reads the same model-storage/message store directly.
+  // We inspect only addressing/receipt metadata from cursor values; body/media/content
+  // fields are never accessed or persisted. The scan is bounded to protect the tab.
+  let historyIndexedDbSupported = false;
+  let historyIndexedDbMessagesScanned = 0;
+  let historyIndexedDbError = false;
+  if (targetIds.size > 0 && typeof globalThis.indexedDB !== "undefined") {
+    const idbFactory = globalThis.indexedDB as IDBFactory & { databases?: () => Promise<Array<{ name?: string }>> };
+    let databaseMayExist = true;
+    if (typeof idbFactory.databases === "function") {
+      try {
+        const databases = await idbFactory.databases();
+        databaseMayExist = databases.some((database) => database.name === "model-storage");
+      } catch {
+        // Continue with a guarded open; onupgradeneeded aborts instead of creating a new DB.
+      }
+    }
+
+    if (databaseMayExist) {
+      await new Promise<void>((resolve) => {
+        let request: IDBOpenDBRequest;
+        try {
+          request = idbFactory.open("model-storage");
+        } catch {
+          historyIndexedDbError = true;
+          resolve();
+          return;
+        }
+        request.onupgradeneeded = () => {
+          historyIndexedDbError = true;
+          try { request.transaction?.abort(); } catch { /* no-op */ }
+        };
+        request.onerror = () => {
+          historyIndexedDbError = true;
+          resolve();
+        };
+        request.onsuccess = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains("message")) {
+            db.close();
+            resolve();
+            return;
+          }
+          historyIndexedDbSupported = true;
+          let transaction: IDBTransaction;
+          try {
+            transaction = db.transaction(["message"], "readonly");
+          } catch {
+            historyIndexedDbError = true;
+            db.close();
+            resolve();
+            return;
+          }
+          const store = transaction.objectStore("message");
+          const cursorRequest = store.openCursor();
+          const maxIndexedDbMessages = 250000;
+          let finished = false;
+          const finish = (errored = false): void => {
+            if (finished) return;
+            finished = true;
+            if (errored) historyIndexedDbError = true;
+            try { db.close(); } catch { /* no-op */ }
+            resolve();
+          };
+          cursorRequest.onerror = () => finish(true);
+          cursorRequest.onsuccess = () => {
+            const cursor = cursorRequest.result;
+            if (!cursor || historyIndexedDbMessagesScanned >= maxIndexedDbMessages) {
+              finish(false);
+              return;
+            }
+            historyIndexedDbMessagesScanned += 1;
+            scanMessageMetadata(cursor.value);
+            cursor.continue();
+          };
+          transaction.onabort = () => finish(true);
+          transaction.onerror = () => { historyIndexedDbError = true; };
+        };
+      });
+    }
+  }
+
   let historyResolved = 0;
   let historyConflicts = 0;
   for (const { id } of pending) {
@@ -508,7 +601,10 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
     historyResolved,
     historyMessagesScanned,
     historyChatsPresent,
-    historyConflicts
+    historyConflicts,
+    historyIndexedDbSupported,
+    historyIndexedDbMessagesScanned,
+    historyIndexedDbError
   };
 }
 
@@ -517,7 +613,8 @@ export async function resolveWhatsAppLidsInMainWorld(tabId: number, contactIds: 
   const empty = (): MainWorldLidResolutionBatch => ({
     phones: {}, strategies: {}, attempted: unique.length, resolved: 0,
     localResolved: 0, serverQueried: 0, serverResolved: 0, querySupported: false,
-    historyResolved: 0, historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0
+    historyResolved: 0, historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0,
+    historyIndexedDbSupported: false, historyIndexedDbMessagesScanned: 0, historyIndexedDbError: false
   });
   if (!unique.length || !chrome.scripting?.executeScript) return empty();
   try {
