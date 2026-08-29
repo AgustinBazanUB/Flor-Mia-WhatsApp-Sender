@@ -42,7 +42,7 @@ if (sourceManifest.version !== packageMetadata.version) {
 if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) {
   throw new Error("package-lock.json y package.json deben mantener coherente la versión del workspace npm.");
 }
-if (sourceManifest.version !== "0.9.5.3") throw new Error("La release esperada para el extractor estructurado es 0.9.5.3.");
+if (sourceManifest.version !== "0.9.5.4") throw new Error("La release esperada para el extractor estructurado es 0.9.5.4.");
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
 const optimisticPosition = popupHtml.indexOf(optimisticScript);
@@ -54,16 +54,19 @@ if (!optimisticControls.includes("../contacts/index.html") || !contactHtml.inclu
   throw new Error("El build no contiene el acceso o la página de exportación de contactos.");
 }
 if (!contactHtml.includes("PHONE_UNRESOLVED") || !contactHtml.includes("Chats abiertos") || !contactHtml.includes("codex-json")) {
-  throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 0.9.5.3.");
+  throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 0.9.5.4.");
 }
 if (!contactPage.includes("flormia_contact_export_diagnostic_") || !contactPage.includes("application/json")) {
   throw new Error("El build no contiene descarga de diagnóstico JSON para Contact Export.");
 }
 if (!whatsappContent.includes("label-scoped-phone-first-no-chat-opening")) {
-  throw new Error("El Content Script no contiene la estrategia 0.9.5.3 label-scoped/phone-first.");
+  throw new Error("El Content Script no contiene la estrategia 0.9.5.4 label-scoped/phone-first.");
 }
 if (!backgroundWorker.includes("WAWebCollections") || !backgroundWorker.includes("WAWebApiContact") || !backgroundWorker.includes("main-world-label-store+local-lid-map")) {
-  throw new Error("El build no contiene el resolver estructurado local de etiquetas/LID de 0.9.5.3.");
+  throw new Error("El build no contiene el resolver estructurado local de etiquetas/LID de 0.9.5.4.");
+}
+if (!backgroundWorker.includes("virtualized-lid-hydration") || !whatsappContent.includes("flormia_contact_export_lid_resolve_v1")) {
+  throw new Error("El build no contiene la hidratación virtualizada LID→teléfono de 0.9.5.4.");
 }
 if (!optimisticControls.includes("Pausando…") || !optimisticControls.includes("Deteniendo…")) {
   throw new Error("El build no contiene la capa de confirmación inmediata para Pausa/Detener.");

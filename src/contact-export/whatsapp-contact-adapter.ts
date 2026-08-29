@@ -42,6 +42,8 @@ export interface ContactExportAdapterProgress {
 export interface CollectSelectedLabelsOptions {
   signal?: AbortSignal;
   progress?: ContactExportAdapterProgress;
+  hydrationContactIdsByLabel?: Record<string, string[]>;
+  resolvePhoneHydration?: (contactIds: string[]) => Promise<Record<string, string>>;
 }
 
 export interface ContactExportCollection {
@@ -49,6 +51,8 @@ export interface ContactExportCollection {
   strategy: string;
   labelResults: ContactExportLabelResult[];
   metrics: ContactExportMetrics;
+  hydratedPhones: Record<string, string>;
+  hydrationPasses: number;
 }
 
 export interface LabelScopedView {
@@ -716,7 +720,13 @@ export async function collectScopedLabelRows(
   options: CollectSelectedLabelsOptions,
   labelIndex: number,
   totalLabels: number
-): Promise<{ candidates: RawContactCandidate[]; result: ContactExportLabelResult; visualOperations: number }> {
+): Promise<{
+  candidates: RawContactCandidate[];
+  result: ContactExportLabelResult;
+  visualOperations: number;
+  hydratedPhones: Record<string, string>;
+  hydrationPasses: number;
+}> {
   const collected = new Map<string, RawContactCandidate>();
   const unresolved = new Map<string, RawContactCandidate>();
   const countedRows = new Set<string>();
@@ -724,8 +734,33 @@ export async function collectScopedLabelRows(
   let rowScans = 0;
   let scrollOperations = 0;
   let lastUniqueCount = -1;
+  const pendingHydrationIds = new Set(
+    (options.hydrationContactIdsByLabel?.[label.id] ?? [])
+      .map((id) => id.trim())
+      .filter((id) => /^\d{8,20}@lid$/i.test(id))
+  );
+  const hydratedPhones = new Map<string, string>();
+  let hydrationPasses = 0;
+  let hydrationSweep = 1;
 
-  for (let pass = 0; pass < 200; pass += 1) {
+  const hydratePendingPhones = async (): Promise<void> => {
+    if (!pendingHydrationIds.size || !options.resolvePhoneHydration) return;
+    abortIfNeeded(options.signal);
+    // WhatsApp hidrata metadatos del viewport de forma asíncrona. Un settle corto
+    // evita consultar el cache antes de que termine la virtualización.
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 120));
+    const requested = [...pendingHydrationIds];
+    const resolved = await options.resolvePhoneHydration(requested);
+    hydrationPasses += 1;
+    for (const [contactId, phoneJid] of Object.entries(resolved)) {
+      const normalizedId = contactId.trim();
+      if (!pendingHydrationIds.has(normalizedId) || !normalizeWhatsAppJidPhone(phoneJid)) continue;
+      hydratedPhones.set(normalizedId, phoneJid);
+      pendingHydrationIds.delete(normalizedId);
+    }
+  };
+
+  for (let pass = 0; pass < 400; pass += 1) {
     abortIfNeeded(options.signal);
     if (!labelScopeStillActive(view, label)) {
       throw new ExtensionError(ERROR_CODES.elementNotFound, "La extracción salió del ámbito de la etiqueta seleccionada.", {
@@ -754,6 +789,8 @@ export async function collectScopedLabelRows(
         if (!unresolved.has(problemKey)) unresolved.set(problemKey, resolved.candidate);
       }
     });
+
+    await hydratePendingPhones();
 
     const uniqueCount = countedRows.size;
     if (label.countHint != null && uniqueCount > label.countHint) {
@@ -799,9 +836,23 @@ export async function collectScopedLabelRows(
       }]
     });
 
-    if (label.countHint != null && uniqueCount >= label.countHint) break;
-
     const state = scrollState(view.scrollRoot);
+    const countComplete = label.countHint != null && uniqueCount >= label.countHint;
+    const hydrationActive = Boolean(options.resolvePhoneHydration && (options.hydrationContactIdsByLabel?.[label.id]?.length ?? 0) > 0);
+    if (countComplete && (!hydrationActive || pendingHydrationIds.size === 0)) break;
+    if (countComplete && hydrationActive && state === "end" && hydrationSweep >= 2) break;
+    if (countComplete && hydrationActive && state === "end" && hydrationSweep === 1) {
+      const before = view.scrollRoot.scrollTop;
+      view.scrollRoot.scrollTop = 0;
+      view.scrollRoot.dispatchEvent(new Event("scroll", { bubbles: true }));
+      if (view.scrollRoot.scrollTop !== before) scrollOperations += 1;
+      hydrationSweep = 2;
+      stablePasses = 0;
+      lastUniqueCount = uniqueCount;
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 200));
+      continue;
+    }
+
     if (uniqueCount === lastUniqueCount) stablePasses += 1;
     else stablePasses = 0;
     lastUniqueCount = uniqueCount;
@@ -839,7 +890,7 @@ export async function collectScopedLabelRows(
       });
     }
 
-    if (state === "more" && stablePasses >= 5) {
+    if (!countComplete && state === "more" && stablePasses >= 5) {
       throw new ExtensionError(ERROR_CODES.interfaceLoading, "La lista virtualizada dejó de entregar contactos nuevos antes de llegar al final.", {
         recoverable: true,
         details: {
@@ -894,6 +945,8 @@ export async function collectScopedLabelRows(
   return {
     candidates,
     visualOperations: scrollOperations,
+    hydratedPhones: Object.fromEntries(hydratedPhones),
+    hydrationPasses,
     result: {
       labelId: label.id,
       labelName: label.name,
@@ -919,6 +972,8 @@ export async function collectContactsForLabels(
   let visualOperations = 0;
   let rowScans = 0;
   let scrollOperations = 0;
+  const hydratedPhones: Record<string, string> = {};
+  let hydrationPasses = 0;
 
   const onVisualOperation = () => { visualOperations += 1; };
   for (let index = 0; index < labels.length; index += 1) {
@@ -941,6 +996,8 @@ export async function collectContactsForLabels(
     rowScans += collected.result.rowScans;
     scrollOperations += collected.result.scrollOperations;
     visualOperations += collected.visualOperations;
+    Object.assign(hydratedPhones, collected.hydratedPhones);
+    hydrationPasses += collected.hydrationPasses;
   }
 
   const completedAt = new Date();
@@ -966,7 +1023,16 @@ export async function collectContactsForLabels(
     totalLabels: labels.length,
     currentContact: results.length
   });
-  return { candidates: results, strategy: "label-scoped-phone-first-no-chat-opening", labelResults, metrics };
+  return {
+    candidates: results,
+    strategy: hydrationPasses > 0
+      ? "label-scoped-phone-first+virtualized-lid-hydration"
+      : "label-scoped-phone-first-no-chat-opening",
+    labelResults,
+    metrics,
+    hydratedPhones,
+    hydrationPasses
+  };
 }
 
 export function contactExportAdapterSupportsCurrentDocument(): boolean {

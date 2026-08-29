@@ -1,4 +1,4 @@
-# Exportación de contactos de WhatsApp Business — 0.9.5.3
+# Exportación de contactos de WhatsApp Business — 0.9.5.4
 
 ## Objetivo
 
@@ -204,3 +204,13 @@ Los tests de DOM controlado no demuestran la estructura de una cuenta real de Wh
 - pendientes sin teléfono informados;
 - XLSX correcto;
 - sender operativo después de la extracción.
+
+## Cambio 0.9.5.4 — hidratación de teléfonos en listas virtualizadas
+
+Una prueba real con `Wh-Junio/Julio15-2025` demostró que la colección estructurada podía enumerar 210/210 miembros en milisegundos, pero sólo 18 teléfonos estaban presentes inicialmente en el cache LID→PN. Ese patrón coincide con el bloque que WhatsApp mantiene materializado en el viewport.
+
+0.9.5.4 conserva `labelItemCollection` como fuente autoritativa de **membresía** y usa el DOM únicamente como mecanismo de hidratación: abre la etiqueta, desplaza su propio viewport sin abrir conversaciones y, después de cada bloque renderizado, vuelve a consultar en `world: MAIN` los LID estructurados todavía pendientes. Si al llegar al final quedan pendientes, realiza un segundo barrido desde arriba.
+
+La evidencia de teléfono sólo puede fusionarse por `contactId` exacto que ya pertenezca al conjunto estructurado. Una fila DOM externa, un nombre coincidente o una posición visual nunca pueden agregar un contacto al Excel. La resolución local prueba `WAWebApiContact.getPhoneNumber`, `lidPnCache`, `getLidEntry`, alternate-user/latest mapping, `WAWebFrontendContactGetters.getPnForLid`, contact record y `Store.LidUtils`, sin `Contact.find`, sin endpoints privados y sin abrir chats.
+
+Si después de dos barridos un LID realmente no tiene asociación PN disponible localmente, permanece `PHONE_UNRESOLVED`; no se infiere ni inventa un número.

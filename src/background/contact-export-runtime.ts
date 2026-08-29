@@ -2,7 +2,7 @@ import { createId } from "../shared/ids";
 import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
 import { INTERNAL_MESSAGE_TYPES, type InternalRequestMap } from "../shared/protocol";
 import { deduplicateContactCandidates } from "../contact-export/contact-deduplicator";
-import { collectContactsFromWhatsAppMainWorld } from "../contact-export/whatsapp-main-world-resolver";
+import { collectContactsFromWhatsAppMainWorld, mergeHydratedPhonesIntoCollection } from "../contact-export/whatsapp-main-world-resolver";
 import type { ContactExportStore } from "../contact-export/contact-export-store";
 import {
   CONTACT_EXPORT_ERROR_CODES,
@@ -177,22 +177,45 @@ export class ContactExportRuntime {
     const tab = await this.transport.requireTab();
     try {
       const structured = await collectContactsFromWhatsAppMainWorld(tab.id, labels);
+      let hydrationStats = { attempted: 0, resolved: 0, remaining: 0, passes: 0 };
+      let structuredResult = structured;
       if (structured) {
+        const hydrationContactIdsByLabel: Record<string, string[]> = {};
+        for (const label of labels) {
+          const ids = structured.candidates
+            .filter((candidate) => candidate.labelId === label.id && candidate.phoneStatus !== "resolved" && /^\d{8,20}@lid$/i.test(candidate.contactId ?? ""))
+            .map((candidate) => candidate.contactId!)
+            .filter((id, index, all) => all.indexOf(id) === index);
+          if (ids.length) hydrationContactIdsByLabel[label.id] = ids;
+        }
+        const hydrationAttempted = Object.values(hydrationContactIdsByLabel).reduce((sum, ids) => sum + ids.length, 0);
+        if (hydrationAttempted > 0) {
+          const evidence = await this.transport.sendWhenContentReady(
+            INTERNAL_MESSAGE_TYPES.whatsappContactExportAnalyze,
+            { operationId, labels, hydrationContactIdsByLabel },
+            tab.id,
+            Math.max(120_000, labels.length * 120_000)
+          );
+          const merged = mergeHydratedPhonesIntoCollection(structured, evidence);
+          structuredResult = merged.collection;
+          hydrationStats = { attempted: merged.attempted, resolved: merged.resolved, remaining: merged.remaining, passes: merged.passes };
+        }
+        const completedStructured = structuredResult ?? structured;
         await this.recordProgress({
           operationId,
-          processed: structured.candidates.length,
-          totalHint: structured.labelResults.reduce((sum, item) => sum + (item.reportedCount ?? item.collectedUniqueContacts), 0) || null,
+          processed: completedStructured.candidates.length,
+          totalHint: completedStructured.labelResults.reduce((sum, item) => sum + (item.reportedCount ?? item.collectedUniqueContacts), 0) || null,
           percent: 100,
           currentLabel: labels.at(-1)?.name ?? null,
           labelIndex: labels.length,
           totalLabels: labels.length,
-          currentContact: structured.candidates.length,
-          metrics: structured.metrics,
-          labelResults: structured.labelResults
+          currentContact: completedStructured.candidates.length,
+          metrics: completedStructured.metrics,
+          labelResults: completedStructured.labelResults
         });
       }
-      const result = structured
-        ? { candidates: structured.candidates, strategy: structured.strategy }
+      const result = structuredResult
+        ? { candidates: structuredResult.candidates, strategy: structuredResult.strategy }
         : await this.transport.sendWhenContentReady(
             INTERNAL_MESSAGE_TYPES.whatsappContactExportAnalyze,
             { operationId, labels },
@@ -226,13 +249,21 @@ export class ContactExportRuntime {
         diagnostic: {
           ...deduplicated.diagnostic,
           status: "green",
-          lastSuccessfulStep: "label_scoped_phone_first_analysis_completed",
+          lastSuccessfulStep: hydrationStats.attempted > 0
+            ? "virtualized_lid_phone_hydration_completed"
+            : "label_scoped_phone_first_analysis_completed",
           labelName: labels.at(-1)?.name ?? null,
           strategy: result.strategy,
           candidateCount: result.candidates.length,
           processedCount: deduplicated.summary.found,
           reportedCount: lastLabelResult?.reportedCount ?? null,
           collectedUniqueContacts: lastLabelResult?.collectedUniqueContacts ?? deduplicated.summary.found,
+          technicalDetails: hydrationStats.attempted > 0 ? {
+            phoneHydrationAttempted: hydrationStats.attempted,
+            phoneHydrationResolved: hydrationStats.resolved,
+            phoneHydrationRemaining: hydrationStats.remaining,
+            phoneHydrationPasses: hydrationStats.passes
+          } : {},
           updatedAt: new Date().toISOString()
         }
       });

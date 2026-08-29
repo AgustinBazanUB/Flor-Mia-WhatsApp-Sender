@@ -25,6 +25,7 @@ import { CONTACT_EXPORT_ERROR_CODES, type ContactExportProgress } from "../conta
 const proofControllers = new Map<string, AbortController>();
 const contactExportControllers = new Map<string, AbortController>();
 const CONTACT_EXPORT_PROGRESS_CHANNEL = "flormia_contact_export_progress_v1";
+const CONTACT_EXPORT_LID_RESOLVE_CHANNEL = "flormia_contact_export_lid_resolve_v1";
 installConversationInteractionGuard(document);
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
@@ -51,6 +52,17 @@ async function publishContactExportProgress(
     // El progreso es informativo. Una pérdida temporal del listener de background
     // no debe detener la extracción ni reenviar información a servicios externos.
   }
+}
+
+async function resolveContactExportLids(operationId: string, contactIds: string[]): Promise<Record<string, string>> {
+  if (!contactIds.length) return {};
+  const response = await chrome.runtime.sendMessage({
+    channel: CONTACT_EXPORT_LID_RESOLVE_CHANNEL,
+    operationId,
+    contactIds
+  }) as { ok?: boolean; phones?: Record<string, string> } | undefined;
+  if (!response?.ok) return {};
+  return response.phones && typeof response.phones === "object" ? response.phones : {};
 }
 
 function beforeSendCheckpoint(operationId: string, required: boolean) {
@@ -140,7 +152,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         try {
           const collection = await collectContactsForLabels(payload.labels, {
             signal: controller.signal,
-            progress: (progress) => publishContactExportProgress(payload.operationId, progress)
+            progress: (progress) => publishContactExportProgress(payload.operationId, progress),
+            ...(payload.hydrationContactIdsByLabel ? {
+              hydrationContactIdsByLabel: payload.hydrationContactIdsByLabel,
+              resolvePhoneHydration: (contactIds: string[]) => resolveContactExportLids(payload.operationId, contactIds)
+            } : {})
           });
           await publishContactExportProgress(payload.operationId, {
             processed: collection.candidates.length,
@@ -155,7 +171,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           });
           sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_ANALYZE"]>(message.requestId, {
             candidates: collection.candidates,
-            strategy: collection.strategy
+            strategy: collection.strategy,
+            hydratedPhones: collection.hydratedPhones,
+            hydrationPasses: collection.hydrationPasses,
+            metrics: collection.metrics,
+            labelResults: collection.labelResults
           }));
         } catch (error) {
           if (error instanceof DOMException && error.name === "AbortError") {

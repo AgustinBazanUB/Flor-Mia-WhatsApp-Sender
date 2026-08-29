@@ -11,8 +11,10 @@ import {
 import type { ContactExportLabelResult, ContactExportMetrics } from "../contact-export/types";
 import { StateStore } from "../storage/state-store";
 import { WhatsAppTransport } from "./whatsapp-transport";
+import { resolveWhatsAppLidsInMainWorld } from "../contact-export/whatsapp-main-world-resolver";
 
 const progressChannel = "flormia_contact_export_progress_v1";
+const lidResolveChannel = "flormia_contact_export_lid_resolve_v1";
 const stateStore = new StateStore();
 const runtime = new ContactExportRuntime(new ContactExportStore(), new WhatsAppTransport());
 
@@ -68,6 +70,34 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     void dispatchContactPage(message).then(
       (data) => sendResponse({ ok: true, requestId: message.requestId, data }),
       (error: unknown) => sendResponse({ ok: false, requestId: message.requestId, error: serializeError(error) })
+    );
+    return true;
+  }
+
+  if (
+    whatsappSender(sender)
+    && message
+    && typeof message === "object"
+    && (message as Record<string, unknown>).channel === lidResolveChannel
+  ) {
+    const payload = message as Record<string, unknown>;
+    const operationId = typeof payload.operationId === "string" ? payload.operationId : "";
+    const contactIds = Array.isArray(payload.contactIds)
+      ? payload.contactIds.filter((item): item is string => typeof item === "string").slice(0, 1000)
+      : [];
+    const tabId = sender.tab?.id;
+    if (!operationId || typeof tabId !== "number" || !contactIds.length) {
+      sendResponse({ ok: false, phones: {} });
+      return false;
+    }
+    void (async () => {
+      const state = await runtime.getState();
+      if (state.status !== "analyzing" || state.operationId !== operationId) return { phones: {} };
+      const resolved = await resolveWhatsAppLidsInMainWorld(tabId, contactIds);
+      return { phones: resolved.phones };
+    })().then(
+      (data) => sendResponse({ ok: true, ...data }),
+      () => sendResponse({ ok: false, phones: {} })
     );
     return true;
   }

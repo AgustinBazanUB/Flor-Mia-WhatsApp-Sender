@@ -15,6 +15,8 @@ import type { DiagnosticReportBundle } from "../diagnostics/types";
 import type { CompatibilityOverallStatus } from "../compatibility/types";
 import type { ConversationContextProof } from "../whatsapp/conversation-context";
 import type {
+  ContactExportLabelResult,
+  ContactExportMetrics,
   ContactExportProgress,
   ContactExportState,
   RawContactCandidate,
@@ -96,7 +98,11 @@ export interface InternalRequestMap {
   CONTACT_EXPORT_RESET: Record<string, never>;
   CONTACT_EXPORT_PROGRESS: Omit<ContactExportProgress, "updatedAt">;
   WA_CONTACT_EXPORT_DETECT_LABELS: { operationId: string };
-  WA_CONTACT_EXPORT_ANALYZE: { operationId: string; labels: WhatsAppLabelInfo[] };
+  WA_CONTACT_EXPORT_ANALYZE: {
+    operationId: string;
+    labels: WhatsAppLabelInfo[];
+    hydrationContactIdsByLabel?: Record<string, string[]>;
+  };
   WA_CONTACT_EXPORT_CANCEL: { operationId: string };
   WA_PREFLIGHT: WhatsAppPreflightRequest;
   WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string; navigationRequestId: string };
@@ -146,7 +152,14 @@ export interface InternalResponseMap {
   CONTACT_EXPORT_RESET: ContactExportState;
   CONTACT_EXPORT_PROGRESS: ContactExportState;
   WA_CONTACT_EXPORT_DETECT_LABELS: { labels: WhatsAppLabelInfo[]; strategy: string; candidateCount: number };
-  WA_CONTACT_EXPORT_ANALYZE: { candidates: RawContactCandidate[]; strategy: string };
+  WA_CONTACT_EXPORT_ANALYZE: {
+    candidates: RawContactCandidate[];
+    strategy: string;
+    hydratedPhones?: Record<string, string>;
+    hydrationPasses?: number;
+    metrics?: ContactExportMetrics;
+    labelResults?: ContactExportLabelResult[];
+  };
   WA_CONTACT_EXPORT_CANCEL: { cancelled: boolean };
   WA_PREFLIGHT: WhatsAppPreflightResult;
   WA_OPEN_CONVERSATION: { navigationStarted: true; requestedNavigationAt: string; contentInstanceId: string; navigationRequestId: string };

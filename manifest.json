@@ -3,8 +3,8 @@
   "name": "Flor Mía WhatsApp Sender",
   "short_name": "Flor Mía WA",
   "description": "Extensión privada para ejecutar y verificar envíos preparados por Flor Mía.",
-  "version": "0.9.5.3",
-  "version_name": "0.9.5.3",
+  "version": "0.9.5.4",
+  "version_name": "0.9.5.4",
   "minimum_chrome_version": "120",
   "action": {
     "default_title": "Flor Mía WhatsApp Sender",

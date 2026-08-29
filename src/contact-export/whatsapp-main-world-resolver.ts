@@ -1,12 +1,13 @@
 import { ERROR_CODES, ExtensionError } from "../shared/errors";
 import { CONTACT_EXPORT_ERROR_CODES, type ContactExportCollectionResult, type ContactKind, type RawContactCandidate, type WhatsAppLabelInfo } from "./types";
+import { normalizeWhatsAppJidPhone } from "./phone-normalizer";
 
 export interface MainWorldContactSnapshot {
   chatId: string;
   phoneJid: string | null;
   name: string;
   kind: ContactKind;
-  phoneResolution: "direct-pn" | "contact-phone" | "lid-map" | "unresolved";
+  phoneResolution: "direct-pn" | "contact-phone" | "lid-map" | "lid-cache" | "alternate-user" | "frontend-contact" | "contact-record" | "unresolved";
 }
 
 export interface MainWorldLabelSnapshot {
@@ -123,28 +124,44 @@ export async function inspectWhatsAppLabelsMainWorld(selectedLabelNames: string[
 
   const widFactory = safeRequire("WAWebWidFactory");
   const apiContact = safeRequire("WAWebApiContact");
+  const apiContactRecord = asRecord(apiContact);
+  const lidPnCache = apiContactRecord?.lidPnCache;
+  const frontendContactGetters = safeRequire("WAWebFrontendContactGetters");
   const globalStore = asRecord(globalWindow.Store);
   const lidUtils = globalStore?.LidUtils;
-  const resolveLidPhone = async (wid: unknown): Promise<string | null> => {
-    const apiMapped = call(apiContact, "getPhoneNumber", wid);
-    if (apiMapped !== undefined) {
-      try {
-        const resolved = await Promise.resolve(apiMapped);
-        const phone = pnJid(resolved);
-        if (phone) return phone;
-      } catch {
-        // Fallback local siguiente.
-      }
+  const phoneFromUnknown = (value: unknown): string | null => {
+    const direct = pnJid(value);
+    if (direct) return direct;
+    const record = asRecord(value);
+    if (!record) return null;
+    for (const key of ["phoneNumber", "pn", "phone", "wid", "id", "alternateUserWid", "alternateWid"]) {
+      const phone = pnJid(record[key]);
+      if (phone) return phone;
     }
-    const storeMapped = call(lidUtils, "getPhoneNumber", wid);
-    if (storeMapped !== undefined) {
-      try {
-        const resolved = await Promise.resolve(storeMapped);
-        const phone = pnJid(resolved);
-        if (phone) return phone;
-      } catch {
-        // No hay mapeo local para este LID.
-      }
+    return null;
+  };
+  const resolveAttempt = async (value: unknown): Promise<string | null> => {
+    if (value === undefined || value === null) return null;
+    try {
+      return phoneFromUnknown(await Promise.resolve(value));
+    } catch {
+      return null;
+    }
+  };
+  const resolveLidPhone = async (wid: unknown, contact: unknown): Promise<{ phone: string; resolution: MainWorldContactSnapshot["phoneResolution"] } | null> => {
+    const attempts: Array<[MainWorldContactSnapshot["phoneResolution"], unknown]> = [
+      ["lid-map", call(apiContact, "getPhoneNumber", wid)],
+      ["lid-cache", call(lidPnCache, "getPhoneNumber", wid)],
+      ["lid-cache", get(call(lidPnCache, "getLidEntry", wid), "phoneNumber")],
+      ["alternate-user", call(apiContact, "getAlternateUserWid", wid)],
+      ["alternate-user", call(apiContact, "getPnIfLidIsLatestMapping", wid)],
+      ["frontend-contact", call(frontendContactGetters, "getPnForLid", contact)],
+      ["contact-record", call(apiContact, "getContactRecord", wid)],
+      ["lid-map", call(lidUtils, "getPhoneNumber", wid)]
+    ];
+    for (const [resolution, value] of attempts) {
+      const phone = await resolveAttempt(value);
+      if (phone) return { phone, resolution };
     }
     return null;
   };
@@ -194,10 +211,10 @@ export async function inspectWhatsAppLabelsMainWorld(selectedLabelNames: string[
         }
       }
       if (!phoneJid && /@lid$/i.test(chatId)) {
-        const mapped = await resolveLidPhone(wid);
+        const mapped = await resolveLidPhone(wid, contact);
         if (mapped) {
-          phoneJid = mapped;
-          phoneResolution = "lid-map";
+          phoneJid = mapped.phone;
+          phoneResolution = mapped.resolution;
         }
       }
 
@@ -212,6 +229,205 @@ export async function inspectWhatsAppLabelsMainWorld(selectedLabelNames: string[
     output.push({ requestedName, found: true, internalLabelId, chatCount: parentIds.size, entries });
   }
   return { supported: true, reason: null, labels: output };
+}
+
+export interface MainWorldLidResolutionBatch {
+  phones: Record<string, string>;
+  strategies: Record<string, string>;
+  attempted: number;
+  resolved: number;
+}
+
+/**
+ * Resolver autocontenido para ejecutar en world=MAIN mientras el Content Script
+ * recorre el viewport virtualizado. Sólo consulta estado/cache local de WhatsApp.
+ */
+export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promise<MainWorldLidResolutionBatch> {
+  const asRecord = (value: unknown): Record<string, unknown> | null => value && typeof value === "object" ? value as Record<string, unknown> : null;
+  const get = (target: unknown, key: string): unknown => asRecord(target)?.[key];
+  const call = (target: unknown, key: string, ...args: unknown[]): unknown => {
+    const fn = get(target, key);
+    if (typeof fn !== "function") return undefined;
+    try { return Reflect.apply(fn, target, args); } catch { return undefined; }
+  };
+  const serializedId = (value: unknown): string => {
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number") return String(value);
+    const record = asRecord(value);
+    if (!record) return "";
+    const direct = [record._serialized, record.serialized, record.id].find((item) => typeof item === "string" && item.trim());
+    if (typeof direct === "string") return direct.trim();
+    const user = typeof record.user === "string" ? record.user.trim() : "";
+    const server = typeof record.server === "string" ? record.server.trim() : "";
+    return user && server ? `${user}@${server}` : "";
+  };
+  const pnJid = (value: unknown): string | null => {
+    const serialized = serializedId(value);
+    const match = serialized.match(/^(\d{8,15})@(c\.us|s\.whatsapp\.net)$/i);
+    if (match?.[1]) return `${match[1]}@c.us`;
+    if (/^[1-9]\d{7,14}$/.test(serialized)) return `${serialized}@c.us`;
+    return null;
+  };
+  const phoneFromUnknown = (value: unknown): string | null => {
+    const direct = pnJid(value);
+    if (direct) return direct;
+    const record = asRecord(value);
+    if (!record) return null;
+    for (const key of ["phoneNumber", "pn", "phone", "wid", "id", "alternateUserWid", "alternateWid"]) {
+      const phone = pnJid(record[key]);
+      if (phone) return phone;
+    }
+    return null;
+  };
+  const globalWindow = window as unknown as { require?: (name: string) => unknown; Store?: unknown };
+  const requireFn = globalWindow.require;
+  const empty: MainWorldLidResolutionBatch = { phones: {}, strategies: {}, attempted: contactIds.length, resolved: 0 };
+  if (typeof requireFn !== "function") return empty;
+  const safeRequire = (name: string): unknown => { try { return requireFn(name); } catch { return undefined; } };
+  const widFactory = safeRequire("WAWebWidFactory");
+  const apiContact = safeRequire("WAWebApiContact");
+  const apiRecord = asRecord(apiContact);
+  const lidPnCache = apiRecord?.lidPnCache;
+  const collections = asRecord(safeRequire("WAWebCollections"));
+  const contactCollection = collections?.Contact;
+  const frontendGetters = safeRequire("WAWebFrontendContactGetters");
+  const lidUtils = asRecord(globalWindow.Store)?.LidUtils;
+
+  const collectionGet = (id: string, wid: unknown): unknown => call(contactCollection, "get", wid) ?? call(contactCollection, "get", id);
+  const awaitPhone = async (value: unknown): Promise<string | null> => {
+    if (value === undefined || value === null) return null;
+    try { return phoneFromUnknown(await Promise.resolve(value)); } catch { return null; }
+  };
+
+  const phones: Record<string, string> = {};
+  const strategies: Record<string, string> = {};
+  for (const id of contactIds) {
+    if (!/^\d{8,20}@lid$/i.test(id)) continue;
+    const wid = call(widFactory, "createWid", id) ?? { _serialized: id, server: "lid" };
+    const contact = collectionGet(id, wid);
+    const contactRecord = asRecord(contact);
+    const candidates: Array<[string, unknown]> = [
+      ["contact-phone", contactRecord?.phoneNumber],
+      ["lid-map", call(apiContact, "getPhoneNumber", wid)],
+      ["lid-cache", call(lidPnCache, "getPhoneNumber", wid)],
+      ["lid-cache-entry", get(call(lidPnCache, "getLidEntry", wid), "phoneNumber")],
+      ["alternate-user", call(apiContact, "getAlternateUserWid", wid)],
+      ["latest-mapping", call(apiContact, "getPnIfLidIsLatestMapping", wid)],
+      ["frontend-contact", call(frontendGetters, "getPnForLid", contact)],
+      ["contact-record", call(apiContact, "getContactRecord", wid)],
+      ["store-lid-utils", call(lidUtils, "getPhoneNumber", wid)]
+    ];
+    for (const [strategy, value] of candidates) {
+      const phone = await awaitPhone(value);
+      if (!phone) continue;
+      phones[id] = phone;
+      strategies[id] = strategy;
+      break;
+    }
+  }
+  return { phones, strategies, attempted: contactIds.length, resolved: Object.keys(phones).length };
+}
+
+export async function resolveWhatsAppLidsInMainWorld(tabId: number, contactIds: string[]): Promise<MainWorldLidResolutionBatch> {
+  const unique = [...new Set(contactIds.map((id) => id.trim()).filter((id) => /^\d{8,20}@lid$/i.test(id)))].slice(0, 1000);
+  if (!unique.length || !chrome.scripting?.executeScript) return { phones: {}, strategies: {}, attempted: unique.length, resolved: 0 };
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: inspectWhatsAppLidsMainWorld,
+      args: [unique]
+    });
+    return results[0]?.result as MainWorldLidResolutionBatch ?? { phones: {}, strategies: {}, attempted: unique.length, resolved: 0 };
+  } catch {
+    return { phones: {}, strategies: {}, attempted: unique.length, resolved: 0 };
+  }
+}
+
+export interface ContactHydrationEvidence {
+  candidates: RawContactCandidate[];
+  hydratedPhones?: Record<string, string>;
+  hydrationPasses?: number;
+  metrics?: ContactExportCollectionResult["metrics"];
+  labelResults?: ContactExportCollectionResult["labelResults"];
+}
+
+export interface ContactHydrationMergeResult {
+  collection: ContactExportCollectionResult;
+  attempted: number;
+  resolved: number;
+  remaining: number;
+  passes: number;
+}
+
+export function mergeHydratedPhonesIntoCollection(
+  structured: ContactExportCollectionResult,
+  evidence: ContactHydrationEvidence
+): ContactHydrationMergeResult {
+  const allowedIds = new Set(structured.candidates.map((candidate) => candidate.contactId?.trim().toLowerCase()).filter((id): id is string => Boolean(id)));
+  const phoneById = new Map<string, string>();
+  for (const [rawId, rawPhone] of Object.entries(evidence.hydratedPhones ?? {})) {
+    const id = rawId.trim().toLowerCase();
+    if (!allowedIds.has(id) || !normalizeWhatsAppJidPhone(rawPhone)) continue;
+    phoneById.set(id, rawPhone);
+  }
+  for (const candidate of evidence.candidates) {
+    const id = candidate.contactId?.trim().toLowerCase();
+    if (!id || !allowedIds.has(id) || candidate.phoneStatus !== "resolved" || !candidate.phoneCandidate || !normalizeWhatsAppJidPhone(candidate.phoneCandidate)) continue;
+    if (!phoneById.has(id)) phoneById.set(id, candidate.phoneCandidate);
+  }
+
+  const unresolvedBefore = structured.candidates.filter((candidate) => candidate.phoneStatus !== "resolved" && /@lid$/i.test(candidate.contactId ?? "")).length;
+  const candidates = structured.candidates.map((candidate) => {
+    if (candidate.phoneStatus === "resolved") return candidate;
+    const id = candidate.contactId?.trim().toLowerCase();
+    const phone = id ? phoneById.get(id) : null;
+    if (!phone) return candidate;
+    return {
+      ...candidate,
+      phoneCandidate: phone,
+      phoneSource: "jid" as const,
+      phoneStatus: "resolved" as const,
+      strategy: `${candidate.strategy}+virtualized-lid-hydration`
+    };
+  });
+
+  const labelResults = structured.labelResults.map((base) => {
+    const labelCandidates = candidates.filter((candidate) => candidate.labelId === base.labelId);
+    const enriched = evidence.labelResults?.find((item) => item.labelId === base.labelId);
+    return {
+      ...base,
+      resolvedPhones: labelCandidates.filter((candidate) => candidate.phoneStatus === "resolved" && (candidate.kind === "contact" || candidate.kind === "unknown")).length,
+      unresolvedPhones: labelCandidates.filter((candidate) => candidate.phoneStatus !== "resolved" && (candidate.kind === "contact" || candidate.kind === "unknown")).length,
+      rowScans: enriched?.rowScans ?? base.rowScans,
+      scrollOperations: enriched?.scrollOperations ?? base.scrollOperations,
+      scopeStrategy: "main-world-label-store+virtualized-lid-hydration"
+    };
+  });
+  const remaining = candidates.filter((candidate) => candidate.phoneStatus !== "resolved" && /@lid$/i.test(candidate.contactId ?? "")).length;
+  const resolved = Math.max(0, unresolvedBefore - remaining);
+  const metrics = evidence.metrics ? {
+    ...evidence.metrics,
+    startedAt: structured.metrics.startedAt,
+    chatsOpened: 0
+  } : structured.metrics;
+  if (evidence.metrics) {
+    metrics.durationMs = Math.max(0, Date.parse(metrics.completedAt) - Date.parse(metrics.startedAt));
+    const processed = labelResults.reduce((sum, item) => sum + item.collectedUniqueContacts, 0);
+    metrics.contactsPerSecond = metrics.durationMs > 0 ? Number((processed / (metrics.durationMs / 1000)).toFixed(2)) : null;
+  }
+  return {
+    collection: {
+      candidates,
+      strategy: "main-world-label-store+virtualized-lid-hydration",
+      labelResults,
+      metrics
+    },
+    attempted: unresolvedBefore,
+    resolved,
+    remaining,
+    passes: evidence.hydrationPasses ?? 0
+  };
 }
 
 function opaqueSourceId(value: string): string {
