@@ -1,0 +1,81 @@
+name: patch contact export 951 content
+
+on:
+  push:
+    branches: [feat/contact-export]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+      - name: Patch WhatsApp content handler
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/content/whatsapp.ts';
+          let s = fs.readFileSync(path, 'utf8');
+          s = s.replace(
+            'import { CONTACT_EXPORT_ERROR_CODES } from "../contact-export/types";',
+            'import { CONTACT_EXPORT_ERROR_CODES, type ContactExportProgress } from "../contact-export/types";'
+          );
+          s = s.replace(
+`  progress: {
+    processed: number;
+    totalHint: number | null;
+    percent: number | null;
+    currentLabel: string | null;
+    labelIndex: number;
+    totalLabels: number;
+    currentContact: number;
+  }
+`,
+`  progress: Omit<ContactExportProgress, "operationId" | "updatedAt">
+`
+          );
+          const oldBlock = `          const candidates = await collectContactsForLabels(payload.labels, {
+            signal: controller.signal,
+            progress: (progress) => publishContactExportProgress(payload.operationId, progress)
+          });
+          sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_ANALYZE"]>(message.requestId, {
+            candidates,
+            strategy: "semantic-label-iteration"
+          }));`;
+          const newBlock = `          const collection = await collectContactsForLabels(payload.labels, {
+            signal: controller.signal,
+            progress: (progress) => publishContactExportProgress(payload.operationId, progress)
+          });
+          await publishContactExportProgress(payload.operationId, {
+            processed: collection.candidates.length,
+            totalHint: collection.candidates.length,
+            percent: 100,
+            currentLabel: payload.labels.at(-1)?.name ?? null,
+            labelIndex: payload.labels.length,
+            totalLabels: payload.labels.length,
+            currentContact: collection.candidates.length,
+            metrics: collection.metrics,
+            labelResults: collection.labelResults
+          });
+          sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_ANALYZE"]>(message.requestId, {
+            candidates: collection.candidates,
+            strategy: collection.strategy
+          }));`;
+          if (!s.includes(oldBlock)) throw new Error('expected contact export analyze block not found');
+          s = s.replace(oldBlock, newBlock);
+          fs.writeFileSync(path, s);
+          NODE
+      - name: Commit patch
+        run: |
+          if git diff --quiet -- src/content/whatsapp.ts; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/content/whatsapp.ts
+          git commit -m "refactor: keep contact export metrics off sender protocol"
+          git push origin HEAD:feat/contact-export
