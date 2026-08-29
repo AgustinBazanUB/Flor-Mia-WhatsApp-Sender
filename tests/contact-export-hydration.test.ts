@@ -129,75 +129,93 @@ describe("Contact Export virtualized LID hydration", () => {
 });
 
 
-describe("Contact Export nonvisual LID resolution", () => {
-  it("queries WhatsApp internally for a LID and re-reads the hydrated PN without opening a chat", async () => {
-    const lid = "123456789012345@lid";
-    let hydrated = false;
-    Object.defineProperty(window, "require", {
-      configurable: true,
-      value: (moduleName: string) => {
-        if (moduleName === "WAWebWidFactory") return { createWid: (id: string) => ({ _serialized: id, server: "lid" }) };
-        if (moduleName === "WAWebApiContact") return {
-          getPhoneNumber: () => hydrated ? { _serialized: "5491123456789@c.us", server: "c.us" } : undefined,
-          lidPnCache: { getPhoneNumber: () => undefined, getLidEntry: () => undefined }
-        };
-        if (moduleName === "WAWebCollections") return { Contact: { get: () => undefined } };
-        if (moduleName === "WAWebQueryExistsJob") return {
-          queryWidExists: async () => {
-            hydrated = true;
-            return { wid: { _serialized: lid, server: "lid" } };
-          }
-        };
-        return {};
-      }
-    });
-    const result = await inspectWhatsAppLidsMainWorld([lid]);
-    expect(result).toMatchObject({
-      attempted: 1,
-      resolved: 1,
-      localResolved: 0,
-      serverQueried: 1,
-      serverResolved: 1,
-      querySupported: true
-    });
-    expect(result.phones[lid]).toBe("5491123456789@c.us");
-    expect(result.strategies[lid]).toContain("query-exists");
-    expect(document.querySelector("#main")).toBeNull();
-  });
-
-  it("resolves 210 structured LIDs through the internal query path with no visual rows or scroll", async () => {
+describe("Contact Export historical LID resolution", () => {
+  it("resolves 210 structured LIDs from outgoing history receipts with no visual rows, scroll or server lookup", async () => {
     const ids = Array.from({ length: 210 }, (_, index) => `${String(800000000000000 + index)}@lid`);
-    const phoneByLid = new Map<string, string>();
+    const chats = new Map<string, unknown>();
+    for (let index = 0; index < ids.length; index += 1) {
+      const id = ids[index]!;
+      chats.set(id, {
+        id: { _serialized: id },
+        msgs: {
+          getModelsArray: () => [{
+            id: { remote: { _serialized: id }, fromMe: true },
+            userReceipt: [{ userJid: { _serialized: `${5491100000000 + index}@c.us` } }]
+          }]
+        }
+      });
+    }
+    let serverCalls = 0;
     Object.defineProperty(window, "require", {
       configurable: true,
       value: (moduleName: string) => {
         if (moduleName === "WAWebWidFactory") return { createWid: (id: string) => ({ _serialized: id, server: "lid" }) };
         if (moduleName === "WAWebApiContact") return {
-          getPhoneNumber: (wid: { _serialized?: string }) => {
-            const phone = phoneByLid.get(String(wid?._serialized || ""));
-            return phone ? { _serialized: phone, server: "c.us" } : undefined;
-          },
+          getPhoneNumber: () => undefined,
           lidPnCache: { getPhoneNumber: () => undefined, getLidEntry: () => undefined }
         };
-        if (moduleName === "WAWebCollections") return { Contact: { get: () => undefined } };
+        if (moduleName === "WAWebCollections") return {
+          Contact: { get: () => undefined },
+          Chat: { get: (wid: { _serialized?: string } | string) => chats.get(typeof wid === "string" ? wid : String(wid?._serialized || "")) },
+          Msg: { getModelsArray: () => [] },
+          Label: { getModelsArray: () => [] }
+        };
         if (moduleName === "WAWebQueryExistsJob") return {
-          queryWidExists: async (wid: { _serialized?: string }) => {
-            const id = String(wid?._serialized || "");
-            const index = ids.indexOf(id);
-            if (index >= 0) phoneByLid.set(id, `${5491100000000 + index}@c.us`);
-            return { wid };
-          }
+          queryWidExists: async () => { serverCalls += 1; return undefined; }
         };
         return {};
       }
     });
+
     const result = await inspectWhatsAppLidsMainWorld(ids);
     expect(result.attempted).toBe(210);
     expect(result.resolved).toBe(210);
     expect(result.localResolved).toBe(0);
-    expect(result.serverQueried).toBe(210);
-    expect(result.serverResolved).toBe(210);
+    expect(result.serverQueried).toBe(0);
+    expect(result.serverResolved).toBe(0);
+    expect(serverCalls).toBe(0);
+    expect(result.historyResolved).toBe(210);
+    expect(result.historyChatsPresent).toBe(210);
+    expect(result.historyMessagesScanned).toBeGreaterThanOrEqual(210);
+    expect(result.historyConflicts).toBe(0);
     expect(Object.keys(result.phones)).toHaveLength(210);
     expect(document.querySelectorAll("[role='listitem']")).toHaveLength(0);
+  });
+
+  it("fails closed when historical metadata gives two different phone numbers for the same LID", async () => {
+    const lid = "123456789012345@lid";
+    Object.defineProperty(window, "require", {
+      configurable: true,
+      value: (moduleName: string) => {
+        if (moduleName === "WAWebWidFactory") return { createWid: (id: string) => ({ _serialized: id, server: "lid" }) };
+        if (moduleName === "WAWebApiContact") return {
+          getPhoneNumber: () => undefined,
+          lidPnCache: { getPhoneNumber: () => undefined, getLidEntry: () => undefined }
+        };
+        if (moduleName === "WAWebCollections") return {
+          Contact: { get: () => undefined },
+          Chat: {
+            get: () => ({
+              id: { _serialized: lid },
+              msgs: {
+                getModelsArray: () => [
+                  { id: { remote: { _serialized: lid }, fromMe: true }, userReceipt: [{ userJid: { _serialized: "5491123456789@c.us" } }] },
+                  { id: { remote: { _serialized: lid }, fromMe: true }, userReceipt: [{ userJid: { _serialized: "5491199999999@c.us" } }] }
+                ]
+              }
+            })
+          },
+          Msg: { getModelsArray: () => [] },
+          Label: { getModelsArray: () => [] }
+        };
+        return {};
+      }
+    });
+
+    const result = await inspectWhatsAppLidsMainWorld([lid]);
+    expect(result.resolved).toBe(0);
+    expect(result.historyResolved).toBe(0);
+    expect(result.historyConflicts).toBe(1);
+    expect(result.phones[lid]).toBeUndefined();
   });
 });

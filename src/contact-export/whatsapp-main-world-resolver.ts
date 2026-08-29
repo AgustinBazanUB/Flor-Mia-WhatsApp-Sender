@@ -240,6 +240,10 @@ export interface MainWorldLidResolutionBatch {
   serverQueried: number;
   serverResolved: number;
   querySupported: boolean;
+  historyResolved: number;
+  historyMessagesScanned: number;
+  historyChatsPresent: number;
+  historyConflicts: number;
 }
 
 /**
@@ -259,8 +263,9 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
     if (typeof value === "number") return String(value);
     const record = asRecord(value);
     if (!record) return "";
-    const direct = [record._serialized, record.serialized, record.id].find((item) => typeof item === "string" && item.trim());
+    const direct = [record._serialized, record.serialized].find((item) => typeof item === "string" && item.trim());
     if (typeof direct === "string") return direct.trim();
+    if (typeof record.id === "string" && record.id.trim()) return record.id.trim();
     const user = typeof record.user === "string" ? record.user.trim() : "";
     const server = typeof record.server === "string" ? record.server.trim() : "";
     return user && server ? `${user}@${server}` : "";
@@ -277,17 +282,23 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
     if (direct) return direct;
     const record = asRecord(value);
     if (!record) return null;
-    for (const key of ["phoneNumber", "pn", "phone", "wid", "id", "alternateUserWid", "alternateWid"]) {
+    for (const key of ["phoneNumber", "pn", "pnJid", "phone", "wid", "id", "alternateUserWid", "alternateWid", "remoteJidAlt", "participantPn", "senderPn"]) {
       const phone = pnJid(record[key]);
       if (phone) return phone;
     }
     return null;
   };
+  const listFrom = (value: unknown): unknown[] => {
+    if (Array.isArray(value)) return value;
+    const models = call(value, "getModelsArray");
+    return Array.isArray(models) ? models : [];
+  };
   const globalWindow = window as unknown as { require?: (name: string) => unknown; Store?: unknown };
   const requireFn = globalWindow.require;
   const empty: MainWorldLidResolutionBatch = {
     phones: {}, strategies: {}, attempted: contactIds.length, resolved: 0,
-    localResolved: 0, serverQueried: 0, serverResolved: 0, querySupported: false
+    localResolved: 0, serverQueried: 0, serverResolved: 0, querySupported: false,
+    historyResolved: 0, historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0
   };
   if (typeof requireFn !== "function") return empty;
   const safeRequire = (name: string): unknown => { try { return requireFn(name); } catch { return undefined; } };
@@ -297,12 +308,15 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
   const lidPnCache = apiRecord?.lidPnCache;
   const collections = asRecord(safeRequire("WAWebCollections"));
   const contactCollection = collections?.Contact;
+  const chatCollection = collections?.Chat;
+  const msgCollection = collections?.Msg;
+  const labelCollection = collections?.Label;
   const frontendGetters = safeRequire("WAWebFrontendContactGetters");
   const lidUtils = asRecord(globalWindow.Store)?.LidUtils;
   const queryExistsJob = safeRequire("WAWebQueryExistsJob");
   const querySupported = typeof get(queryExistsJob, "queryWidExists") === "function";
 
-  const collectionGet = (id: string, wid: unknown): unknown => call(contactCollection, "get", wid) ?? call(contactCollection, "get", id);
+  const collectionGet = (collection: unknown, id: string, wid: unknown): unknown => call(collection, "get", wid) ?? call(collection, "get", id);
   const awaitPhone = async (value: unknown): Promise<string | null> => {
     if (value === undefined || value === null) return null;
     try { return phoneFromUnknown(await Promise.resolve(value)); } catch { return null; }
@@ -312,11 +326,12 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
   const strategies: Record<string, string> = {};
   const pending: Array<{ id: string; wid: unknown }> = [];
 
-  const resolveLocal = async (id: string, wid: unknown, preferredPrefix = ""): Promise<boolean> => {
-    const contact = collectionGet(id, wid);
+  const resolveLocal = async (id: string, wid: unknown): Promise<boolean> => {
+    const contact = collectionGet(contactCollection, id, wid);
     const contactRecord = asRecord(contact);
     const candidates: Array<[string, unknown]> = [
       ["contact-phone", contactRecord?.phoneNumber],
+      ["contact-pn-jid", contactRecord?.pnJid],
       ["lid-map", call(apiContact, "getPhoneNumber", wid)],
       ["lid-cache", call(lidPnCache, "getPhoneNumber", wid)],
       ["lid-cache-entry", get(call(lidPnCache, "getLidEntry", wid), "phoneNumber")],
@@ -330,7 +345,7 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
       const phone = await awaitPhone(value);
       if (!phone) continue;
       phones[id] = phone;
-      strategies[id] = preferredPrefix ? `${preferredPrefix}-${strategy}` : strategy;
+      strategies[id] = strategy;
       return true;
     }
     return false;
@@ -344,35 +359,141 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
     else pending.push({ id, wid });
   }
 
-  let serverQueried = 0;
-  let serverResolved = 0;
-  if (querySupported && pending.length) {
-    const batchSize = 4;
-    for (let offset = 0; offset < pending.length; offset += batchSize) {
-      const batch = pending.slice(offset, offset + batchSize);
-      await Promise.all(batch.map(async ({ id, wid }) => {
-        serverQueried += 1;
-        let queryResult: unknown = undefined;
-        try {
-          queryResult = await Promise.resolve(call(queryExistsJob, "queryWidExists", wid));
-        } catch {
-          queryResult = undefined;
-        }
+  // queryWidExists is intentionally NOT called for LID -> PN in 0.9.5.6.
+  // Current WA-JS resolves an existing LID to PN from the local lidPnCache;
+  // server lookup is used in the opposite PN -> LID direction. 0.9.5.5 proved
+  // that 192 LID queries completed with zero new mappings on the real account.
+  const serverQueried = 0;
+  const serverResolved = 0;
 
-        // Algunas builds devuelven el PN directamente; otras sólo hidratan WAWebApiContact/LidUtils.
-        const direct = phoneFromUnknown(queryResult);
-        if (direct && !/@lid$/i.test(serializedId(queryResult))) {
-          phones[id] = direct;
-          strategies[id] = "query-exists-result";
-          serverResolved += 1;
-          return;
+  const targetIds = new Set(pending.filter(({ id }) => !phones[id]).map(({ id }) => id.toLowerCase()));
+  const historyCandidates = new Map<string, Map<string, Set<string>>>();
+  let historyMessagesScanned = 0;
+  let historyChatsPresent = 0;
+
+  const addHistoryCandidate = (rawId: unknown, rawPhone: unknown, source: string): void => {
+    const id = serializedId(rawId).toLowerCase();
+    if (!targetIds.has(id)) return;
+    const phone = phoneFromUnknown(rawPhone);
+    if (!phone) return;
+    let byPhone = historyCandidates.get(id);
+    if (!byPhone) {
+      byPhone = new Map<string, Set<string>>();
+      historyCandidates.set(id, byPhone);
+    }
+    let sources = byPhone.get(phone);
+    if (!sources) {
+      sources = new Set<string>();
+      byPhone.set(phone, sources);
+    }
+    sources.add(source);
+  };
+
+  const scanMessageMetadata = (message: unknown): void => {
+    const record = asRecord(message);
+    if (!record) return;
+    historyMessagesScanned += 1;
+    const key = asRecord(record.id) ?? asRecord(record.key);
+    const remote = key?.remote ?? key?.remoteJid ?? record.remoteJid;
+    const remoteId = serializedId(remote).toLowerCase();
+    if (targetIds.has(remoteId)) {
+      for (const [source, value] of [
+        ["message-remote-alt", key?.remoteJidAlt],
+        ["message-remote-alt", record.remoteJidAlt],
+        ["message-pn-jid", record.pnJid],
+        ["message-peer-pn", record.peerPn]
+      ] as Array<[string, unknown]>) addHistoryCandidate(remoteId, value, source);
+
+      const fromMe = Boolean(key?.fromMe ?? record.fromMe);
+      if (fromMe) {
+        const receipts = listFrom(record.userReceipt);
+        for (const receipt of receipts) {
+          addHistoryCandidate(remoteId, asRecord(receipt)?.userJid, "message-user-receipt");
         }
-        if (await resolveLocal(id, wid, "query-exists")) serverResolved += 1;
-      }));
-      if (offset + batchSize < pending.length) {
-        await new Promise((resolve) => globalThis.setTimeout(resolve, 35));
       }
     }
+
+    const participant = key?.participant ?? record.participant;
+    const participantId = serializedId(participant).toLowerCase();
+    if (targetIds.has(participantId)) {
+      addHistoryCandidate(participantId, key?.participantPn, "message-participant-pn");
+      addHistoryCandidate(participantId, record.participantPn, "message-participant-pn");
+      addHistoryCandidate(participantId, key?.participantAlt, "message-participant-alt");
+      addHistoryCandidate(participantId, record.participantAlt, "message-participant-alt");
+    }
+
+    const sender = key?.sender ?? record.sender ?? record.author ?? record.from;
+    const senderId = serializedId(sender).toLowerCase();
+    if (targetIds.has(senderId)) {
+      addHistoryCandidate(senderId, key?.senderPn, "message-sender-pn");
+      addHistoryCandidate(senderId, record.senderPn, "message-sender-pn");
+      addHistoryCandidate(senderId, record.authorPn, "message-author-pn");
+    }
+
+    const to = record.to;
+    const toId = serializedId(to).toLowerCase();
+    if (targetIds.has(toId)) addHistoryCandidate(toId, record.toAlt ?? record.recipientPn, "message-recipient-alt");
+  };
+
+  // 1) Label-item metadata: some builds keep the alternate PN beside parentId.
+  for (const label of listFrom(labelCollection)) {
+    const items = listFrom(asRecord(label)?.labelItemCollection);
+    for (const item of items) {
+      const record = asRecord(item);
+      const parentId = record?.parentId;
+      const id = serializedId(parentId).toLowerCase();
+      if (!targetIds.has(id)) continue;
+      for (const [source, value] of [
+        ["label-parent-alt", record?.parentIdAlt],
+        ["label-pn-jid", record?.pnJid],
+        ["label-phone", record?.phoneNumber],
+        ["label-parent-pn", record?.parentPn]
+      ] as Array<[string, unknown]>) addHistoryCandidate(id, value, source);
+    }
+  }
+
+  // 2) Chat/contact metadata and already-loaded message metadata for each exact LID.
+  for (const { id, wid } of pending) {
+    if (phones[id]) continue;
+    const chat = collectionGet(chatCollection, id, wid);
+    if (!chat) continue;
+    historyChatsPresent += 1;
+    const chatRecord = asRecord(chat);
+    addHistoryCandidate(id, chatRecord?.pnJid, "chat-pn-jid");
+    addHistoryCandidate(id, chatRecord?.phoneNumber, "chat-phone");
+    addHistoryCandidate(id, chatRecord?.remoteJidAlt, "chat-remote-alt");
+    addHistoryCandidate(id, chatRecord?.alternateUserWid, "chat-alternate-user");
+    const contact = chatRecord?.contact ?? collectionGet(contactCollection, id, wid);
+    const contactRecord = asRecord(contact);
+    addHistoryCandidate(id, contactRecord?.pnJid, "contact-pn-jid");
+    addHistoryCandidate(id, contactRecord?.phoneNumber, "contact-phone");
+    addHistoryCandidate(id, contactRecord?.alternateUserWid, "contact-alternate-user");
+    for (const message of listFrom(chatRecord?.msgs ?? chatRecord?.messages)) scanMessageMetadata(message);
+  }
+
+  // 3) Global already-synchronised message models. Only addressing/receipt metadata is
+  // inspected; message bodies/media/content are never read or persisted.
+  const globalMessages = listFrom(msgCollection);
+  const maxMessages = 100000;
+  const startAt = Math.max(0, globalMessages.length - maxMessages);
+  for (let index = startAt; index < globalMessages.length; index += 1) scanMessageMetadata(globalMessages[index]);
+
+  let historyResolved = 0;
+  let historyConflicts = 0;
+  for (const { id } of pending) {
+    if (phones[id]) continue;
+    const byPhone = historyCandidates.get(id.toLowerCase());
+    if (!byPhone?.size) continue;
+    if (byPhone.size !== 1) {
+      historyConflicts += 1;
+      continue;
+    }
+    const onlyEntry = [...byPhone.entries()][0];
+    if (!onlyEntry) continue;
+    const [phone, sources] = onlyEntry;
+    phones[id] = phone;
+    strategies[id] = `history-${[...sources].sort().join("+")}`;
+    historyResolved += 1;
   }
 
   return {
@@ -383,7 +504,11 @@ export async function inspectWhatsAppLidsMainWorld(contactIds: string[]): Promis
     localResolved,
     serverQueried,
     serverResolved,
-    querySupported
+    querySupported,
+    historyResolved,
+    historyMessagesScanned,
+    historyChatsPresent,
+    historyConflicts
   };
 }
 
@@ -391,7 +516,8 @@ export async function resolveWhatsAppLidsInMainWorld(tabId: number, contactIds: 
   const unique = [...new Set(contactIds.map((id) => id.trim()).filter((id) => /^\d{8,20}@lid$/i.test(id)))].slice(0, 1000);
   const empty = (): MainWorldLidResolutionBatch => ({
     phones: {}, strategies: {}, attempted: unique.length, resolved: 0,
-    localResolved: 0, serverQueried: 0, serverResolved: 0, querySupported: false
+    localResolved: 0, serverQueried: 0, serverResolved: 0, querySupported: false,
+    historyResolved: 0, historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0
   });
   if (!unique.length || !chrome.scripting?.executeScript) return empty();
   try {
@@ -411,7 +537,7 @@ export interface ContactHydrationEvidence {
   candidates: RawContactCandidate[];
   hydratedPhones?: Record<string, string>;
   hydrationPasses?: number;
-  strategy?: "virtualized-lid-hydration" | "server-assisted-lid-map";
+  strategy?: "virtualized-lid-hydration" | "server-assisted-lid-map" | "history-metadata-lid-map";
   metrics?: ContactExportCollectionResult["metrics"];
   labelResults?: ContactExportCollectionResult["labelResults"];
 }

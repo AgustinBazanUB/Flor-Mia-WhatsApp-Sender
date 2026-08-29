@@ -37,6 +37,12 @@ const CONTACT_EXPORT_TECHNICAL_DETAIL_KEYS = [
   "phoneLookupServerResolved",
   "phoneLookupRemaining",
   "phoneLookupQuerySupported",
+  "phoneLookupMethod",
+  "phoneLookupServerSkipped",
+  "phoneHistoryResolved",
+  "phoneHistoryMessagesScanned",
+  "phoneHistoryChatsPresent",
+  "phoneHistoryConflicts",
   "visualHydrationUsed"
 ] as const;
 
@@ -186,7 +192,8 @@ export class ContactExportRuntime {
       const structured = await collectContactsFromWhatsAppMainWorld(tab.id, labels);
       let resolutionStats = {
         attempted: 0, localResolved: 0, serverQueried: 0, serverResolved: 0,
-        remaining: 0, querySupported: false
+        remaining: 0, querySupported: false, historyResolved: 0,
+        historyMessagesScanned: 0, historyChatsPresent: 0, historyConflicts: 0
       };
       let structuredResult = structured;
       if (structured) {
@@ -200,8 +207,8 @@ export class ContactExportRuntime {
           const merged = mergeHydratedPhonesIntoCollection(structured, {
             candidates: [],
             hydratedPhones: batch.phones,
-            hydrationPasses: batch.serverQueried > 0 ? 2 : 1,
-            strategy: "server-assisted-lid-map"
+            hydrationPasses: batch.historyMessagesScanned > 0 ? 2 : 1,
+            strategy: "history-metadata-lid-map"
           });
           structuredResult = merged.collection;
           resolutionStats = {
@@ -210,7 +217,11 @@ export class ContactExportRuntime {
             serverQueried: batch.serverQueried,
             serverResolved: batch.serverResolved,
             remaining: merged.remaining,
-            querySupported: batch.querySupported
+            querySupported: batch.querySupported,
+            historyResolved: batch.historyResolved,
+            historyMessagesScanned: batch.historyMessagesScanned,
+            historyChatsPresent: batch.historyChatsPresent,
+            historyConflicts: batch.historyConflicts
           };
         }
 
@@ -264,7 +275,7 @@ export class ContactExportRuntime {
           ...deduplicated.diagnostic,
           status: "green",
           lastSuccessfulStep: resolutionStats.attempted > 0
-            ? "nonvisual_lid_phone_resolution_completed"
+            ? "history_metadata_lid_resolution_completed"
             : "label_scoped_phone_first_analysis_completed",
           labelName: labels.at(-1)?.name ?? null,
           strategy: result.strategy,
@@ -279,6 +290,12 @@ export class ContactExportRuntime {
             phoneLookupServerResolved: resolutionStats.serverResolved,
             phoneLookupRemaining: resolutionStats.remaining,
             phoneLookupQuerySupported: resolutionStats.querySupported,
+            phoneLookupMethod: "history-metadata",
+            phoneLookupServerSkipped: true,
+            phoneHistoryResolved: resolutionStats.historyResolved,
+            phoneHistoryMessagesScanned: resolutionStats.historyMessagesScanned,
+            phoneHistoryChatsPresent: resolutionStats.historyChatsPresent,
+            phoneHistoryConflicts: resolutionStats.historyConflicts,
             visualHydrationUsed: false
           } : {},
           updatedAt: new Date().toISOString()

@@ -221,3 +221,8 @@ Si después de dos barridos un LID realmente no tiene asociación PN disponible 
 Una etiqueta puede conservar cientos de miembros estructurados aunque WhatsApp Web sólo muestre unos pocos chats. En ese caso el extractor usa `labelItemCollection` como membresía autoritativa y evita usar el DOM para descubrir contactos. Para cada `@lid` sin PN, consulta primero cache/colecciones locales y luego, si la build lo expone, `WAWebQueryExistsJob.queryWidExists`. Esa consulta no abre la conversación: permite que WhatsApp refresque su mapeo interno y luego se vuelve a consultar `WAWebApiContact.getPhoneNumber`, `lidPnCache`, `LidUtils` y las fuentes locales ya soportadas.
 
 El resolver trabaja en lotes pequeños, no envía mensajes y no incorpora un número si no puede correlacionarlo exactamente con uno de los IDs estructurados de la etiqueta. Si WhatsApp no devuelve PN aun después de la consulta, el contacto permanece `PHONE_UNRESOLVED`; no se inventa ni se infiere el número.
+
+
+## 0.9.5.6 — correlación histórica no visual
+
+La extracción de membresía continúa usando `labelItemCollection`. Para LID sin PN local, 0.9.5.6 ya no intenta forzar `queryWidExists(LID)`: correlaciona metadata histórica fuerte del mismo LID (`remoteJidAlt`, PN alternativo de participante/remitente y `userReceipt` de mensajes salientes). La inspección se limita a addressing/receipt metadata; no lee ni persiste el cuerpo de mensajes. Conflictos de mapping quedan sin resolver.
