@@ -32,6 +32,8 @@ function baseDiagnostic(processedCount: number): ContactExportDiagnostic {
     expectedElement: null,
     candidateCount: processedCount,
     processedCount,
+    reportedCount: null,
+    collectedUniqueContacts: processedCount,
     lastContactCorrelationId: null,
     errorCode: null,
     errorMessage: null,
@@ -64,14 +66,14 @@ export function deduplicateContactCandidates(candidates: RawContactCandidate[]):
     const normalized = candidate.phoneCandidate && candidate.phoneSource !== "none"
       ? normalizeExportPhoneCandidate(candidate.phoneCandidate, candidate.phoneSource)
       : null;
-    if (!normalized) {
+    if (!normalized || candidate.phoneStatus !== "resolved") {
       withoutPhone += 1;
       problems.push({
         problemId: correlationId(`${candidate.sourceId}:${candidate.labelName}:phone`),
         labelName: candidate.labelName,
         maskedPhone: null,
         namePresent: Boolean(candidate.name.trim()),
-        reason: CONTACT_EXPORT_ERROR_CODES.phoneNotAvailable,
+        reason: candidate.phoneStatus === "invalid" ? CONTACT_EXPORT_ERROR_CODES.phoneInvalid : CONTACT_EXPORT_ERROR_CODES.phoneUnresolved,
         strategy: candidate.strategy
       });
       continue;
