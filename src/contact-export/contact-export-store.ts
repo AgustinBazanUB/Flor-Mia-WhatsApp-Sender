@@ -20,6 +20,8 @@ export function emptyContactExportState(now = new Date()): ContactExportState {
       excludedNonContacts: 0
     },
     progress: null,
+    metrics: null,
+    labelResults: [],
     diagnostic: {
       status: "unknown",
       lastSuccessfulStep: null,
@@ -29,6 +31,8 @@ export function emptyContactExportState(now = new Date()): ContactExportState {
       expectedElement: null,
       candidateCount: 0,
       processedCount: 0,
+      reportedCount: null,
+      collectedUniqueContacts: null,
       lastContactCorrelationId: null,
       errorCode: null,
       errorMessage: null,
@@ -43,7 +47,17 @@ export class ContactExportStore {
   async load(): Promise<ContactExportState> {
     const result = await chrome.storage.session.get(KEY);
     const value = result[KEY] as ContactExportState | undefined;
-    return value?.schemaVersion === 1 ? value : emptyContactExportState();
+    if (value?.schemaVersion !== 1) return emptyContactExportState();
+    return {
+      ...emptyContactExportState(),
+      ...value,
+      metrics: value.metrics ?? null,
+      labelResults: value.labelResults ?? [],
+      diagnostic: {
+        ...emptyContactExportState().diagnostic,
+        ...value.diagnostic
+      }
+    };
   }
 
   async save(state: ContactExportState): Promise<ContactExportState> {
