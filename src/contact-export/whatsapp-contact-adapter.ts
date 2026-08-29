@@ -31,7 +31,6 @@ const STRUCTURED_ID_ATTRIBUTES = ["data-jid", "data-chat-id", "data-peer-id", "d
 const STRUCTURED_PHONE_ATTRIBUTES = ["data-phone", "data-phone-number", "data-number", "data-tel"] as const;
 const INTERACTIVE_SELECTOR = "button,[role='button'],[role='menuitem'],[role='listitem'],[role='option'],[tabindex='0']";
 const LABEL_ROW_SELECTOR = "[role='listitem'],[role='option'],button,[role='button']";
-// Deliberadamente más estricto que el selector 0.9.5. No incluye div[tabindex='-1'].
 const CONTACT_ROW_SELECTOR = "[role='row'],div[role='listitem'],div[role='option'],[data-testid*='cell'],[data-testid*='chat']";
 const LIST_SELECTOR = "[role='grid'],[role='list'],[data-testid*='list'],[data-testid*='chat-list']";
 const ACTIVE_LABEL_MARKER_SELECTOR = "h1,h2,h3,[role='heading'],[aria-current='true'],[aria-selected='true'],[data-state='active'],[title],[aria-label]";
@@ -52,7 +51,7 @@ export interface ContactExportCollection {
   metrics: ContactExportMetrics;
 }
 
-interface LabelScopedView {
+export interface LabelScopedView {
   scopeRoot: HTMLElement;
   listRoot: HTMLElement;
   scrollRoot: HTMLElement;
@@ -287,12 +286,8 @@ function listFingerprint(root: HTMLElement | null): string {
 
 function exactLabelMarker(element: HTMLElement, label: WhatsAppLabelInfo): boolean {
   const wanted = normalizedText(label.name);
-  const candidates = [
-    element.getAttribute("title"),
-    element.getAttribute("aria-label"),
-    labelNameFromRow(element),
-    textOf(element)
-  ].filter(Boolean).map((value) => normalizedText(value));
+  const candidates = [element.getAttribute("title"), element.getAttribute("aria-label"), labelNameFromRow(element), textOf(element)]
+    .filter(Boolean).map((value) => normalizedText(value));
   return candidates.includes(wanted);
 }
 
@@ -371,12 +366,7 @@ async function openLabelScopedView(
   if (!target) {
     throw new ExtensionError(ERROR_CODES.elementNotFound, "No se pudo encontrar la etiqueta seleccionada.", {
       recoverable: true,
-      details: {
-        contactExportCode: CONTACT_EXPORT_ERROR_CODES.labelNotFound,
-        stage: "open_label",
-        labelId: label.id,
-        strategy: "semantic-label-name"
-      }
+      details: { contactExportCode: CONTACT_EXPORT_ERROR_CODES.labelNotFound, stage: "open_label", labelId: label.id, strategy: "semantic-label-name" }
     });
   }
 
@@ -428,7 +418,8 @@ function hrefPhone(row: Element): { value: string; source: "href_phone" | "tel_l
 }
 
 function structuredPhone(row: Element): { value: string; source: "structured_phone" } | null {
-  const nodes = [row, ...[...row.querySelectorAll<HTMLElement>(STRUCTURED_PHONE_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(","))].slice(0, 30)];
+  const selector = STRUCTURED_PHONE_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(",");
+  const nodes = [row, ...[...row.querySelectorAll<HTMLElement>(selector)].slice(0, 30)];
   for (const node of nodes) {
     for (const attribute of STRUCTURED_PHONE_ATTRIBUTES) {
       const value = node.getAttribute(attribute);
