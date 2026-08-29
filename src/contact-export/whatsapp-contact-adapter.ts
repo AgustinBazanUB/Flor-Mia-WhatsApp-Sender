@@ -1,10 +1,18 @@
 import { ERROR_CODES, ExtensionError } from "../shared/errors";
 import { waitForCondition } from "../whatsapp/wait";
-import { normalizeVisibleInternationalPhone, normalizeWhatsAppJidPhone } from "./phone-normalizer";
+import {
+  normalizeExportPhoneCandidate,
+  normalizeStructuredPhone,
+  normalizeVisibleInternationalPhone,
+  normalizeWhatsAppJidPhone
+} from "./phone-normalizer";
 import {
   CONTACT_EXPORT_ERROR_CODES,
+  type ContactExportLabelResult,
+  type ContactExportMetrics,
   type ContactExportProgress,
   type ContactKind,
+  type ContactPhoneSource,
   type RawContactCandidate,
   type WhatsAppLabelInfo
 } from "./types";
@@ -20,9 +28,13 @@ const UI_WORDS = {
 const PERSONAL_JID = /\d{8,15}@(c\.us|s\.whatsapp\.net)/i;
 const NON_CONTACT_JID = /@(g\.us|broadcast|newsletter)|status@broadcast|community/i;
 const STRUCTURED_ID_ATTRIBUTES = ["data-jid", "data-chat-id", "data-peer-id", "data-contact-id", "data-id"] as const;
+const STRUCTURED_PHONE_ATTRIBUTES = ["data-phone", "data-phone-number", "data-number", "data-tel"] as const;
 const INTERACTIVE_SELECTOR = "button,[role='button'],[role='menuitem'],[role='listitem'],[role='option'],[tabindex='0']";
 const LABEL_ROW_SELECTOR = "[role='listitem'],[role='option'],button,[role='button']";
-const CHAT_ROW_SELECTOR = "[role='row'],[role='listitem'],[data-testid*='cell'],[data-testid*='chat'],div[tabindex='-1']";
+// Deliberadamente más estricto que el selector 0.9.5. No incluye div[tabindex='-1'].
+const CONTACT_ROW_SELECTOR = "[role='row'],div[role='listitem'],div[role='option'],[data-testid*='cell'],[data-testid*='chat']";
+const LIST_SELECTOR = "[role='grid'],[role='list'],[data-testid*='list'],[data-testid*='chat-list']";
+const ACTIVE_LABEL_MARKER_SELECTOR = "h1,h2,h3,[role='heading'],[aria-current='true'],[aria-selected='true'],[data-state='active'],[title],[aria-label]";
 
 export interface ContactExportAdapterProgress {
   (progress: Omit<ContactExportProgress, "operationId" | "updatedAt">): void | Promise<void>;
@@ -31,6 +43,27 @@ export interface ContactExportAdapterProgress {
 export interface CollectSelectedLabelsOptions {
   signal?: AbortSignal;
   progress?: ContactExportAdapterProgress;
+}
+
+export interface ContactExportCollection {
+  candidates: RawContactCandidate[];
+  strategy: string;
+  labelResults: ContactExportLabelResult[];
+  metrics: ContactExportMetrics;
+}
+
+interface LabelScopedView {
+  scopeRoot: HTMLElement;
+  listRoot: HTMLElement;
+  scrollRoot: HTMLElement;
+  marker: HTMLElement;
+  strategy: string;
+}
+
+interface RowResolution {
+  candidate: RawContactCandidate;
+  stableKey: string | null;
+  countKey: string | null;
 }
 
 function normalizedText(value: string | null | undefined): string {
@@ -49,11 +82,7 @@ function textOf(element: Element | null | undefined): string {
 }
 
 function semanticText(element: Element): string {
-  return [
-    element.getAttribute("aria-label"),
-    element.getAttribute("title"),
-    textOf(element)
-  ].filter(Boolean).join(" ");
+  return [element.getAttribute("aria-label"), element.getAttribute("title"), textOf(element)].filter(Boolean).join(" ");
 }
 
 function matchesAny(value: string, aliases: readonly string[]): boolean {
@@ -75,7 +104,8 @@ function findInteractiveByAliases(root: ParentNode, aliases: readonly string[]):
     ?? null;
 }
 
-function click(element: HTMLElement): void {
+function click(element: HTMLElement, onVisualOperation?: () => void): void {
+  onVisualOperation?.();
   element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
   element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
   element.click();
@@ -96,10 +126,10 @@ function opaqueId(value: string): string {
 
 function candidateStructuredValues(element: Element): string[] {
   const values = new Set<string>();
-  const nodes = [element, ...[...element.querySelectorAll<HTMLElement>("[data-jid],[data-chat-id],[data-peer-id],[data-contact-id],[data-id]")].slice(0, 30)];
-  for (const node of nodes) {
+  const descendants = [...element.querySelectorAll<HTMLElement>("[data-jid],[data-chat-id],[data-peer-id],[data-contact-id],[data-id]")].slice(0, 40);
+  for (const node of [element, ...descendants]) {
     for (const attribute of STRUCTURED_ID_ATTRIBUTES) {
-      const value = node.getAttribute(attribute);
+      const value = node.getAttribute(attribute)?.trim();
       if (value) values.add(value);
     }
   }
@@ -117,36 +147,28 @@ function kindFromValues(values: string[]): ContactKind {
   return "unknown";
 }
 
-function phoneFromStructuredValues(values: string[]): { value: string; source: "jid" } | null {
-  for (const value of values) {
-    const normalized = normalizeWhatsAppJidPhone(value);
-    if (normalized) return { value, source: "jid" };
-  }
-  return null;
-}
-
-function bestName(element: Element): string {
-  const titled = [...element.querySelectorAll<HTMLElement>("span[title],[title]")]
-    .map((item) => item.getAttribute("title")?.trim() || "")
-    .find((item) => item && item.length <= 160);
-  if (titled) return titled;
-  const aria = element.getAttribute("aria-label")?.trim();
-  if (aria && aria.length <= 160 && !matchesAny(aria, UI_WORDS.more)) return aria;
-  const firstLine = textOf(element).split(/\n| · /)[0]?.trim() || "";
-  return firstLine.length <= 160 ? firstLine : firstLine.slice(0, 160);
-}
-
-function labelCountHint(value: string): number | null {
-  const numbers = [...value.matchAll(/\b(\d{1,6})\b/g)].map((match) => Number(match[1]));
-  return numbers.length ? numbers.at(-1) ?? null : null;
-}
-
 function labelNameFromRow(row: Element): string {
   const title = row.querySelector<HTMLElement>("[title]")?.getAttribute("title")?.trim();
   if (title && title.length <= 80) return title;
   const text = textOf(row);
   if (!text) return "";
-  return text.replace(/\s+\d{1,6}(?:\s+(?:chats?|elementos?|items?))?\s*$/i, "").trim().slice(0, 80);
+  return text.replace(/\s+\d{1,6}(?:\s+(?:chats?|contactos?|contacts?|elementos?|items?))?\s*$/i, "").trim().slice(0, 80);
+}
+
+function explicitLabelCount(row: Element): { count: number | null; strategy: string | null } {
+  const labelled = [...row.querySelectorAll<HTMLElement>("[aria-label]")]
+    .map((element) => element.getAttribute("aria-label") || "")
+    .map((value) => value.match(/\b(\d{1,6})\s+(?:chats?|contactos?|contacts?|elementos?|items?)\b/i)?.[1] ?? null)
+    .find(Boolean);
+  if (labelled) return { count: Number(labelled), strategy: "aria-count" };
+
+  const dedicated = [...row.querySelectorAll<HTMLElement>("small,[data-count],[data-testid*='count'],[class*='count']")]
+    .map((element) => (element.getAttribute("data-count") || textOf(element)).trim())
+    .find((value) => /^\d{1,6}$/.test(value));
+  if (dedicated) return { count: Number(dedicated), strategy: "dedicated-count" };
+
+  const trailing = textOf(row).match(/\b(\d{1,6})\s+(?:chats?|contactos?|contacts?|elementos?|items?)\s*$/i)?.[1];
+  return trailing ? { count: Number(trailing), strategy: "trailing-labelled-count" } : { count: null, strategy: null };
 }
 
 function labelsHeadingPresent(root: ParentNode = document): boolean {
@@ -162,24 +184,25 @@ function labelScope(): ParentNode {
     ?? document;
 }
 
-async function openLabelsHub(signal?: AbortSignal): Promise<ParentNode> {
+async function openLabelsHub(signal?: AbortSignal, onVisualOperation?: () => void): Promise<ParentNode> {
   abortIfNeeded(signal);
   if (labelsHeadingPresent()) return labelScope();
 
   const direct = findInteractiveByAliases(document, UI_WORDS.labels);
-  if (direct) click(direct);
+  if (direct) click(direct, onVisualOperation);
   else {
     const tools = findInteractiveByAliases(document, UI_WORDS.tools);
-    if (tools) click(tools);
+    if (tools) click(tools, onVisualOperation);
     else {
       const more = findInteractiveByAliases(document, UI_WORDS.more);
-      if (more) click(more);
+      if (more) click(more, onVisualOperation);
     }
-    await waitForCondition(() => findInteractiveByAliases(document, UI_WORDS.labels), {
+    const labelsButton = await waitForCondition(() => findInteractiveByAliases(document, UI_WORDS.labels), {
       timeoutMs: 2_500,
       signal,
       description: "el acceso a Etiquetas/Listas"
-    }).then(click);
+    });
+    click(labelsButton, onVisualOperation);
   }
 
   await waitForCondition(() => labelsHeadingPresent() ? labelScope() : null, {
@@ -195,7 +218,7 @@ export async function detectWhatsAppLabels(signal?: AbortSignal): Promise<{ labe
   abortIfNeeded(signal);
   const rows = [...scope.querySelectorAll<HTMLElement>(LABEL_ROW_SELECTOR)]
     .filter(visible)
-    .map((row) => ({ row, name: labelNameFromRow(row), raw: textOf(row) }))
+    .map((row) => ({ row, name: labelNameFromRow(row) }))
     .filter(({ name }) => {
       const normalized = normalizedText(name);
       if (!normalized || normalized.length > 80) return false;
@@ -204,14 +227,19 @@ export async function detectWhatsAppLabels(signal?: AbortSignal): Promise<{ labe
     });
 
   const byName = new Map<string, WhatsAppLabelInfo>();
-  for (const { name, raw } of rows) {
+  for (const { row, name } of rows) {
     const key = normalizedText(name);
     if (!key || byName.has(key)) continue;
+    const structured = candidateStructuredValues(row);
+    const sourceId = structured[0] ?? row.getAttribute("data-label-id") ?? null;
+    const count = explicitLabelCount(row);
     byName.set(key, {
-      id: opaqueId(`label:${key}`),
+      id: opaqueId(`label:${sourceId || key}`),
       name,
-      countHint: labelCountHint(raw),
-      strategy: "semantic-label-hub"
+      countHint: count.count,
+      countHintStrategy: count.strategy,
+      sourceId,
+      strategy: sourceId ? "semantic-label-hub+structured-id" : "semantic-label-hub"
     });
   }
   const labels = [...byName.values()];
@@ -237,230 +265,429 @@ function findLabelInteractive(scope: ParentNode, labelName: string): HTMLElement
     ?? null;
 }
 
-async function openLabel(label: WhatsAppLabelInfo, signal?: AbortSignal): Promise<void> {
-  const scope = await openLabelsHub(signal);
+function rowsFromScopedList(root: HTMLElement): HTMLElement[] {
+  const all = [...root.querySelectorAll<HTMLElement>(CONTACT_ROW_SELECTOR)].filter(visible);
+  return all.filter((row) => {
+    if (row.closest("#main")) return false;
+    const ancestor = row.parentElement?.closest<HTMLElement>(CONTACT_ROW_SELECTOR);
+    if (ancestor && root.contains(ancestor)) return false;
+    return Boolean(textOf(row) || candidateStructuredValues(row).length || row.querySelector("a[href]"));
+  });
+}
+
+function listFingerprint(root: HTMLElement | null): string {
+  if (!root) return "missing";
+  const rows = rowsFromScopedList(root).slice(0, 12);
+  return rows.map((row) => {
+    const ids = candidateStructuredValues(row).slice(0, 3).join("|");
+    const pos = row.getAttribute("aria-posinset") || row.getAttribute("aria-rowindex") || "";
+    return `${ids}:${pos}:${textOf(row).slice(0, 50)}`;
+  }).join("||");
+}
+
+function exactLabelMarker(element: HTMLElement, label: WhatsAppLabelInfo): boolean {
+  const wanted = normalizedText(label.name);
+  const candidates = [
+    element.getAttribute("title"),
+    element.getAttribute("aria-label"),
+    labelNameFromRow(element),
+    textOf(element)
+  ].filter(Boolean).map((value) => normalizedText(value));
+  return candidates.includes(wanted);
+}
+
+function activeLabelMarkers(label: WhatsAppLabelInfo): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>(ACTIVE_LABEL_MARKER_SELECTOR)]
+    .filter(visible)
+    .filter((element) => exactLabelMarker(element, label));
+}
+
+function listCandidatesWithin(container: HTMLElement): HTMLElement[] {
+  const values = new Set<HTMLElement>();
+  if (container.matches(LIST_SELECTOR) || container.id === "pane-side") values.add(container);
+  for (const element of container.querySelectorAll<HTMLElement>(LIST_SELECTOR)) {
+    if (visible(element) && !element.closest("#main")) values.add(element);
+  }
+  return [...values];
+}
+
+function findScrollRoot(listRoot: HTMLElement, scopeRoot: HTMLElement): HTMLElement {
+  const candidates: HTMLElement[] = [listRoot];
+  let current = listRoot.parentElement;
+  while (current && scopeRoot.contains(current)) {
+    candidates.push(current);
+    if (current === scopeRoot) break;
+    current = current.parentElement;
+  }
+  for (const candidate of candidates) {
+    if (candidate.scrollHeight > candidate.clientHeight + 4) return candidate;
+    const overflow = globalThis.getComputedStyle?.(candidate)?.overflowY;
+    if (overflow === "auto" || overflow === "scroll") return candidate;
+  }
+  return listRoot;
+}
+
+function scopeContainsGenericLabelsHub(container: HTMLElement): boolean {
+  return labelsHeadingPresent(container) && container.querySelectorAll(LABEL_ROW_SELECTOR).length > 1;
+}
+
+function resolveLabelScopedView(label: WhatsAppLabelInfo, beforePaneFingerprint: string): LabelScopedView | null {
+  const markers = activeLabelMarkers(label);
+  for (const marker of markers) {
+    let container: HTMLElement | null = marker;
+    for (let depth = 0; container && depth < 9; depth += 1, container = container.parentElement) {
+      if (container === document.body) break;
+      for (const listRoot of listCandidatesWithin(container)) {
+        const rows = rowsFromScopedList(listRoot);
+        const markerInsideList = listRoot.contains(marker);
+        if (markerInsideList && scopeContainsGenericLabelsHub(container)) continue;
+        if (rows.length === 0 && label.countHint !== 0) continue;
+        if (rows.length === 0 && markerInsideList) continue;
+        const paneFallback = listRoot.id === "pane-side";
+        if (paneFallback && listFingerprint(listRoot) === beforePaneFingerprint && !markerInsideList) continue;
+        const scopeRoot = container;
+        const scrollRoot = findScrollRoot(listRoot, scopeRoot);
+        if (!scopeRoot.contains(scrollRoot)) continue;
+        return {
+          scopeRoot,
+          listRoot,
+          scrollRoot,
+          marker,
+          strategy: paneFallback ? "selected-label-marker+changed-pane" : "selected-label-marker+scoped-list"
+        };
+      }
+    }
+  }
+  return null;
+}
+
+async function openLabelScopedView(
+  label: WhatsAppLabelInfo,
+  signal?: AbortSignal,
+  onVisualOperation?: () => void
+): Promise<LabelScopedView> {
+  const scope = await openLabelsHub(signal, onVisualOperation);
   const target = findLabelInteractive(scope, label.name);
   if (!target) {
-    throw new ExtensionError(ERROR_CODES.elementNotFound, `No se pudo abrir la etiqueta seleccionada.`, {
+    throw new ExtensionError(ERROR_CODES.elementNotFound, "No se pudo encontrar la etiqueta seleccionada.", {
       recoverable: true,
       details: {
-        contactExportCode: CONTACT_EXPORT_ERROR_CODES.labelsNotFound,
+        contactExportCode: CONTACT_EXPORT_ERROR_CODES.labelNotFound,
         stage: "open_label",
         labelId: label.id,
         strategy: "semantic-label-name"
       }
     });
   }
-  click(target);
-  await waitForCondition(() => findChatListRoot(), {
-    timeoutMs: 5_000,
-    signal,
-    description: "el listado de contactos de la etiqueta"
-  });
-}
 
-function findChatListRoot(): HTMLElement | null {
   const pane = document.querySelector<HTMLElement>("#pane-side");
-  if (pane && visible(pane)) return pane;
-  const candidates = [...document.querySelectorAll<HTMLElement>("[role='grid'],[role='list'],[aria-label]")]
-    .filter(visible)
-    .filter((element) => {
-      const semantic = normalizedText(element.getAttribute("aria-label") || "");
-      const looksLikeChats = /chat|chats|conversacion|conversaciones/.test(semantic);
-      return looksLikeChats || element.querySelectorAll(CHAT_ROW_SELECTOR).length >= 1;
+  const beforePaneFingerprint = listFingerprint(pane);
+  click(target, onVisualOperation);
+
+  try {
+    return await waitForCondition(() => resolveLabelScopedView(label, beforePaneFingerprint), {
+      timeoutMs: 6_000,
+      signal,
+      description: `el contenedor específico de la etiqueta ${label.name}`
     });
-  return candidates.sort((a, b) => b.querySelectorAll(CHAT_ROW_SELECTOR).length - a.querySelectorAll(CHAT_ROW_SELECTOR).length)[0] ?? null;
-}
-
-function rowsFromChatList(root: HTMLElement): HTMLElement[] {
-  const seen = new Set<HTMLElement>();
-  for (const row of root.querySelectorAll<HTMLElement>(CHAT_ROW_SELECTOR)) {
-    if (!visible(row) || seen.has(row)) continue;
-    const text = textOf(row);
-    const values = candidateStructuredValues(row);
-    if (!text && !values.length) continue;
-    if (row.closest("#main")) continue;
-    seen.add(row);
+  } catch (error) {
+    throw new ExtensionError(ERROR_CODES.elementNotFound, "WhatsApp abrió la etiqueta, pero no se pudo demostrar cuál es su listado específico. Se canceló para no leer chats externos.", {
+      recoverable: true,
+      cause: error,
+      details: {
+        contactExportCode: CONTACT_EXPORT_ERROR_CODES.labelContainerNotFound,
+        stage: "resolve_label_scope",
+        labelId: label.id,
+        strategy: "selected-label-marker+scoped-list",
+        candidateCount: activeLabelMarkers(label).length
+      }
+    });
   }
-  return [...seen];
 }
 
-function sourceIdForRow(row: Element): string {
-  const structured = candidateStructuredValues(row).join("|");
-  const stable = structured || `${bestName(row)}|${row.getAttribute("role") || ""}|${row.getAttribute("data-testid") || ""}`;
-  return opaqueId(stable);
-}
-
-function candidateFromRow(row: HTMLElement, labelName: string): RawContactCandidate {
-  const values = candidateStructuredValues(row);
-  const phone = phoneFromStructuredValues(values);
-  return {
-    sourceId: sourceIdForRow(row),
-    labelName,
-    name: bestName(row),
-    phoneCandidate: phone?.value ?? null,
-    phoneSource: phone?.source ?? "none",
-    kind: kindFromValues(values),
-    strategy: phone ? "label-row-jid" : "label-row-semantic"
-  };
-}
-
-function personalPhoneFromScope(scope: ParentNode): { value: string; source: "jid" | "tel_link" | "visible_international" } | null {
-  for (const element of [scope as Element, ...[...scope.querySelectorAll?.<HTMLElement>("[data-jid],[data-chat-id],[data-peer-id],[data-contact-id],[data-id]") ?? []].slice(0, 80)]) {
-    if (!(element instanceof Element)) continue;
-    for (const value of candidateStructuredValues(element)) {
-      const normalized = normalizeWhatsAppJidPhone(value);
-      if (normalized) return { value, source: "jid" };
+function hrefPhone(row: Element): { value: string; source: "href_phone" | "tel_link" } | null {
+  for (const anchor of row.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+    const href = anchor.getAttribute("href") || "";
+    if (href.startsWith("tel:")) {
+      const value = href.slice(4);
+      if (normalizeVisibleInternationalPhone(value)) return { value, source: "tel_link" };
+    }
+    try {
+      const url = new URL(href, location.href);
+      const phone = url.searchParams.get("phone");
+      if (phone && normalizeStructuredPhone(phone)) return { value: phone, source: "href_phone" };
+      if (/wa\.me$/i.test(url.hostname)) {
+        const value = url.pathname.replace(/\D/g, "");
+        if (value && normalizeStructuredPhone(value)) return { value, source: "href_phone" };
+      }
+    } catch {
+      // href no parseable: se ignora; nunca se transforma en un número inferido.
     }
   }
-  const tel = scope.querySelector?.<HTMLAnchorElement>("a[href^='tel:']");
-  if (tel?.getAttribute("href")) {
-    const value = tel.getAttribute("href")!.slice(4);
-    if (normalizeVisibleInternationalPhone(value)) return { value, source: "tel_link" };
+  return null;
+}
+
+function structuredPhone(row: Element): { value: string; source: "structured_phone" } | null {
+  const nodes = [row, ...[...row.querySelectorAll<HTMLElement>(STRUCTURED_PHONE_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(","))].slice(0, 30)];
+  for (const node of nodes) {
+    for (const attribute of STRUCTURED_PHONE_ATTRIBUTES) {
+      const value = node.getAttribute(attribute);
+      if (value && normalizeStructuredPhone(value)) return { value, source: "structured_phone" };
+    }
   }
-  const shortTextNodes = [...(scope.querySelectorAll?.<HTMLElement>("span,div,p") ?? [])]
-    .filter(visible)
-    .map((element) => textOf(element))
-    .filter((value) => value.startsWith("+") && value.length <= 32);
-  for (const value of shortTextNodes) {
+  return null;
+}
+
+function phoneFromStructuredValues(values: string[]): { value: string; source: "jid" } | null {
+  for (const value of values) {
+    if (normalizeWhatsAppJidPhone(value)) return { value, source: "jid" };
+  }
+  return null;
+}
+
+function visibleInternationalPhone(row: Element): { value: string; source: "visible_international" } | null {
+  const values = [row.getAttribute("aria-label"), row.getAttribute("title"), ...[...row.querySelectorAll<HTMLElement>("span[title],span,div")].slice(0, 30).map((element) => element.getAttribute("title") || textOf(element))]
+    .filter((value): value is string => Boolean(value))
+    .filter((value) => value.trim().startsWith("+") && value.length <= 36);
+  for (const value of values) {
     if (normalizeVisibleInternationalPhone(value)) return { value, source: "visible_international" };
   }
   return null;
 }
 
-function profilePanel(): HTMLElement | null {
-  const candidates = [...document.querySelectorAll<HTMLElement>("aside,[role='dialog']")].filter(visible);
-  return candidates.find((panel) => !panel.closest("#main") && Boolean(personalPhoneFromScope(panel)))
-    ?? candidates.at(-1)
-    ?? null;
-}
-
-function profileKind(panel: ParentNode | null): ContactKind | null {
-  if (!panel) return null;
-  const text = normalizedText(textOf(panel as Element).slice(0, 240));
-  if (/info(?:rmacion)? del grupo|group info|participantes|participants/.test(text)) return "group";
-  if (/canal|channel|newsletter/.test(text)) return "channel";
-  if (/comunidad|community/.test(text)) return "community";
+function resolvePhoneFromRow(row: HTMLElement, values: string[]): { value: string; source: Exclude<ContactPhoneSource, "none">; status: "resolved" | "invalid" } | null {
+  const sources = [phoneFromStructuredValues(values), structuredPhone(row), hrefPhone(row), visibleInternationalPhone(row)].filter(Boolean) as Array<{ value: string; source: Exclude<ContactPhoneSource, "none"> }>;
+  for (const source of sources) {
+    if (normalizeExportPhoneCandidate(source.value, source.source)) return { ...source, status: "resolved" };
+    return { ...source, status: "invalid" };
+  }
   return null;
 }
 
-async function enrichCandidateFromConversation(
-  row: HTMLElement,
-  candidate: RawContactCandidate,
-  signal?: AbortSignal
-): Promise<RawContactCandidate> {
-  if (candidate.kind !== "unknown" && candidate.phoneCandidate) return candidate;
-  abortIfNeeded(signal);
-  if (!row.isConnected) return candidate;
-  click(row);
-  const header = await waitForCondition(() => document.querySelector<HTMLElement>("#main header"), {
-    timeoutMs: 3_500,
-    signal,
-    description: "el encabezado del contacto"
-  }).catch(() => null);
-  if (!header) return candidate;
-
-  const headerValues = candidateStructuredValues(header);
-  const headerKind = kindFromValues(headerValues);
-  const headerPhone = phoneFromStructuredValues(headerValues);
-  let next: RawContactCandidate = {
-    ...candidate,
-    name: bestName(header) || candidate.name,
-    kind: headerKind === "unknown" ? candidate.kind : headerKind,
-    phoneCandidate: headerPhone?.value ?? candidate.phoneCandidate,
-    phoneSource: headerPhone?.source ?? candidate.phoneSource,
-    strategy: headerPhone ? "chat-header-jid" : candidate.strategy
-  };
-  if (next.phoneCandidate || next.kind !== "unknown") return next;
-
-  click(header);
-  const panel = await waitForCondition(() => profilePanel(), {
-    timeoutMs: 2_500,
-    signal,
-    description: "la ficha del contacto"
-  }).catch(() => null);
-  if (!panel) return next;
-  const kind = profileKind(panel);
-  const phone = personalPhoneFromScope(panel);
-  next = {
-    ...next,
-    kind: kind ?? (phone ? "contact" : next.kind),
-    phoneCandidate: phone?.value ?? null,
-    phoneSource: phone?.source ?? "none",
-    strategy: phone ? `contact-profile-${phone.source}` : "contact-profile-no-phone"
-  };
-  const closeButton = findInteractiveByAliases(panel, UI_WORDS.close);
-  if (closeButton) click(closeButton);
-  return next;
+function stableContactId(row: HTMLElement, values: string[]): string | null {
+  const structured = values.find((value) => /@(c\.us|s\.whatsapp\.net|lid|g\.us|broadcast|newsletter)/i.test(value))
+    ?? values.find((value) => value.length >= 4);
+  if (structured) return structured;
+  const direct = STRUCTURED_ID_ATTRIBUTES.map((attribute) => row.getAttribute(attribute)).find((value) => value && value.length >= 4);
+  return direct || null;
 }
 
-async function collectCurrentLabelRows(
+function positionalIdentity(row: HTMLElement): string | null {
+  const value = row.getAttribute("aria-posinset") || row.getAttribute("aria-rowindex");
+  return value && /^\d+$/.test(value) ? `position:${value}` : null;
+}
+
+function cleanName(row: HTMLElement, phoneValue: string | null): string {
+  const titled = [...row.querySelectorAll<HTMLElement>("span[title],[title]")]
+    .map((item) => item.getAttribute("title")?.trim() || "")
+    .find((item) => item && item.length <= 160);
+  const aria = row.getAttribute("aria-label")?.trim() || "";
+  const first = textOf(row).split(/\n| · /)[0]?.trim() || "";
+  const value = (titled || (aria.length <= 160 ? aria : "") || first).trim();
+  if (!value) return "";
+  if (normalizeVisibleInternationalPhone(value)) return "";
+  if (/^\+?[\d\s()\-.]{8,25}$/.test(value)) return "";
+  if (phoneValue) {
+    const normalizedPhone = normalizeStructuredPhone(phoneValue)?.digits;
+    const nameDigits = value.replace(/\D/g, "");
+    if (normalizedPhone && nameDigits === normalizedPhone) return "";
+  }
+  return value.slice(0, 160);
+}
+
+export function candidateFromScopedLabelRow(row: HTMLElement, label: WhatsAppLabelInfo, rowIndex = 0): RowResolution {
+  const values = candidateStructuredValues(row);
+  const kind = kindFromValues(values);
+  const phone = resolvePhoneFromRow(row, values);
+  const normalized = phone?.status === "resolved" ? normalizeExportPhoneCandidate(phone.value, phone.source) : null;
+  const contactId = stableContactId(row, values);
+  const position = positionalIdentity(row);
+  const stableKey = normalized?.digits ? `phone:${normalized.digits}` : contactId ? `contact:${contactId}` : position;
+  const countKey = stableKey ?? null;
+  const sourceId = opaqueId(`${label.id}:${stableKey ?? `unresolved-row:${rowIndex}`}`);
+  return {
+    stableKey,
+    countKey,
+    candidate: {
+      sourceId,
+      contactId,
+      labelId: label.id,
+      labelName: label.name,
+      name: cleanName(row, phone?.value ?? null),
+      phoneCandidate: phone?.value ?? null,
+      phoneSource: phone?.source ?? "none",
+      phoneStatus: phone?.status ?? "unresolved",
+      kind,
+      strategy: phone?.status === "resolved"
+        ? `label-row-${phone.source}`
+        : contactId
+          ? "label-row-contact-id-phone-unresolved"
+          : "label-row-phone-unresolved"
+    }
+  };
+}
+
+function labelScopeStillActive(view: LabelScopedView, label: WhatsAppLabelInfo): boolean {
+  return view.scopeRoot.isConnected && view.listRoot.isConnected && view.marker.isConnected && exactLabelMarker(view.marker, label);
+}
+
+function atScrollEnd(root: HTMLElement): boolean {
+  if (root.scrollHeight <= root.clientHeight + 4) return true;
+  return root.scrollTop + root.clientHeight >= root.scrollHeight - 4;
+}
+
+export async function collectScopedLabelRows(
+  view: LabelScopedView,
   label: WhatsAppLabelInfo,
   options: CollectSelectedLabelsOptions,
   labelIndex: number,
   totalLabels: number
-): Promise<RawContactCandidate[]> {
-  const root = findChatListRoot();
-  if (!root) {
-    throw new ExtensionError(ERROR_CODES.elementNotFound, "No se encontró el listado de chats/contactos de la etiqueta.", {
+): Promise<{ candidates: RawContactCandidate[]; result: ContactExportLabelResult; visualOperations: number }> {
+  const collected = new Map<string, RawContactCandidate>();
+  const unresolved = new Map<string, RawContactCandidate>();
+  const countedRows = new Set<string>();
+  let stablePasses = 0;
+  let rowScans = 0;
+  let scrollOperations = 0;
+  let lastUniqueCount = -1;
+
+  for (let pass = 0; pass < 200; pass += 1) {
+    abortIfNeeded(options.signal);
+    if (!labelScopeStillActive(view, label)) {
+      throw new ExtensionError(ERROR_CODES.elementNotFound, "La extracción salió del ámbito de la etiqueta seleccionada.", {
+        recoverable: true,
+        details: {
+          contactExportCode: CONTACT_EXPORT_ERROR_CODES.extractionScopeBroken,
+          stage: "label_scoped_contact_extraction",
+          labelId: label.id,
+          strategy: view.strategy,
+          expectedCount: label.countHint,
+          collectedCount: countedRows.size
+        }
+      });
+    }
+
+    const rows = rowsFromScopedList(view.listRoot);
+    rows.forEach((row, index) => {
+      rowScans += 1;
+      const resolved = candidateFromScopedLabelRow(row, label, index);
+      if (resolved.countKey) countedRows.add(resolved.countKey);
+      if (resolved.stableKey) {
+        if (!collected.has(resolved.stableKey)) collected.set(resolved.stableKey, resolved.candidate);
+      } else {
+        const positional = positionalIdentity(row);
+        const problemKey = positional ?? `visible-slot:${index}`;
+        if (!unresolved.has(problemKey)) unresolved.set(problemKey, resolved.candidate);
+      }
+    });
+
+    const uniqueCount = countedRows.size;
+    if (label.countHint != null && uniqueCount > label.countHint) {
+      throw new ExtensionError(ERROR_CODES.elementNotFound, "La extracción obtuvo más elementos que la cantidad informada por la etiqueta. Se detuvo para evitar incluir chats externos.", {
+        recoverable: false,
+        details: {
+          contactExportCode: CONTACT_EXPORT_ERROR_CODES.extractionScopeBroken,
+          stage: "label_scoped_contact_extraction",
+          labelId: label.id,
+          strategy: view.strategy,
+          expectedCount: label.countHint,
+          collectedCount: uniqueCount
+        }
+      });
+    }
+
+    const processed = collected.size + unresolved.size;
+    const percent = label.countHint != null && label.countHint > 0
+      ? Math.min(100, Math.round((uniqueCount / label.countHint) * 100))
+      : null;
+    await options.progress?.({
+      processed,
+      totalHint: label.countHint,
+      percent,
+      currentLabel: label.name,
+      labelIndex,
+      totalLabels,
+      currentContact: processed
+    });
+
+    if (label.countHint != null && uniqueCount >= label.countHint) break;
+    const end = atScrollEnd(view.scrollRoot);
+    if (uniqueCount === lastUniqueCount) stablePasses += 1;
+    else stablePasses = 0;
+    lastUniqueCount = uniqueCount;
+
+    if (end && stablePasses >= 2) break;
+    if (!end && stablePasses >= 5) {
+      throw new ExtensionError(ERROR_CODES.interfaceLoading, "La lista virtualizada dejó de entregar contactos nuevos antes de llegar al final.", {
+        recoverable: true,
+        details: {
+          contactExportCode: CONTACT_EXPORT_ERROR_CODES.virtualListStalled,
+          stage: "virtual_list_scroll",
+          labelId: label.id,
+          strategy: view.strategy,
+          expectedCount: label.countHint,
+          collectedCount: uniqueCount
+        }
+      });
+    }
+
+    if (!end) {
+      const before = view.scrollRoot.scrollTop;
+      const step = Math.max(view.scrollRoot.clientHeight * 0.85, 420);
+      view.scrollRoot.scrollTop = Math.min(view.scrollRoot.scrollHeight, before + step);
+      view.scrollRoot.dispatchEvent(new Event("scroll", { bubbles: true }));
+      if (view.scrollRoot.scrollTop !== before) scrollOperations += 1;
+    }
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 80));
+  }
+
+  if (label.countHint != null && countedRows.size !== label.countHint) {
+    throw new ExtensionError(ERROR_CODES.elementNotFound, "La cantidad recolectada no coincide con la cantidad informada por la etiqueta.", {
       recoverable: true,
       details: {
-        contactExportCode: CONTACT_EXPORT_ERROR_CODES.contactListNotFound,
-        stage: "read_label_contacts",
+        contactExportCode: CONTACT_EXPORT_ERROR_CODES.labelContactCountMismatch,
+        stage: "validate_label_count",
         labelId: label.id,
-        strategy: "semantic-chat-list"
+        strategy: view.strategy,
+        expectedCount: label.countHint,
+        collectedCount: countedRows.size
       }
     });
   }
 
-  const collected = new Map<string, RawContactCandidate>();
-  let stablePasses = 0;
-  let previousSize = -1;
-  const totalHint = label.countHint;
-
-  for (let pass = 0; pass < 100 && stablePasses < 3; pass += 1) {
-    abortIfNeeded(options.signal);
-    const rows = rowsFromChatList(root);
-    for (const row of rows) {
-      abortIfNeeded(options.signal);
-      const base = candidateFromRow(row, label.name);
-      if (collected.has(base.sourceId)) continue;
-      const enriched = await enrichCandidateFromConversation(row, base, options.signal);
-      collected.set(base.sourceId, enriched);
-      const processed = collected.size;
-      if (processed === 1 || processed % 5 === 0) {
-        const percent = totalHint && totalHint > 0 ? Math.min(100, Math.round((processed / totalHint) * 100)) : null;
-        await options.progress?.({
-          processed,
-          totalHint,
-          percent,
-          currentLabel: label.name,
-          labelIndex,
-          totalLabels,
-          currentContact: processed
-        });
-      }
+  const candidates = [...collected.values(), ...unresolved.values()];
+  const resolvedPhones = candidates.filter((candidate) => candidate.phoneStatus === "resolved").length;
+  const unresolvedPhones = candidates.filter((candidate) => candidate.phoneStatus !== "resolved" && (candidate.kind === "contact" || candidate.kind === "unknown")).length;
+  return {
+    candidates,
+    visualOperations: scrollOperations,
+    result: {
+      labelId: label.id,
+      labelName: label.name,
+      reportedCount: label.countHint,
+      collectedUniqueContacts: countedRows.size || candidates.length,
+      resolvedPhones,
+      unresolvedPhones,
+      rowScans,
+      scrollOperations,
+      scopeStrategy: view.strategy
     }
-
-    if (collected.size === previousSize) stablePasses += 1;
-    else stablePasses = 0;
-    previousSize = collected.size;
-    const before = root.scrollTop;
-    root.scrollTop = Math.min(root.scrollHeight, root.scrollTop + Math.max(root.clientHeight, 600));
-    root.dispatchEvent(new Event("scroll", { bubbles: true }));
-    if (root.scrollTop === before || root.scrollTop + root.clientHeight >= root.scrollHeight - 4) stablePasses += 1;
-    if (stablePasses < 3) await new Promise((resolve) => globalThis.setTimeout(resolve, 120));
-  }
-
-  return [...collected.values()];
+  };
 }
 
 export async function collectContactsForLabels(
   labels: WhatsAppLabelInfo[],
   options: CollectSelectedLabelsOptions = {}
-): Promise<RawContactCandidate[]> {
+): Promise<ContactExportCollection> {
   if (!labels.length) throw new ExtensionError(ERROR_CODES.invalidInput, "Seleccioná al menos una etiqueta.");
+  const startedAt = new Date();
   const results: RawContactCandidate[] = [];
+  const labelResults: ContactExportLabelResult[] = [];
+  let visualOperations = 0;
+  let rowScans = 0;
+  let scrollOperations = 0;
+
+  const onVisualOperation = () => { visualOperations += 1; };
   for (let index = 0; index < labels.length; index += 1) {
     abortIfNeeded(options.signal);
     const label = labels[index]!;
@@ -473,10 +700,30 @@ export async function collectContactsForLabels(
       totalLabels: labels.length,
       currentContact: 0
     });
-    await openLabel(label, options.signal);
-    const candidates = await collectCurrentLabelRows(label, options, index + 1, labels.length);
-    results.push(...candidates);
+
+    const view = await openLabelScopedView(label, options.signal, onVisualOperation);
+    const collected = await collectScopedLabelRows(view, label, options, index + 1, labels.length);
+    results.push(...collected.candidates);
+    labelResults.push(collected.result);
+    rowScans += collected.result.rowScans;
+    scrollOperations += collected.result.scrollOperations;
+    visualOperations += collected.visualOperations;
   }
+
+  const completedAt = new Date();
+  const durationMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
+  const metrics: ContactExportMetrics = {
+    startedAt: startedAt.toISOString(),
+    completedAt: completedAt.toISOString(),
+    durationMs,
+    contactsPerSecond: durationMs > 0 ? Number((results.length / (durationMs / 1000)).toFixed(2)) : null,
+    labelsProcessed: labels.length,
+    rowScans,
+    scrollOperations,
+    visualOperations,
+    chatsOpened: 0
+  };
+
   await options.progress?.({
     processed: results.length,
     totalHint: results.length,
@@ -486,7 +733,7 @@ export async function collectContactsForLabels(
     totalLabels: labels.length,
     currentContact: results.length
   });
-  return results;
+  return { candidates: results, strategy: "label-scoped-phone-first-no-chat-opening", labelResults, metrics };
 }
 
 export function contactExportAdapterSupportsCurrentDocument(): boolean {
