@@ -83,18 +83,6 @@ export interface ContactExportSummary {
   excludedNonContacts: number;
 }
 
-export interface ContactExportProgress {
-  operationId: string;
-  processed: number;
-  totalHint: number | null;
-  percent: number | null;
-  currentLabel: string | null;
-  labelIndex: number;
-  totalLabels: number;
-  currentContact: number;
-  updatedAt: string;
-}
-
 export interface ContactExportMetrics {
   startedAt: string;
   completedAt: string;
@@ -117,6 +105,20 @@ export interface ContactExportLabelResult {
   rowScans: number;
   scrollOperations: number;
   scopeStrategy: string;
+}
+
+export interface ContactExportProgress {
+  operationId: string;
+  processed: number;
+  totalHint: number | null;
+  percent: number | null;
+  currentLabel: string | null;
+  labelIndex: number;
+  totalLabels: number;
+  currentContact: number;
+  metrics?: ContactExportMetrics;
+  labelResults?: ContactExportLabelResult[];
+  updatedAt: string;
 }
 
 export interface ContactExportDiagnostic {
