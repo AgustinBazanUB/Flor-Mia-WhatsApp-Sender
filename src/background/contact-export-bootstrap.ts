@@ -8,6 +8,7 @@ import {
   type InternalEnvelope,
   type InternalRequestMap
 } from "../shared/protocol";
+import type { ContactExportLabelResult, ContactExportMetrics } from "../contact-export/types";
 import { StateStore } from "../storage/state-store";
 import { WhatsAppTransport } from "./whatsapp-transport";
 
@@ -88,7 +89,9 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       currentLabel: typeof payload.currentLabel === "string" ? payload.currentLabel : null,
       labelIndex: Number(payload.labelIndex || 0),
       totalLabels: Number(payload.totalLabels || 0),
-      currentContact: Number(payload.currentContact || 0)
+      currentContact: Number(payload.currentContact || 0),
+      ...(payload.metrics && typeof payload.metrics === "object" ? { metrics: payload.metrics as ContactExportMetrics } : {}),
+      ...(Array.isArray(payload.labelResults) ? { labelResults: payload.labelResults as ContactExportLabelResult[] } : {})
     } as InternalRequestMap["CONTACT_EXPORT_PROGRESS"]).then(
       () => sendResponse({ ok: true }),
       () => sendResponse({ ok: false })
