@@ -214,3 +214,10 @@ Una prueba real con `Wh-Junio/Julio15-2025` demostró que la colección estructu
 La evidencia de teléfono sólo puede fusionarse por `contactId` exacto que ya pertenezca al conjunto estructurado. Una fila DOM externa, un nombre coincidente o una posición visual nunca pueden agregar un contacto al Excel. La resolución local prueba `WAWebApiContact.getPhoneNumber`, `lidPnCache`, `getLidEntry`, alternate-user/latest mapping, `WAWebFrontendContactGetters.getPnForLid`, contact record y `Store.LidUtils`, sin `Contact.find`, sin endpoints privados y sin abrir chats.
 
 Si después de dos barridos un LID realmente no tiene asociación PN disponible localmente, permanece `PHONE_UNRESOLVED`; no se infiere ni inventa un número.
+
+
+## Resolución no visual de LID en 0.9.5.5
+
+Una etiqueta puede conservar cientos de miembros estructurados aunque WhatsApp Web sólo muestre unos pocos chats. En ese caso el extractor usa `labelItemCollection` como membresía autoritativa y evita usar el DOM para descubrir contactos. Para cada `@lid` sin PN, consulta primero cache/colecciones locales y luego, si la build lo expone, `WAWebQueryExistsJob.queryWidExists`. Esa consulta no abre la conversación: permite que WhatsApp refresque su mapeo interno y luego se vuelve a consultar `WAWebApiContact.getPhoneNumber`, `lidPnCache`, `LidUtils` y las fuentes locales ya soportadas.
+
+El resolver trabaja en lotes pequeños, no envía mensajes y no incorpora un número si no puede correlacionarlo exactamente con uno de los IDs estructurados de la etiqueta. Si WhatsApp no devuelve PN aun después de la consulta, el contacto permanece `PHONE_UNRESOLVED`; no se inventa ni se infiere el número.

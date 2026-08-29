@@ -112,3 +112,8 @@ El proyecto usa SemVer para el paquete. `extensionVersion` identifica el build i
 - Contact Export 0.9.5.4 deja pendiente únicamente un contacto cuyo teléfono no pueda resolverse ni por la colección local/JID-LID ni por los fallbacks estructurados, sin abrir el chat.
 - El reporte técnico no aplica reparaciones automáticamente ni transmite datos a terceros.
 - La validación real de campañas requiere destinatarios autorizados; la validación real de Contact Export requiere etiquetas reales conocidas.
+
+
+### 0.9.5.5 — resolución no visual LID → teléfono
+
+Cuando la membresía estructurada de una etiqueta contiene LID cuyo PN no está en cache, Contact Export ya no intenta depender del viewport ni del scroll. Primero consulta todos los stores locales y, para los LID todavía pendientes, usa la operación interna de WhatsApp Web `WAWebQueryExistsJob.queryWidExists` y vuelve a leer `WAWebApiContact`/LidUtils. No abre chats ni lee mensajes. Los teléfonos sólo se fusionan si el `contactId` pertenece a la membresía estructurada original de la etiqueta.

@@ -127,3 +127,77 @@ describe("Contact Export virtualized LID hydration", () => {
     expect(document.querySelector("#main")).toBeNull();
   });
 });
+
+
+describe("Contact Export nonvisual LID resolution", () => {
+  it("queries WhatsApp internally for a LID and re-reads the hydrated PN without opening a chat", async () => {
+    const lid = "123456789012345@lid";
+    let hydrated = false;
+    Object.defineProperty(window, "require", {
+      configurable: true,
+      value: (moduleName: string) => {
+        if (moduleName === "WAWebWidFactory") return { createWid: (id: string) => ({ _serialized: id, server: "lid" }) };
+        if (moduleName === "WAWebApiContact") return {
+          getPhoneNumber: () => hydrated ? { _serialized: "5491123456789@c.us", server: "c.us" } : undefined,
+          lidPnCache: { getPhoneNumber: () => undefined, getLidEntry: () => undefined }
+        };
+        if (moduleName === "WAWebCollections") return { Contact: { get: () => undefined } };
+        if (moduleName === "WAWebQueryExistsJob") return {
+          queryWidExists: async () => {
+            hydrated = true;
+            return { wid: { _serialized: lid, server: "lid" } };
+          }
+        };
+        return {};
+      }
+    });
+    const result = await inspectWhatsAppLidsMainWorld([lid]);
+    expect(result).toMatchObject({
+      attempted: 1,
+      resolved: 1,
+      localResolved: 0,
+      serverQueried: 1,
+      serverResolved: 1,
+      querySupported: true
+    });
+    expect(result.phones[lid]).toBe("5491123456789@c.us");
+    expect(result.strategies[lid]).toContain("query-exists");
+    expect(document.querySelector("#main")).toBeNull();
+  });
+
+  it("resolves 210 structured LIDs through the internal query path with no visual rows or scroll", async () => {
+    const ids = Array.from({ length: 210 }, (_, index) => `${String(800000000000000 + index)}@lid`);
+    const phoneByLid = new Map<string, string>();
+    Object.defineProperty(window, "require", {
+      configurable: true,
+      value: (moduleName: string) => {
+        if (moduleName === "WAWebWidFactory") return { createWid: (id: string) => ({ _serialized: id, server: "lid" }) };
+        if (moduleName === "WAWebApiContact") return {
+          getPhoneNumber: (wid: { _serialized?: string }) => {
+            const phone = phoneByLid.get(String(wid?._serialized || ""));
+            return phone ? { _serialized: phone, server: "c.us" } : undefined;
+          },
+          lidPnCache: { getPhoneNumber: () => undefined, getLidEntry: () => undefined }
+        };
+        if (moduleName === "WAWebCollections") return { Contact: { get: () => undefined } };
+        if (moduleName === "WAWebQueryExistsJob") return {
+          queryWidExists: async (wid: { _serialized?: string }) => {
+            const id = String(wid?._serialized || "");
+            const index = ids.indexOf(id);
+            if (index >= 0) phoneByLid.set(id, `${5491100000000 + index}@c.us`);
+            return { wid };
+          }
+        };
+        return {};
+      }
+    });
+    const result = await inspectWhatsAppLidsMainWorld(ids);
+    expect(result.attempted).toBe(210);
+    expect(result.resolved).toBe(210);
+    expect(result.localResolved).toBe(0);
+    expect(result.serverQueried).toBe(210);
+    expect(result.serverResolved).toBe(210);
+    expect(Object.keys(result.phones)).toHaveLength(210);
+    expect(document.querySelectorAll("[role='listitem']")).toHaveLength(0);
+  });
+});

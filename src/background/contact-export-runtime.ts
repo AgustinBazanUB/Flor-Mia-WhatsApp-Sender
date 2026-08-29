@@ -2,7 +2,7 @@ import { createId } from "../shared/ids";
 import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
 import { INTERNAL_MESSAGE_TYPES, type InternalRequestMap } from "../shared/protocol";
 import { deduplicateContactCandidates } from "../contact-export/contact-deduplicator";
-import { collectContactsFromWhatsAppMainWorld, mergeHydratedPhonesIntoCollection } from "../contact-export/whatsapp-main-world-resolver";
+import { collectContactsFromWhatsAppMainWorld, mergeHydratedPhonesIntoCollection, resolveWhatsAppLidsInMainWorld } from "../contact-export/whatsapp-main-world-resolver";
 import type { ContactExportStore } from "../contact-export/contact-export-store";
 import {
   CONTACT_EXPORT_ERROR_CODES,
@@ -30,7 +30,14 @@ const CONTACT_EXPORT_TECHNICAL_DETAIL_KEYS = [
   "internalLabelIdPresent",
   "mainWorldReason",
   "resolvedPhones",
-  "unresolvedPhones"
+  "unresolvedPhones",
+  "phoneLookupAttempted",
+  "phoneLookupLocalResolved",
+  "phoneLookupServerQueried",
+  "phoneLookupServerResolved",
+  "phoneLookupRemaining",
+  "phoneLookupQuerySupported",
+  "visualHydrationUsed"
 ] as const;
 
 function safeTechnicalDetails(details: Record<string, unknown> | undefined): Record<string, string | number | boolean | null> {
@@ -177,29 +184,36 @@ export class ContactExportRuntime {
     const tab = await this.transport.requireTab();
     try {
       const structured = await collectContactsFromWhatsAppMainWorld(tab.id, labels);
-      let hydrationStats = { attempted: 0, resolved: 0, remaining: 0, passes: 0 };
+      let resolutionStats = {
+        attempted: 0, localResolved: 0, serverQueried: 0, serverResolved: 0,
+        remaining: 0, querySupported: false
+      };
       let structuredResult = structured;
       if (structured) {
-        const hydrationContactIdsByLabel: Record<string, string[]> = {};
-        for (const label of labels) {
-          const ids = structured.candidates
-            .filter((candidate) => candidate.labelId === label.id && candidate.phoneStatus !== "resolved" && /^\d{8,20}@lid$/i.test(candidate.contactId ?? ""))
-            .map((candidate) => candidate.contactId!)
-            .filter((id, index, all) => all.indexOf(id) === index);
-          if (ids.length) hydrationContactIdsByLabel[label.id] = ids;
-        }
-        const hydrationAttempted = Object.values(hydrationContactIdsByLabel).reduce((sum, ids) => sum + ids.length, 0);
-        if (hydrationAttempted > 0) {
-          const evidence = await this.transport.sendWhenContentReady(
-            INTERNAL_MESSAGE_TYPES.whatsappContactExportAnalyze,
-            { operationId, labels, hydrationContactIdsByLabel },
-            tab.id,
-            Math.max(120_000, labels.length * 120_000)
-          );
-          const merged = mergeHydratedPhonesIntoCollection(structured, evidence);
+        const unresolvedLids = structured.candidates
+          .filter((candidate) => candidate.phoneStatus !== "resolved" && /^\d{8,20}@lid$/i.test(candidate.contactId ?? ""))
+          .map((candidate) => candidate.contactId!)
+          .filter((id, index, all) => all.indexOf(id) === index);
+
+        if (unresolvedLids.length) {
+          const batch = await resolveWhatsAppLidsInMainWorld(tab.id, unresolvedLids);
+          const merged = mergeHydratedPhonesIntoCollection(structured, {
+            candidates: [],
+            hydratedPhones: batch.phones,
+            hydrationPasses: batch.serverQueried > 0 ? 2 : 1,
+            strategy: "server-assisted-lid-map"
+          });
           structuredResult = merged.collection;
-          hydrationStats = { attempted: merged.attempted, resolved: merged.resolved, remaining: merged.remaining, passes: merged.passes };
+          resolutionStats = {
+            attempted: unresolvedLids.length,
+            localResolved: batch.localResolved,
+            serverQueried: batch.serverQueried,
+            serverResolved: batch.serverResolved,
+            remaining: merged.remaining,
+            querySupported: batch.querySupported
+          };
         }
+
         const completedStructured = structuredResult ?? structured;
         await this.recordProgress({
           operationId,
@@ -249,8 +263,8 @@ export class ContactExportRuntime {
         diagnostic: {
           ...deduplicated.diagnostic,
           status: "green",
-          lastSuccessfulStep: hydrationStats.attempted > 0
-            ? "virtualized_lid_phone_hydration_completed"
+          lastSuccessfulStep: resolutionStats.attempted > 0
+            ? "nonvisual_lid_phone_resolution_completed"
             : "label_scoped_phone_first_analysis_completed",
           labelName: labels.at(-1)?.name ?? null,
           strategy: result.strategy,
@@ -258,11 +272,14 @@ export class ContactExportRuntime {
           processedCount: deduplicated.summary.found,
           reportedCount: lastLabelResult?.reportedCount ?? null,
           collectedUniqueContacts: lastLabelResult?.collectedUniqueContacts ?? deduplicated.summary.found,
-          technicalDetails: hydrationStats.attempted > 0 ? {
-            phoneHydrationAttempted: hydrationStats.attempted,
-            phoneHydrationResolved: hydrationStats.resolved,
-            phoneHydrationRemaining: hydrationStats.remaining,
-            phoneHydrationPasses: hydrationStats.passes
+          technicalDetails: resolutionStats.attempted > 0 ? {
+            phoneLookupAttempted: resolutionStats.attempted,
+            phoneLookupLocalResolved: resolutionStats.localResolved,
+            phoneLookupServerQueried: resolutionStats.serverQueried,
+            phoneLookupServerResolved: resolutionStats.serverResolved,
+            phoneLookupRemaining: resolutionStats.remaining,
+            phoneLookupQuerySupported: resolutionStats.querySupported,
+            visualHydrationUsed: false
           } : {},
           updatedAt: new Date().toISOString()
         }
