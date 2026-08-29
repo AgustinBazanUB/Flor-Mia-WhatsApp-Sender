@@ -19,6 +19,7 @@ const cancelButton = byId<HTMLButtonElement>("cancel");
 const exportButton = byId<HTMLButtonElement>("export-excel");
 const resetButton = byId<HTMLButtonElement>("reset-export");
 const reportButton = byId<HTMLButtonElement>("codex-report");
+const jsonReportButton = byId<HTMLButtonElement>("codex-json");
 const labelsContainer = byId<HTMLDivElement>("labels");
 const labelCount = byId<HTMLElement>("label-count");
 const selectedCount = byId<HTMLElement>("selected-count");
@@ -267,8 +268,8 @@ exportButton.addEventListener("click", () => {
   globalThis.setTimeout(() => { exportButton.textContent = "Exportar Excel"; }, 3_000);
 });
 
-function downloadText(filename: string, value: string): void {
-  const blob = new Blob([value], { type: "text/plain;charset=utf-8" });
+function downloadDiagnosticFile(filename: string, value: string, type: string): void {
+  const blob = new Blob([value], { type });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -279,10 +280,21 @@ function downloadText(filename: string, value: string): void {
   globalThis.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
+async function getDiagnosticBundle() {
+  return sendRuntimeRequest("contact-export-page", INTERNAL_MESSAGE_TYPES.generateDiagnosticReport, { includeCampaignName: false });
+}
+
 reportButton.addEventListener("click", () => void runCommand(async () => {
-  const bundle = await sendRuntimeRequest("contact-export-page", INTERNAL_MESSAGE_TYPES.generateDiagnosticReport, { includeCampaignName: false });
+  const bundle = await getDiagnosticBundle();
   const date = new Date().toISOString().slice(0, 10);
-  downloadText(`flormia_contact_export_diagnostic_${date}.txt`, bundle.text);
+  downloadDiagnosticFile(`flormia_contact_export_diagnostic_${date}.txt`, bundle.text, "text/plain;charset=utf-8");
+  return bundle;
+}));
+
+jsonReportButton.addEventListener("click", () => void runCommand(async () => {
+  const bundle = await getDiagnosticBundle();
+  const date = new Date().toISOString().slice(0, 10);
+  downloadDiagnosticFile(`flormia_contact_export_diagnostic_${date}.json`, bundle.json, "application/json;charset=utf-8");
   return bundle;
 }));
 
