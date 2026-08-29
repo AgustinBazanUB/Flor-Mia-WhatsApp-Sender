@@ -26,6 +26,8 @@ const packageMetadata = JSON.parse(await readFile(resolve("package.json"), "utf8
 const packageLock = JSON.parse(await readFile(resolve("package-lock.json"), "utf8"));
 const popupHtml = await readFile(resolve("dist", "popup/index.html"), "utf8");
 const contactHtml = await readFile(resolve("dist", "contacts/index.html"), "utf8");
+const contactPage = await readFile(resolve("dist", "contacts/page.js"), "utf8");
+const whatsappContent = await readFile(resolve("dist", "content/whatsapp.js"), "utf8");
 const optimisticControls = await readFile(resolve("dist", "popup/optimistic-controls.js"), "utf8");
 if (manifest.manifest_version !== 3) throw new Error("El build no contiene Manifest V3.");
 if (manifest.version !== sourceManifest.version) throw new Error("La versión del build no coincide con manifest.json.");
@@ -39,6 +41,7 @@ if (sourceManifest.version !== packageMetadata.version) {
 if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) {
   throw new Error("package-lock.json y package.json deben mantener coherente la versión del workspace npm.");
 }
+if (sourceManifest.version !== "9.5.1") throw new Error("La release esperada para el extractor phone-first es 9.5.1.");
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
 const optimisticPosition = popupHtml.indexOf(optimisticScript);
@@ -46,8 +49,17 @@ const popupPosition = popupHtml.indexOf(popupModule);
 if (optimisticPosition < 0 || popupPosition <= optimisticPosition) {
   throw new Error("El popup debe cargar optimistic-controls.js antes de popup.js.");
 }
-if (!optimisticControls.includes("../contacts/index.html") || !optimisticControls.includes("Exportar contactos de WhatsApp") || !contactHtml.includes("Exportar Excel")) {
+if (!popupHtml.includes("../contacts/index.html") || !contactHtml.includes("Exportar Excel")) {
   throw new Error("El build no contiene el acceso o la página de exportación de contactos.");
+}
+if (!contactHtml.includes("PHONE_UNRESOLVED") || !contactHtml.includes("Chats abiertos") || !contactHtml.includes("codex-json")) {
+  throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 9.5.1.");
+}
+if (!contactPage.includes("flormia_contact_export_diagnostic_") || !contactPage.includes("application/json")) {
+  throw new Error("El build no contiene descarga de diagnóstico JSON para Contact Export.");
+}
+if (!whatsappContent.includes("label-scoped-phone-first-no-chat-opening")) {
+  throw new Error("El Content Script no contiene la estrategia 9.5.1 label-scoped/phone-first.");
 }
 if (!optimisticControls.includes("Pausando…") || !optimisticControls.includes("Deteniendo…")) {
   throw new Error("El build no contiene la capa de confirmación inmediata para Pausa/Detener.");
@@ -79,4 +91,4 @@ const allowedExtensionPermissions = new Set(["storage", "alarms", "scripting"]);
 if (manifest.permissions.some((permission) => !allowedExtensionPermissions.has(permission))) {
   throw new Error("El manifest contiene permisos de extensión no previstos.");
 }
-console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3, sender y módulo Contactos presentes.`);
+console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3, sender y Contact Export phone-first presentes.`);
