@@ -2,6 +2,7 @@ import { createId } from "../shared/ids";
 import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
 import { INTERNAL_MESSAGE_TYPES, type InternalRequestMap } from "../shared/protocol";
 import { deduplicateContactCandidates } from "../contact-export/contact-deduplicator";
+import { collectContactsFromWhatsAppMainWorld } from "../contact-export/whatsapp-main-world-resolver";
 import type { ContactExportStore } from "../contact-export/contact-export-store";
 import {
   CONTACT_EXPORT_ERROR_CODES,
@@ -24,7 +25,12 @@ const CONTACT_EXPORT_TECHNICAL_DETAIL_KEYS = [
   "visibleRows",
   "expectedCount",
   "collectedCount",
-  "candidateCount"
+  "candidateCount",
+  "internalChatCount",
+  "internalLabelIdPresent",
+  "mainWorldReason",
+  "resolvedPhones",
+  "unresolvedPhones"
 ] as const;
 
 function safeTechnicalDetails(details: Record<string, unknown> | undefined): Record<string, string | number | boolean | null> {
@@ -170,12 +176,29 @@ export class ContactExportRuntime {
 
     const tab = await this.transport.requireTab();
     try {
-      const result = await this.transport.sendWhenContentReady(
-        INTERNAL_MESSAGE_TYPES.whatsappContactExportAnalyze,
-        { operationId, labels },
-        tab.id,
-        Math.max(60_000, labels.length * 60_000)
-      );
+      const structured = await collectContactsFromWhatsAppMainWorld(tab.id, labels);
+      if (structured) {
+        await this.recordProgress({
+          operationId,
+          processed: structured.candidates.length,
+          totalHint: structured.labelResults.reduce((sum, item) => sum + (item.reportedCount ?? item.collectedUniqueContacts), 0) || null,
+          percent: 100,
+          currentLabel: labels.at(-1)?.name ?? null,
+          labelIndex: labels.length,
+          totalLabels: labels.length,
+          currentContact: structured.candidates.length,
+          metrics: structured.metrics,
+          labelResults: structured.labelResults
+        });
+      }
+      const result = structured
+        ? { candidates: structured.candidates, strategy: structured.strategy }
+        : await this.transport.sendWhenContentReady(
+            INTERNAL_MESSAGE_TYPES.whatsappContactExportAnalyze,
+            { operationId, labels },
+            tab.id,
+            Math.max(60_000, labels.length * 60_000)
+          );
       const deduplicated = deduplicateContactCandidates(result.candidates);
       const latest = await this.store.load();
       const lastLabelResult = latest.labelResults.at(-1) ?? null;

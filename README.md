@@ -2,12 +2,13 @@
 
 Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario.
 
-## Contactos de WhatsApp — 0.9.5.2
+## Contactos de WhatsApp — 0.9.5.3
 
-La rama de Contact Export incorpora una página interna **Contactos de WhatsApp → Exportar contactos de WhatsApp**. La versión 0.9.5.2 mantiene el crawler visual anterior por una extracción **label-scoped + phone-first + no-chat-opening**:
+La rama de Contact Export incorpora una página interna **Contactos de WhatsApp → Exportar contactos de WhatsApp**. La versión 0.9.5.3 usa como fuente primaria el **estado local estructurado de etiquetas/chats de WhatsApp** y deja el crawler DOM como fallback. Mantiene el enfoque **label-scoped + phone-first + no-chat-opening**:
 
-- sólo procesa un listado que pueda vincularse a la etiqueta seleccionada;
-- prioriza JID/atributos/enlaces locales estructurados para resolver teléfono;
+- obtiene primero la membresía exacta desde la colección local de la etiqueta cuando está disponible;
+- resuelve JID telefónico directo y mapea IDs `@lid` al teléfono mediante datos/módulos locales ya cargados por WhatsApp;
+- si esa integración interna no está disponible, usa el adaptador DOM estricto como fallback;
 - no abre conversaciones individualmente durante el análisis normal;
 - un teléfono no demostrable queda `PHONE_UNRESOLVED` y no se inventa país/prefijo;
 - recorre listas virtualizadas desplazando únicamente el contenedor de la etiqueta;
@@ -107,6 +108,6 @@ El proyecto usa SemVer para el paquete. `extensionVersion` identifica el build i
 - La sesión y el QR siempre se manejan manualmente.
 - La confirmación DOM del sender detecta evidencia saliente; no garantiza entrega/lectura en el teléfono.
 - WhatsApp Web puede cambiar su DOM y exigir actualizar adaptadores.
-- Contact Export 0.9.5.2 deliberadamente deja pendientes las filas cuyo teléfono no puede resolverse sin abrir el chat.
+- Contact Export 0.9.5.3 deja pendiente únicamente un contacto cuyo teléfono no pueda resolverse ni por la colección local/JID-LID ni por los fallbacks estructurados, sin abrir el chat.
 - El reporte técnico no aplica reparaciones automáticamente ni transmite datos a terceros.
 - La validación real de campañas requiere destinatarios autorizados; la validación real de Contact Export requiere etiquetas reales conocidas.

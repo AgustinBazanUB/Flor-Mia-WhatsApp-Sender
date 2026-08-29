@@ -1,6 +1,15 @@
-# Exportación de contactos de WhatsApp Business — 9.5.1
+# Exportación de contactos de WhatsApp Business — 0.9.5.3
 
 ## Objetivo
+
+## Cambio principal de 0.9.5.3
+
+Las pruebas reales de 0.9.5.2 demostraron dos límites del DOM: una etiqueta de 10 podía compartir un viewport con 19 filas visibles, y contactos identificados como `@lid` podían no exponer el teléfono en la fila. Por eso 0.9.5.3 cambia la fuente primaria de verdad.
+
+El background ejecuta un inspector acotado en `world: MAIN` que **sólo lee estado ya cargado en la sesión de WhatsApp Web**. La integración está encapsulada en `whatsapp-main-world-resolver.ts` y usa, cuando existen, `WAWebCollections.Label`/`labelItemCollection` para obtener exactamente los chats vinculados a la etiqueta y `WAWebApiContact.getPhoneNumber` (más el mapa local equivalente cuando existe) para traducir un `@lid` a su JID telefónico. No se llama a endpoints HTTP privados, no se usa `Contact.find()`/fetch de red y no se abren conversaciones.
+
+Estas estructuras son internas y no documentadas por WhatsApp: pueden cambiar. Si no están disponibles, el resolver devuelve `unsupported` y la extensión cae al adaptador DOM anterior, ahora más estricto. El fallback rechaza cualquier candidato visible que ya exceda el contador confiable de la etiqueta.
+
 
 Flor Mía WhatsApp Sender incluye el módulo **Contactos de WhatsApp → Exportar contactos de WhatsApp**. En 9.5.1 el núcleo del extractor fue reemplazado por una estrategia **label-scoped + phone-first + no-chat-opening**.
 
@@ -19,11 +28,12 @@ La auditoría encontró dos causas concretas en `whatsapp-contact-adapter.ts`:
 
 El primer punto podía hacer que la extracción escapara de la etiqueta seleccionada. El segundo hacía el proceso lento y visual.
 
-## Arquitectura 9.5.1
+## Arquitectura actual
 
 La implementación sigue separada en:
 
-- `src/contact-export/whatsapp-contact-adapter.ts`: única capa que conoce el DOM de WhatsApp; prueba el scope de etiqueta, recorre listas virtualizadas y resuelve teléfonos desde la fila;
+- `src/contact-export/whatsapp-main-world-resolver.ts`: fuente primaria encapsulada para membresía de etiquetas y mapeo local LID → teléfono;
+- `src/contact-export/whatsapp-contact-adapter.ts`: fallback DOM centralizado; prueba el scope, recorre listas virtualizadas y resuelve teléfonos visibles/estructurados;
 - `src/contact-export/phone-normalizer.ts`: valida fuentes internacionales/JID sin inventar país;
 - `src/contact-export/contact-deduplicator.ts`: deduplica por teléfono y combina etiquetas seleccionadas;
 - `src/contact-export/contact-export-store.ts`: estado temporal en `chrome.storage.session`;
@@ -169,7 +179,7 @@ No incluye nombres de contactos, teléfonos completos ni contenido de conversaci
 
 ## Estructuras internas y limitaciones
 
-WhatsApp Web no ofrece una API pública estable para enumerar etiquetas y contactos. 9.5.1 utiliza únicamente información disponible localmente en la UI/DOM accesible a la extensión y no se engancha a módulos privados de webpack ni endpoints internos no documentados.
+WhatsApp Web no ofrece una API pública estable para enumerar etiquetas y contactos. 0.9.5.3 usa de forma deliberada y encapsulada módulos internos **locales** de la sesión para resolver membresía y LID → teléfono, con fallback DOM. No utiliza endpoints privados de red ni servicios externos.
 
 La consecuencia intencional es: si la fila contiene sólo un identificador opaco que no puede traducirse de manera confiable a teléfono desde la superficie disponible, se devuelve `PHONE_UNRESOLVED` en lugar de abrir automáticamente el chat o inventar información.
 

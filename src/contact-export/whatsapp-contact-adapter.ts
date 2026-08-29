@@ -400,7 +400,7 @@ function evaluateLabelListCandidate(
   const scrollable = hasScrollableRange(scrollRoot) || declaresScrollableOverflow(scrollRoot);
   const expected = label.countHint;
   const canReachExpected = expected == null || expected === 0 || rows.length >= expected || scrollable;
-  const grosslyOverExpected = expected != null && expected > 0 && rows.length > Math.max(expected * 2, expected + 12);
+  const exceedsExpected = expected != null && rows.length > expected;
   const paneProven = !paneCandidate || paneChanged || markerInsideList;
   const evidenceScore = contactEvidenceScore(rows);
 
@@ -409,7 +409,7 @@ function evaluateLabelListCandidate(
   else if (genericLabelsHub) reason = 'generic-label-hub';
   else if (rows.length === 0 && expected !== 0) reason = 'no-contact-rows';
   else if (!canReachExpected) reason = 'cannot-reach-reported-count';
-  else if (grosslyOverExpected) reason = 'grossly-over-reported-count';
+  else if (exceedsExpected) reason = 'over-reported-count';
   else if (!paneProven) reason = 'pane-not-proven-filtered';
 
   const eligible = reason === 'eligible';
