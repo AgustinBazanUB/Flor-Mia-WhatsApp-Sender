@@ -256,7 +256,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       sendResponse({ ok: false, requestId: message.requestId, error: { code: "PROTOCOL_ERROR", message: "Acción de WhatsApp no admitida.", recoverable: false } });
     } catch (error) {
       const serialized = serializeError(error);
-      logger.error("whatsapp.action_failed", { type: message.type, errorCode: serialized.code });
+      const contactExportCode = typeof serialized.details?.contactExportCode === "string" ? serialized.details.contactExportCode : null;
+      const stage = typeof serialized.details?.stage === "string" ? serialized.details.stage : null;
+      logger.error("whatsapp.action_failed", {
+        type: message.type,
+        errorCode: contactExportCode ?? serialized.code,
+        transportErrorCode: serialized.code,
+        ...(stage ? { stage } : {})
+      });
       sendResponse({ ok: false, requestId: message.requestId, error: serialized });
     }
   })();

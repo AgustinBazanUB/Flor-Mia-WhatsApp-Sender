@@ -6,6 +6,7 @@ import {
   contactExportAdapterSupportsCurrentDocument,
   detectWhatsAppLabels,
   isClearlyNonContactStructuredId,
+  resolveLabelScopedView,
   type LabelScopedView
 } from "../src/contact-export/whatsapp-contact-adapter";
 import type { WhatsAppLabelInfo } from "../src/contact-export/types";
@@ -253,4 +254,37 @@ describe("WhatsApp contact export semantic adapter", () => {
     document.body.innerHTML = `<div id="pane-side"></div>`;
     expect(contactExportAdapterSupportsCurrentDocument()).toBe(true);
   });
+
+  it("rejects a one-row nearby semantic list and selects the changed filtered pane for a 10-contact label", () => {
+    document.body.innerHTML = `
+      <section id="sidebar-shell">
+        <div id="marker" aria-selected="true" title="Zona Tribunales">Zona Tribunales</div>
+        <div id="nearby-list" role="list">
+          <div role="listitem" data-index="0"><span title="Zona Tribunales">Zona Tribunales</span></div>
+        </div>
+        <div id="pane-side" role="list"></div>
+      </section>`;
+    const pane = document.getElementById("pane-side")!;
+    pane.innerHTML = Array.from({ length: 10 }, (_, index) => row(`54911770000${index}`, `Cliente ${index}`, index + 1)).join("");
+    setScrollGeometry(document.getElementById("nearby-list")!, { clientHeight: 80, scrollHeight: 80 });
+    setScrollGeometry(pane, { clientHeight: 500, scrollHeight: 500 });
+
+    const view = resolveLabelScopedView(label({ countHint: 10 }), "fingerprint-before-filter");
+    expect(view?.listRoot.id).toBe("pane-side");
+    expect(view?.strategy).toBe("selected-label-marker+changed-pane");
+  });
+
+  it("does not accept a one-row non-scrollable list when the selected label reports ten contacts", () => {
+    document.body.innerHTML = `
+      <section id="sidebar-shell">
+        <div id="marker" aria-selected="true" title="Zona Tribunales">Zona Tribunales</div>
+        <div id="nearby-list" role="list">
+          <div role="listitem" data-index="0"><span title="Cliente visible">Cliente visible</span></div>
+        </div>
+      </section>`;
+    const nearby = document.getElementById("nearby-list")!;
+    setScrollGeometry(nearby, { clientHeight: 80, scrollHeight: 80 });
+    expect(resolveLabelScopedView(label({ countHint: 10 }), "missing")).toBeNull();
+  });
+
 });

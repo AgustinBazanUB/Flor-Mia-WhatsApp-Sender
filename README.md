@@ -2,9 +2,9 @@
 
 Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario.
 
-## Contactos de WhatsApp — 9.5.1
+## Contactos de WhatsApp — 0.9.5.2
 
-La rama de Contact Export incorpora una página interna **Contactos de WhatsApp → Exportar contactos de WhatsApp**. La versión 9.5.1 reemplaza el crawler visual anterior por una extracción **label-scoped + phone-first + no-chat-opening**:
+La rama de Contact Export incorpora una página interna **Contactos de WhatsApp → Exportar contactos de WhatsApp**. La versión 0.9.5.2 mantiene el crawler visual anterior por una extracción **label-scoped + phone-first + no-chat-opening**:
 
 - sólo procesa un listado que pueda vincularse a la etiqueta seleccionada;
 - prioriza JID/atributos/enlaces locales estructurados para resolver teléfono;
@@ -17,7 +17,7 @@ La rama de Contact Export incorpora una página interna **Contactos de WhatsApp 
 - mide tiempo, contactos/s, scrolls, operaciones visuales y chats abiertos;
 - mantiene el XLSX local con hoja `Contactos` y columnas `Telefono`, `Nombre y Apellido`, `Zona`.
 
-La causa del problema anterior y las reglas exactas están documentadas en [`docs/whatsapp-contact-export.md`](docs/whatsapp-contact-export.md) y [`docs/contact-export-release-notes-9.5.1.md`](docs/contact-export-release-notes-9.5.1.md).
+La causa del problema anterior y las reglas exactas están documentadas en [`docs/whatsapp-contact-export.md`](docs/whatsapp-contact-export.md) y [`docs/contact-export-release-notes-0.9.5.2.md`](docs/contact-export-release-notes-0.9.5.2.md).
 
 > WhatsApp Web no ofrece un contrato DOM público estable para esta función. Los tests automatizados verifican el extractor con DOM controlado, pero la aceptación final exige una prueba con una etiqueta real cuyo total sea conocido.
 
@@ -107,6 +107,6 @@ El proyecto usa SemVer para el paquete. `extensionVersion` identifica el build i
 - La sesión y el QR siempre se manejan manualmente.
 - La confirmación DOM del sender detecta evidencia saliente; no garantiza entrega/lectura en el teléfono.
 - WhatsApp Web puede cambiar su DOM y exigir actualizar adaptadores.
-- Contact Export 9.5.1 deliberadamente deja pendientes las filas cuyo teléfono no puede resolverse sin abrir el chat.
+- Contact Export 0.9.5.2 deliberadamente deja pendientes las filas cuyo teléfono no puede resolverse sin abrir el chat.
 - El reporte técnico no aplica reparaciones automáticamente ni transmite datos a terceros.
 - La validación real de campañas requiere destinatarios autorizados; la validación real de Contact Export requiere etiquetas reales conocidas.

@@ -10,6 +10,35 @@ import {
 } from "../contact-export/types";
 import type { WhatsAppTransport } from "./whatsapp-transport";
 
+
+const CONTACT_EXPORT_TECHNICAL_DETAIL_KEYS = [
+  "scopeCandidateCount",
+  "scopeCandidateSummary",
+  "beforePaneFingerprintPresent",
+  "scrollRootId",
+  "scrollRootRole",
+  "scrollTop",
+  "scrollHeight",
+  "clientHeight",
+  "scrollState",
+  "visibleRows",
+  "expectedCount",
+  "collectedCount",
+  "candidateCount"
+] as const;
+
+function safeTechnicalDetails(details: Record<string, unknown> | undefined): Record<string, string | number | boolean | null> {
+  if (!details) return {};
+  const output: Record<string, string | number | boolean | null> = {};
+  for (const key of CONTACT_EXPORT_TECHNICAL_DETAIL_KEYS) {
+    const value = details[key];
+    if (value == null) output[key] = null;
+    else if (typeof value === "number" || typeof value === "boolean") output[key] = value;
+    else if (typeof value === "string") output[key] = value.slice(0, 1200);
+  }
+  return output;
+}
+
 export class ContactExportRuntime {
   constructor(
     private readonly store: ContactExportStore,
@@ -51,6 +80,7 @@ export class ContactExportRuntime {
         errorCode: null,
         errorMessage: null,
         stack: null,
+        technicalDetails: {},
         updatedAt: new Date().toISOString()
       }
     });
@@ -82,6 +112,7 @@ export class ContactExportRuntime {
           errorCode: null,
           errorMessage: null,
           stack: null,
+          technicalDetails: {},
           updatedAt: new Date().toISOString()
         }
       });
@@ -132,6 +163,7 @@ export class ContactExportRuntime {
         errorCode: null,
         errorMessage: null,
         stack: null,
+        technicalDetails: {},
         updatedAt: new Date().toISOString()
       }
     });
@@ -263,6 +295,7 @@ export class ContactExportRuntime {
         errorCode: recognized,
         errorMessage: serialized.message,
         stack: serialized.stack ?? null,
+        technicalDetails: safeTechnicalDetails(serialized.details),
         updatedAt: new Date().toISOString()
       }
     });

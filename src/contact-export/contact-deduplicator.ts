@@ -38,6 +38,7 @@ function baseDiagnostic(processedCount: number): ContactExportDiagnostic {
     errorCode: null,
     errorMessage: null,
     stack: null,
+    technicalDetails: {},
     updatedAt: new Date().toISOString()
   };
 }

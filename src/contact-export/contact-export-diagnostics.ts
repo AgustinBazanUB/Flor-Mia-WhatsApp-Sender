@@ -48,6 +48,7 @@ export function createContactExportDiagnosticBundle(
       errorCode: diagnostic.errorCode,
       errorMessage: diagnostic.errorMessage ? sanitizeDiagnosticText(diagnostic.errorMessage, { maxStringLength: 500 }) : null,
       stack: sanitizeStackTrace(diagnostic.stack),
+      technicalDetails: diagnostic.technicalDetails,
       summary: state.summary,
       metrics: state.metrics,
       labelResults: state.labelResults.map((result) => ({
@@ -97,6 +98,7 @@ export function createContactExportDiagnosticBundle(
     `Error: ${valueOrDash(diagnostic.errorCode)}`,
     `Detail: ${valueOrDash(diagnostic.errorMessage)}`,
     `Stack: ${valueOrDash(sanitizeStackTrace(diagnostic.stack))}`,
+    `Technical details: ${Object.keys(diagnostic.technicalDetails).length ? JSON.stringify(diagnostic.technicalDetails) : "—"}`,
     "",
     `Etiquetas detectadas: ${state.labels.length}`,
     `Etiquetas seleccionadas: ${selectedLabels.length ? selectedLabels.join(" | ") : "—"}`,

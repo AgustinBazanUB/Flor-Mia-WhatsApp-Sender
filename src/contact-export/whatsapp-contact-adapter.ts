@@ -351,35 +351,145 @@ function scopeContainsGenericLabelsHub(container: HTMLElement): boolean {
   return labelsHeadingPresent(container) && container.querySelectorAll(LABEL_ROW_SELECTOR).length > 1;
 }
 
-function resolveLabelScopedView(label: WhatsAppLabelInfo, beforePaneFingerprint: string): LabelScopedView | null {
+interface LabelListCandidateEvaluation {
+  view: LabelScopedView;
+  score: number;
+  eligible: boolean;
+  reason: string;
+  visibleRows: number;
+  scrollable: boolean;
+  paneChanged: boolean;
+  evidenceScore: number;
+}
+
+function shortDomIdentity(element: HTMLElement): string {
+  const id = element.id ? `#${element.id}` : '';
+  const role = element.getAttribute('role');
+  return `${element.tagName.toLowerCase()}${id}${role ? `[role=${role}]` : ''}`;
+}
+
+function contactEvidenceScore(rows: HTMLElement[]): number {
+  let score = 0;
+  for (const row of rows.slice(0, 24)) {
+    const values = candidateStructuredValues(row);
+    const kind = kindFromValues(values);
+    if (kind === 'contact') score += 6;
+    else if (kind !== 'unknown') score -= 4;
+    if (values.some((value) => /@lid/i.test(value))) score += 2;
+    if (STRUCTURED_PHONE_ATTRIBUTES.some((attribute) => Boolean(row.getAttribute(attribute) || row.querySelector(`[${attribute}]`)))) score += 4;
+    if (row.querySelector("a[href^='tel:'],a[href*='phone='],a[href*='wa.me']")) score += 4;
+    if (textOf(row)) score += 1;
+  }
+  return score;
+}
+
+function evaluateLabelListCandidate(
+  listRoot: HTMLElement,
+  scopeRoot: HTMLElement,
+  marker: HTMLElement,
+  label: WhatsAppLabelInfo,
+  beforePaneFingerprint: string
+): LabelListCandidateEvaluation {
+  const rows = rowsFromScopedList(listRoot);
+  const markerInsideList = listRoot.contains(marker);
+  const paneCandidate = listRoot.id === 'pane-side';
+  const paneChanged = paneCandidate && listFingerprint(listRoot) !== beforePaneFingerprint;
+  const genericLabelsHub = markerInsideList && scopeContainsGenericLabelsHub(scopeRoot);
+  const scrollRoot = findScrollRoot(listRoot, scopeRoot);
+  const scrollRelated = scrollRoot === listRoot || scrollRoot.contains(listRoot) || listRoot.contains(scrollRoot);
+  const scrollable = hasScrollableRange(scrollRoot) || declaresScrollableOverflow(scrollRoot);
+  const expected = label.countHint;
+  const canReachExpected = expected == null || expected === 0 || rows.length >= expected || scrollable;
+  const grosslyOverExpected = expected != null && expected > 0 && rows.length > Math.max(expected * 2, expected + 12);
+  const paneProven = !paneCandidate || paneChanged || markerInsideList;
+  const evidenceScore = contactEvidenceScore(rows);
+
+  let reason = 'eligible';
+  if (!scrollRelated) reason = 'scroll-not-related';
+  else if (genericLabelsHub) reason = 'generic-label-hub';
+  else if (rows.length === 0 && expected !== 0) reason = 'no-contact-rows';
+  else if (!canReachExpected) reason = 'cannot-reach-reported-count';
+  else if (grosslyOverExpected) reason = 'grossly-over-reported-count';
+  else if (!paneProven) reason = 'pane-not-proven-filtered';
+
+  const eligible = reason === 'eligible';
+  let score = 0;
+  if (eligible) {
+    if (paneChanged) score += 1000;
+    if (markerInsideList) score += 120;
+    if (scrollable) score += 180;
+    if (expected != null && rows.length === expected) score += 600;
+    if (expected != null && rows.length > 0 && rows.length < expected) score += 80;
+    score += Math.min(rows.length, 40) * 15;
+    score += evidenceScore * 20;
+  }
+
+  return {
+    view: {
+      scopeRoot,
+      listRoot,
+      scrollRoot,
+      marker,
+      strategy: paneChanged
+        ? 'selected-label-marker+changed-pane'
+        : 'selected-label-marker+ranked-scoped-list'
+    },
+    score,
+    eligible,
+    reason,
+    visibleRows: rows.length,
+    scrollable,
+    paneChanged,
+    evidenceScore
+  };
+}
+
+function inspectLabelScopedCandidates(label: WhatsAppLabelInfo, beforePaneFingerprint: string): LabelListCandidateEvaluation[] {
   const markers = activeLabelMarkers(label);
+  const contexts = new Map<HTMLElement, { scopeRoot: HTMLElement; marker: HTMLElement }>();
+
   for (const marker of markers) {
     let container: HTMLElement | null = marker;
-    for (let depth = 0; container && depth < 9; depth += 1, container = container.parentElement) {
+    for (let depth = 0; container && depth < 12; depth += 1, container = container.parentElement) {
       if (container === document.body) break;
       for (const listRoot of listCandidatesWithin(container)) {
-        const rows = rowsFromScopedList(listRoot);
-        const markerInsideList = listRoot.contains(marker);
-        if (markerInsideList && scopeContainsGenericLabelsHub(container)) continue;
-        if (rows.length === 0 && label.countHint !== 0) continue;
-        if (rows.length === 0 && markerInsideList) continue;
-        const paneFallback = listRoot.id === "pane-side";
-        if (paneFallback && listFingerprint(listRoot) === beforePaneFingerprint && !markerInsideList) continue;
-        const scopeRoot = container;
-        const scrollRoot = findScrollRoot(listRoot, scopeRoot);
-        const scrollRelated = scrollRoot === listRoot || scrollRoot.contains(listRoot) || listRoot.contains(scrollRoot);
-        if (!scrollRelated) continue;
-        return {
-          scopeRoot,
-          listRoot,
-          scrollRoot,
-          marker,
-          strategy: paneFallback ? "selected-label-marker+changed-pane" : "selected-label-marker+scoped-list"
-        };
+        if (listRoot.closest('#main')) continue;
+        if (!contexts.has(listRoot)) contexts.set(listRoot, { scopeRoot: container, marker });
       }
     }
   }
-  return null;
+
+  const pane = document.querySelector<HTMLElement>('#pane-side');
+  const firstMarker = markers[0];
+  if (pane && visible(pane) && firstMarker && !contexts.has(pane)) {
+    contexts.set(pane, { scopeRoot: pane.parentElement ?? pane, marker: firstMarker });
+  }
+
+  return [...contexts.entries()].map(([listRoot, context]) =>
+    evaluateLabelListCandidate(listRoot, context.scopeRoot, context.marker, label, beforePaneFingerprint)
+  );
+}
+
+export function resolveLabelScopedView(label: WhatsAppLabelInfo, beforePaneFingerprint: string): LabelScopedView | null {
+  const evaluations = inspectLabelScopedCandidates(label, beforePaneFingerprint)
+    .filter((candidate) => candidate.eligible)
+    .sort((left, right) => right.score - left.score);
+  return evaluations[0]?.view ?? null;
+}
+
+function summarizeLabelScopeCandidates(label: WhatsAppLabelInfo, beforePaneFingerprint: string): { count: number; summary: string } {
+  const evaluations = inspectLabelScopedCandidates(label, beforePaneFingerprint);
+  const summary = evaluations.slice(0, 8).map((candidate) => [
+    shortDomIdentity(candidate.view.listRoot),
+    `rows=${candidate.visibleRows}`,
+    `scroll=${candidate.scrollable ? 'yes' : 'no'}`,
+    `paneChanged=${candidate.paneChanged ? 'yes' : 'no'}`,
+    `evidence=${candidate.evidenceScore}`,
+    `eligible=${candidate.eligible ? 'yes' : 'no'}`,
+    `reason=${candidate.reason}`,
+    `score=${candidate.score}`
+  ].join(' ')).join(' | ');
+  return { count: evaluations.length, summary };
 }
 
 async function openLabelScopedView(
@@ -407,6 +517,7 @@ async function openLabelScopedView(
       description: `el contenedor específico de la etiqueta ${label.name}`
     });
   } catch (error) {
+    const inspected = summarizeLabelScopeCandidates(label, beforePaneFingerprint);
     throw new ExtensionError(ERROR_CODES.elementNotFound, "WhatsApp abrió la etiqueta, pero no se pudo demostrar cuál es su listado específico. Se canceló para no leer chats externos.", {
       recoverable: true,
       cause: error,
@@ -414,8 +525,11 @@ async function openLabelScopedView(
         contactExportCode: CONTACT_EXPORT_ERROR_CODES.labelContainerNotFound,
         stage: "resolve_label_scope",
         labelId: label.id,
-        strategy: "selected-label-marker+scoped-list",
-        candidateCount: activeLabelMarkers(label).length
+        strategy: "selected-label-marker+ranked-scope",
+        candidateCount: inspected.count,
+        scopeCandidateCount: inspected.count,
+        scopeCandidateSummary: inspected.summary,
+        beforePaneFingerprintPresent: beforePaneFingerprint !== "missing"
       }
     });
   }
@@ -692,8 +806,8 @@ export async function collectScopedLabelRows(
     else stablePasses = 0;
     lastUniqueCount = uniqueCount;
 
-    if (state === "end" && stablePasses >= 2) {
-      if (label.countHint == null) break;
+    if (state === "end" && label.countHint == null && stablePasses >= 2) break;
+    if (state === "end" && label.countHint != null && uniqueCount < label.countHint && stablePasses >= 6) {
       throw new ExtensionError(ERROR_CODES.elementNotFound, "La lista llegó a su final visible antes de alcanzar la cantidad informada por la etiqueta.", {
         recoverable: true,
         details: {
@@ -703,12 +817,14 @@ export async function collectScopedLabelRows(
           strategy: view.strategy,
           expectedCount: label.countHint,
           collectedCount: uniqueCount,
+          scopeCandidateCount: 1,
+          scopeCandidateSummary: `${shortDomIdentity(view.listRoot)} rows=${rows.length} scroll=${hasScrollableRange(view.scrollRoot) || declaresScrollableOverflow(view.scrollRoot) ? "yes" : "no"}`,
           ...scrollDiagnosticDetails(view.scrollRoot, rows.length)
         }
       });
     }
 
-    if (state === "not-scrollable" && label.countHint != null && uniqueCount < label.countHint && stablePasses >= 4) {
+    if (state === "not-scrollable" && label.countHint != null && uniqueCount < label.countHint && stablePasses >= 6) {
       throw new ExtensionError(ERROR_CODES.interfaceLoading, "WhatsApp informa más contactos, pero todavía no se pudo identificar un viewport que permita continuar recorriendo la lista.", {
         recoverable: true,
         details: {
@@ -744,16 +860,17 @@ export async function collectScopedLabelRows(
       view.scrollRoot.scrollTop = Math.min(view.scrollRoot.scrollHeight, before + step);
       view.scrollRoot.dispatchEvent(new Event("scroll", { bubbles: true }));
       if (view.scrollRoot.scrollTop !== before) scrollOperations += 1;
-    } else if (state === "not-scrollable") {
+    } else if (state === "not-scrollable" || (state === "end" && label.countHint != null && uniqueCount < label.countHint)) {
       const lastRow = rows.at(-1);
       try {
         lastRow?.scrollIntoView?.({ block: "end", inline: "nearest" });
       } catch {
         // Algunos DOM de test/builds viejos no ofrecen scrollIntoView.
       }
+      view.scrollRoot.dispatchEvent(new Event("scroll", { bubbles: true }));
       view.listRoot.dispatchEvent(new Event("scroll", { bubbles: true }));
     }
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 100));
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 160));
   }
 
   if (label.countHint != null && countedRows.size !== label.countHint) {

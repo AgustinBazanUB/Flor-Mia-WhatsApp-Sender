@@ -143,6 +143,7 @@ export interface ContactExportDiagnostic {
   errorCode: ContactExportErrorCode | null;
   errorMessage: string | null;
   stack: string | null;
+  technicalDetails: Record<string, string | number | boolean | null>;
   updatedAt: string;
 }
 

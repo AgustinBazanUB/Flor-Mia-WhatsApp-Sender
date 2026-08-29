@@ -37,6 +37,7 @@ export function emptyContactExportState(now = new Date()): ContactExportState {
       errorCode: null,
       errorMessage: null,
       stack: null,
+      technicalDetails: {},
       updatedAt: now.toISOString()
     },
     updatedAt: now.toISOString()
