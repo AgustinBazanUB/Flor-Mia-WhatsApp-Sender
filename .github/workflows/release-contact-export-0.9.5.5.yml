@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Fix patch runner escaping
+      - name: Fix patch runner compatibility
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -31,7 +31,13 @@ jobs:
           new = "updated, count = re.subn(pattern, lambda _match: replacement, content, count=1, flags=re.S)"
           if old not in text:
               raise SystemExit('regex_once implementation not found')
-          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              'resolver estructurado local de etiquetas/LID de 0.9.5.3.',
+              'resolver estructurado local de etiquetas/LID de 0.9.5.5.',
+              1
+          )
+          p.write_text(text, encoding='utf-8')
           PY
       - name: Apply 0.9.5.5 patch
         run: python scripts/release-0.9.5.5.py
