@@ -42,6 +42,8 @@ let state: ContactExportState | null = null;
 let selectedLabelIds = new Set<string>();
 let commandBusy = false;
 
+byId<HTMLElement>("module-version").textContent = chrome.runtime.getManifest().version;
+
 function setError(message = ""): void {
   uiError.textContent = message;
   uiError.hidden = !message;
@@ -90,7 +92,7 @@ function renderLabels(current: ContactExportState): void {
     row.append(checkbox, name);
     if (label.countHint != null) {
       const hint = document.createElement("small");
-      hint.textContent = String(label.countHint);
+      hint.textContent = `${label.countHint} contactos`;
       row.append(hint);
     }
     return row;
@@ -120,6 +122,12 @@ function renderResults(current: ContactExportState): void {
   text("stat-phone", current.summary.withoutPhone);
   text("stat-name", current.summary.withoutName);
   text("stat-noncontacts", current.summary.excludedNonContacts);
+  text("metric-duration", current.metrics ? `${(current.metrics.durationMs / 1000).toFixed(2)} s` : "—");
+  text("metric-rate", current.metrics?.contactsPerSecond ?? "—");
+  text("metric-scrolls", current.metrics?.scrollOperations ?? "—");
+  text("metric-visual", current.metrics?.visualOperations ?? "—");
+  text("metric-chats", current.metrics?.chatsOpened ?? "—");
+
   const statusLabels: Record<string, string> = {
     idle: "Sin analizar",
     detecting_labels: "Detectando etiquetas…",
@@ -169,6 +177,8 @@ function renderDiagnostic(current: ContactExportState): void {
   text("diagnostic-label", diagnostic.labelName);
   text("diagnostic-strategy", diagnostic.strategy);
   text("diagnostic-expected", diagnostic.expectedElement);
+  text("diagnostic-reported", diagnostic.reportedCount);
+  text("diagnostic-collected", diagnostic.collectedUniqueContacts);
   text("diagnostic-candidates", diagnostic.candidateCount);
 }
 
