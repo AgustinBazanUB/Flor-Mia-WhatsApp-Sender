@@ -11,6 +11,9 @@ const required = [
   "popup/popup.css",
   "popup/user-facing.css",
   "popup/optimistic-controls.js",
+  "contacts/index.html",
+  "contacts/page.js",
+  "contacts/page.css",
   "diagnostics/report.html",
   "diagnostics/report.js",
   "diagnostics/report.css"
@@ -22,22 +25,51 @@ const sourceManifest = JSON.parse(await readFile(resolve("manifest.json"), "utf8
 const packageMetadata = JSON.parse(await readFile(resolve("package.json"), "utf8"));
 const packageLock = JSON.parse(await readFile(resolve("package-lock.json"), "utf8"));
 const popupHtml = await readFile(resolve("dist", "popup/index.html"), "utf8");
+const contactHtml = await readFile(resolve("dist", "contacts/index.html"), "utf8");
+const contactPage = await readFile(resolve("dist", "contacts/page.js"), "utf8");
+const whatsappContent = await readFile(resolve("dist", "content/whatsapp.js"), "utf8");
 const optimisticControls = await readFile(resolve("dist", "popup/optimistic-controls.js"), "utf8");
+const backgroundWorker = await readFile(resolve("dist", "background/service-worker.js"), "utf8");
 if (manifest.manifest_version !== 3) throw new Error("El build no contiene Manifest V3.");
 if (manifest.version !== sourceManifest.version) throw new Error("La versión del build no coincide con manifest.json.");
 if (manifest.version_name !== sourceManifest.version_name) throw new Error("El nombre de versión del build no coincide con manifest.json.");
 if (sourceManifest.version_name !== sourceManifest.version) {
   throw new Error("manifest.json debe mantener version y version_name coherentes para la versión visible en Chrome.");
 }
+if (sourceManifest.version !== packageMetadata.version) {
+  throw new Error("La release de Contactos debe mantener manifest.json y package.json en la misma versión.");
+}
 if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) {
   throw new Error("package-lock.json y package.json deben mantener coherente la versión del workspace npm.");
 }
+if (sourceManifest.version !== "0.9.5.6") throw new Error("La release esperada para el extractor estructurado es 0.9.5.6.");
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
 const optimisticPosition = popupHtml.indexOf(optimisticScript);
 const popupPosition = popupHtml.indexOf(popupModule);
 if (optimisticPosition < 0 || popupPosition <= optimisticPosition) {
   throw new Error("El popup debe cargar optimistic-controls.js antes de popup.js.");
+}
+if (!optimisticControls.includes("../contacts/index.html") || !contactHtml.includes("Exportar Excel")) {
+  throw new Error("El build no contiene el acceso o la página de exportación de contactos.");
+}
+if (!contactHtml.includes("PHONE_UNRESOLVED") || !contactHtml.includes("Chats abiertos") || !contactHtml.includes("codex-json")) {
+  throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 0.9.5.6.");
+}
+if (!contactPage.includes("flormia_contact_export_diagnostic_") || !contactPage.includes("application/json")) {
+  throw new Error("El build no contiene descarga de diagnóstico JSON para Contact Export.");
+}
+if (!whatsappContent.includes("label-scoped-phone-first-no-chat-opening")) {
+  throw new Error("El Content Script no contiene la estrategia 0.9.5.6 label-scoped/phone-first.");
+}
+if (!backgroundWorker.includes("WAWebCollections") || !backgroundWorker.includes("WAWebApiContact") || !backgroundWorker.includes("main-world-label-store+local-lid-map")) {
+  throw new Error("El build no contiene el resolver estructurado local de etiquetas/LID de 0.9.5.6.");
+}
+if (!backgroundWorker.includes("message-user-receipt") || !backgroundWorker.includes("history-metadata-lid-map") || !backgroundWorker.includes("phoneLookupServerSkipped") || !backgroundWorker.includes("model-storage") || !backgroundWorker.includes("phoneHistoryIndexedDbMessagesScanned")) {
+  throw new Error("El build no contiene la correlación histórica LID→PN no visual de 0.9.5.6.");
+}
+if (!backgroundWorker.includes("virtualized-lid-hydration") || !whatsappContent.includes("flormia_contact_export_lid_resolve_v1")) {
+  throw new Error("El build no contiene la hidratación virtualizada LID→teléfono de 0.9.5.6.");
 }
 if (!optimisticControls.includes("Pausando…") || !optimisticControls.includes("Deteniendo…")) {
   throw new Error("El build no contiene la capa de confirmación inmediata para Pausa/Detener.");
@@ -69,4 +101,4 @@ const allowedExtensionPermissions = new Set(["storage", "alarms", "scripting"]);
 if (manifest.permissions.some((permission) => !allowedExtensionPermissions.has(permission))) {
   throw new Error("El manifest contiene permisos de extensión no previstos.");
 }
-console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3 y artefactos requeridos presentes.`);
+console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3, sender y Contact Export phone-first presentes.`);

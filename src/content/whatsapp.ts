@@ -16,12 +16,53 @@ import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
 import { waitForConversationContext } from "../whatsapp/conversation-context";
 import { snapshotRuntimeMetrics } from "../performance/runtime-metrics";
+import {
+  collectContactsForLabels,
+  detectWhatsAppLabels
+} from "../contact-export/whatsapp-contact-adapter";
+import { CONTACT_EXPORT_ERROR_CODES, type ContactExportProgress } from "../contact-export/types";
 
 const proofControllers = new Map<string, AbortController>();
+const contactExportControllers = new Map<string, AbortController>();
+const CONTACT_EXPORT_PROGRESS_CHANNEL = "flormia_contact_export_progress_v1";
+const CONTACT_EXPORT_LID_RESOLVE_CHANNEL = "flormia_contact_export_lid_resolve_v1";
 installConversationInteractionGuard(document);
 
 function success<T>(requestId: string, data: T): InternalResponse<T> {
   return { ok: true, requestId, data };
+}
+
+function abortActiveContactExports(reason: string): void {
+  if (!contactExportControllers.size) return;
+  for (const controller of contactExportControllers.values()) controller.abort();
+  logger.info("contact_export.preempted", { reason, activeOperations: contactExportControllers.size });
+}
+
+async function publishContactExportProgress(
+  operationId: string,
+  progress: Omit<ContactExportProgress, "operationId" | "updatedAt">
+): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage({
+      channel: CONTACT_EXPORT_PROGRESS_CHANNEL,
+      operationId,
+      ...progress
+    });
+  } catch {
+    // El progreso es informativo. Una pérdida temporal del listener de background
+    // no debe detener la extracción ni reenviar información a servicios externos.
+  }
+}
+
+async function resolveContactExportLids(operationId: string, contactIds: string[]): Promise<Record<string, string>> {
+  if (!contactIds.length) return {};
+  const response = await chrome.runtime.sendMessage({
+    channel: CONTACT_EXPORT_LID_RESOLVE_CHANNEL,
+    operationId,
+    contactIds
+  }) as { ok?: boolean; phones?: Record<string, string> } | undefined;
+  if (!response?.ok) return {};
+  return response.phones && typeof response.phones === "object" ? response.phones : {};
 }
 
 function beforeSendCheckpoint(operationId: string, required: boolean) {
@@ -41,6 +82,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (sender.id !== chrome.runtime.id || !isInternalEnvelope(message) || message.source !== "service-worker") return false;
 
   if (message.type === INTERNAL_MESSAGE_TYPES.whatsappOpenConversation) {
+    abortActiveContactExports("sender_open_conversation");
     const payload = message.payload as InternalRequestMap["WA_OPEN_CONVERSATION"];
     if (!/^\d{8,15}$/.test(payload.phoneDigits) || !payload.navigationRequestId) {
       sendResponse({ ok: false, requestId: message.requestId, error: serializeError(new ExtensionError(ERROR_CODES.invalidInput, "Navegación interna inválida.")) });
@@ -72,6 +114,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     return false;
   }
 
+  if (message.type === INTERNAL_MESSAGE_TYPES.whatsappContactExportCancel) {
+    const payload = message.payload as InternalRequestMap["WA_CONTACT_EXPORT_CANCEL"];
+    const controller = contactExportControllers.get(payload.operationId);
+    controller?.abort();
+    sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_CANCEL"]>(message.requestId, { cancelled: Boolean(controller) }));
+    return false;
+  }
+
   void (async () => {
     try {
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappDiagnosticSnapshot) {
@@ -80,6 +130,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           documentReadyState: document.readyState,
           composerPresent: Boolean(document.querySelector("#main footer [role='textbox'][contenteditable='true'], #main footer [contenteditable='true']")),
           activeProofControllers: proofControllers.size,
+          activeContactExportControllers: contactExportControllers.size,
           runtimeMetrics: snapshotRuntimeMetrics() as unknown as Record<string, unknown>
         }));
         return;
@@ -89,7 +140,62 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         sendResponse(success(message.requestId, data));
         return;
       }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappContactExportDetectLabels) {
+        const data = await detectWhatsAppLabels();
+        sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_DETECT_LABELS"]>(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappContactExportAnalyze) {
+        const payload = message.payload as InternalRequestMap["WA_CONTACT_EXPORT_ANALYZE"];
+        const controller = new AbortController();
+        contactExportControllers.set(payload.operationId, controller);
+        try {
+          const collection = await collectContactsForLabels(payload.labels, {
+            signal: controller.signal,
+            progress: (progress) => publishContactExportProgress(payload.operationId, progress),
+            ...(payload.hydrationContactIdsByLabel ? {
+              hydrationContactIdsByLabel: payload.hydrationContactIdsByLabel,
+              resolvePhoneHydration: (contactIds: string[]) => resolveContactExportLids(payload.operationId, contactIds)
+            } : {})
+          });
+          await publishContactExportProgress(payload.operationId, {
+            processed: collection.candidates.length,
+            totalHint: collection.candidates.length,
+            percent: 100,
+            currentLabel: payload.labels.at(-1)?.name ?? null,
+            labelIndex: payload.labels.length,
+            totalLabels: payload.labels.length,
+            currentContact: collection.candidates.length,
+            metrics: collection.metrics,
+            labelResults: collection.labelResults
+          });
+          sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_ANALYZE"]>(message.requestId, {
+            candidates: collection.candidates,
+            strategy: collection.strategy,
+            hydratedPhones: collection.hydratedPhones,
+            hydrationPasses: collection.hydrationPasses,
+            metrics: collection.metrics,
+            labelResults: collection.labelResults
+          }));
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw new ExtensionError(ERROR_CODES.contactExportCancelled, "La extracción de contactos fue cancelada.", {
+              recoverable: true,
+              details: {
+                contactExportCode: CONTACT_EXPORT_ERROR_CODES.cancelled,
+                stage: "cancelled",
+                strategy: "label-scoped-phone-first-no-chat-opening"
+              }
+            });
+          }
+          throw error;
+        } finally {
+          if (contactExportControllers.get(payload.operationId) === controller) contactExportControllers.delete(payload.operationId);
+        }
+        return;
+      }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappProveConversation) {
+        abortActiveContactExports("sender_prove_conversation");
         const payload = message.payload as InternalRequestMap["WA_PROVE_CONVERSATION"];
         if (payload.expectedContentInstanceId && payload.expectedContentInstanceId !== CONTENT_INSTANCE_ID) {
           throw new ExtensionError(
@@ -144,6 +250,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendText) {
+        abortActiveContactExports("sender_send_text");
         const payload = message.payload as InternalRequestMap["WA_SEND_TEXT"];
         const data = await sendAndVerifyText(payload, {
           beforeSend: beforeSendCheckpoint(payload.operationId, payload.checkpointRequired === true)
@@ -152,6 +259,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappSendImage) {
+        abortActiveContactExports("sender_send_image");
         const payload = message.payload as InternalRequestMap["WA_SEND_IMAGE"];
         const data = await sendAndVerifyImage(payload, {
           beforeSend: beforeSendCheckpoint(payload.operationId, payload.checkpointRequired === true)
@@ -160,6 +268,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         return;
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappReconcileStep) {
+        abortActiveContactExports("sender_reconcile");
         const data = await reconcileWhatsAppStep(message.payload as Parameters<typeof reconcileWhatsAppStep>[0]);
         sendResponse(success(message.requestId, data));
         return;
@@ -167,7 +276,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       sendResponse({ ok: false, requestId: message.requestId, error: { code: "PROTOCOL_ERROR", message: "Acción de WhatsApp no admitida.", recoverable: false } });
     } catch (error) {
       const serialized = serializeError(error);
-      logger.error("whatsapp.action_failed", { type: message.type, errorCode: serialized.code });
+      const contactExportCode = typeof serialized.details?.contactExportCode === "string" ? serialized.details.contactExportCode : null;
+      const stage = typeof serialized.details?.stage === "string" ? serialized.details.stage : null;
+      logger.error("whatsapp.action_failed", {
+        type: message.type,
+        errorCode: contactExportCode ?? serialized.code,
+        transportErrorCode: serialized.code,
+        ...(stage ? { stage } : {})
+      });
       sendResponse({ ok: false, requestId: message.requestId, error: serialized });
     }
   })();

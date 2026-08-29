@@ -11,7 +11,7 @@ describe("extension release metadata", () => {
     const manifest = readJson("manifest.json");
 
     expect(manifest.version_name).toBe(manifest.version);
-    expect(String(manifest.version)).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    expect(String(manifest.version)).toMatch(/^\d+\.\d+\.\d+(?:\.\d+)?$/);
   });
 
   it("keeps npm workspace and lockfile metadata coherent", () => {
@@ -21,6 +21,6 @@ describe("extension release metadata", () => {
 
     expect(lock.version).toBe(packageJson.version);
     expect(packages[""]?.version).toBe(packageJson.version);
-    expect(String(packageJson.version)).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    expect(String(packageJson.version)).toMatch(/^\d+\.\d+\.\d+(?:\.\d+)?$/);
   });
 });

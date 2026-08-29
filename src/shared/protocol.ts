@@ -14,6 +14,14 @@ import type {
 import type { DiagnosticReportBundle } from "../diagnostics/types";
 import type { CompatibilityOverallStatus } from "../compatibility/types";
 import type { ConversationContextProof } from "../whatsapp/conversation-context";
+import type {
+  ContactExportLabelResult,
+  ContactExportMetrics,
+  ContactExportProgress,
+  ContactExportState,
+  RawContactCandidate,
+  WhatsAppLabelInfo
+} from "../contact-export/types";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -38,6 +46,15 @@ export const INTERNAL_MESSAGE_TYPES = {
   campaignDelete: "CAMPAIGN_DELETE",
   campaignStatus: "CAMPAIGN_STATUS",
   campaignRestoreImages: "CAMPAIGN_RESTORE_IMAGES",
+  contactExportGetState: "CONTACT_EXPORT_GET_STATE",
+  contactExportDetectLabels: "CONTACT_EXPORT_DETECT_LABELS",
+  contactExportAnalyze: "CONTACT_EXPORT_ANALYZE",
+  contactExportCancel: "CONTACT_EXPORT_CANCEL",
+  contactExportReset: "CONTACT_EXPORT_RESET",
+  contactExportProgress: "CONTACT_EXPORT_PROGRESS",
+  whatsappContactExportDetectLabels: "WA_CONTACT_EXPORT_DETECT_LABELS",
+  whatsappContactExportAnalyze: "WA_CONTACT_EXPORT_ANALYZE",
+  whatsappContactExportCancel: "WA_CONTACT_EXPORT_CANCEL",
   whatsappPreflight: "WA_PREFLIGHT",
   whatsappOpenConversation: "WA_OPEN_CONVERSATION",
   whatsappProveConversation: "WA_PROVE_CONVERSATION",
@@ -53,7 +70,7 @@ export const INTERNAL_MESSAGE_TYPES = {
 } as const;
 
 export type InternalMessageType = (typeof INTERNAL_MESSAGE_TYPES)[keyof typeof INTERNAL_MESSAGE_TYPES];
-export type InternalSource = "popup" | "diagnostics-page" | "service-worker" | "whatsapp-content" | "web-app-bridge";
+export type InternalSource = "popup" | "diagnostics-page" | "contact-export-page" | "service-worker" | "whatsapp-content" | "web-app-bridge";
 
 export interface InternalRequestMap {
   GET_EXTENSION_STATE: Record<string, never>;
@@ -74,6 +91,19 @@ export interface InternalRequestMap {
   CAMPAIGN_DELETE: { campaignId: string; expectedSequence?: number };
   CAMPAIGN_STATUS: { campaignId?: string };
   CAMPAIGN_RESTORE_IMAGES: { campaignId: string; images: SerializedCampaignImage[] };
+  CONTACT_EXPORT_GET_STATE: Record<string, never>;
+  CONTACT_EXPORT_DETECT_LABELS: Record<string, never>;
+  CONTACT_EXPORT_ANALYZE: { selectedLabelIds: string[] };
+  CONTACT_EXPORT_CANCEL: Record<string, never>;
+  CONTACT_EXPORT_RESET: Record<string, never>;
+  CONTACT_EXPORT_PROGRESS: Omit<ContactExportProgress, "updatedAt">;
+  WA_CONTACT_EXPORT_DETECT_LABELS: { operationId: string };
+  WA_CONTACT_EXPORT_ANALYZE: {
+    operationId: string;
+    labels: WhatsAppLabelInfo[];
+    hydrationContactIdsByLabel?: Record<string, string[]>;
+  };
+  WA_CONTACT_EXPORT_CANCEL: { operationId: string };
   WA_PREFLIGHT: WhatsAppPreflightRequest;
   WA_OPEN_CONVERSATION: { operationId: string; phoneDigits: string; navigationRequestId: string };
   WA_PROVE_CONVERSATION: {
@@ -115,6 +145,22 @@ export interface InternalResponseMap {
   CAMPAIGN_DELETE: { campaignId: string; releasedAt: string };
   CAMPAIGN_STATUS: CampaignPublicStatus | null;
   CAMPAIGN_RESTORE_IMAGES: CampaignPublicStatus;
+  CONTACT_EXPORT_GET_STATE: ContactExportState;
+  CONTACT_EXPORT_DETECT_LABELS: ContactExportState;
+  CONTACT_EXPORT_ANALYZE: ContactExportState;
+  CONTACT_EXPORT_CANCEL: ContactExportState;
+  CONTACT_EXPORT_RESET: ContactExportState;
+  CONTACT_EXPORT_PROGRESS: ContactExportState;
+  WA_CONTACT_EXPORT_DETECT_LABELS: { labels: WhatsAppLabelInfo[]; strategy: string; candidateCount: number };
+  WA_CONTACT_EXPORT_ANALYZE: {
+    candidates: RawContactCandidate[];
+    strategy: string;
+    hydratedPhones?: Record<string, string>;
+    hydrationPasses?: number;
+    metrics?: ContactExportMetrics;
+    labelResults?: ContactExportLabelResult[];
+  };
+  WA_CONTACT_EXPORT_CANCEL: { cancelled: boolean };
   WA_PREFLIGHT: WhatsAppPreflightResult;
   WA_OPEN_CONVERSATION: { navigationStarted: true; requestedNavigationAt: string; contentInstanceId: string; navigationRequestId: string };
   WA_PROVE_CONVERSATION: ConversationContextProof;
@@ -171,7 +217,7 @@ export function isInternalEnvelope(value: unknown): value is InternalEnvelope {
   return value.channel === INTERNAL_CHANNEL
     && value.protocolVersion === PROTOCOL_VERSION
     && typeof value.requestId === "string"
-    && ["popup", "diagnostics-page", "service-worker", "whatsapp-content", "web-app-bridge"].includes(String(value.source))
+    && ["popup", "diagnostics-page", "contact-export-page", "service-worker", "whatsapp-content", "web-app-bridge"].includes(String(value.source))
     && typeof value.type === "string"
     && internalTypes.has(value.type)
     && isRecord(value.payload);
