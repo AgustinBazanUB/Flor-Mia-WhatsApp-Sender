@@ -1,7 +1,16 @@
 export const CONTACT_EXPORT_ERROR_CODES = {
   labelsNotFound: "LABELS_NOT_FOUND",
+  labelNotFound: "LABEL_NOT_FOUND",
+  labelContainerNotFound: "LABEL_CONTAINER_NOT_FOUND",
   contactListNotFound: "CONTACT_LIST_NOT_FOUND",
+  labelContactCountMismatch: "LABEL_CONTACT_COUNT_MISMATCH",
+  contactIdNotFound: "CONTACT_ID_NOT_FOUND",
+  phoneUnresolved: "PHONE_UNRESOLVED",
+  phoneInvalid: "PHONE_INVALID",
   phoneNotAvailable: "PHONE_NOT_AVAILABLE",
+  virtualListStalled: "VIRTUAL_LIST_STALLED",
+  whatsappStructureChanged: "WHATSAPP_STRUCTURE_CHANGED",
+  extractionScopeBroken: "EXTRACTION_SCOPE_BROKEN",
   contactExtractionFailed: "CONTACT_EXTRACTION_FAILED",
   whatsappNotReady: "WHATSAPP_NOT_READY",
   exportFailed: "EXPORT_FAILED",
@@ -26,17 +35,23 @@ export interface WhatsAppLabelInfo {
   id: string;
   name: string;
   countHint: number | null;
+  countHintStrategy: string | null;
+  sourceId: string | null;
   strategy: string;
 }
 
 export type ContactKind = "contact" | "group" | "community" | "channel" | "status" | "system" | "unknown";
+export type PhoneResolutionStatus = "resolved" | "unresolved" | "invalid";
 
 export interface RawContactCandidate {
   sourceId: string;
+  contactId: string | null;
+  labelId: string;
   labelName: string;
   name: string;
   phoneCandidate: string | null;
-  phoneSource: "jid" | "tel_link" | "visible_international" | "none";
+  phoneSource: "jid" | "tel_link" | "visible_international" | "href_phone" | "none";
+  phoneStatus: PhoneResolutionStatus;
   kind: ContactKind;
   strategy: string;
 }
@@ -79,6 +94,30 @@ export interface ContactExportProgress {
   updatedAt: string;
 }
 
+export interface ContactExportMetrics {
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  contactsPerSecond: number | null;
+  labelsProcessed: number;
+  rowScans: number;
+  scrollOperations: number;
+  visualOperations: number;
+  chatsOpened: number;
+}
+
+export interface ContactExportLabelResult {
+  labelId: string;
+  labelName: string;
+  reportedCount: number | null;
+  collectedUniqueContacts: number;
+  resolvedPhones: number;
+  unresolvedPhones: number;
+  rowScans: number;
+  scrollOperations: number;
+  scopeStrategy: string;
+}
+
 export interface ContactExportDiagnostic {
   status: ContactExportDiagnosticStatus;
   lastSuccessfulStep: string | null;
@@ -88,6 +127,8 @@ export interface ContactExportDiagnostic {
   expectedElement: string | null;
   candidateCount: number;
   processedCount: number;
+  reportedCount: number | null;
+  collectedUniqueContacts: number | null;
   lastContactCorrelationId: string | null;
   errorCode: ContactExportErrorCode | null;
   errorMessage: string | null;
@@ -105,6 +146,8 @@ export interface ContactExportState {
   problems: ContactExportProblem[];
   summary: ContactExportSummary;
   progress: ContactExportProgress | null;
+  metrics: ContactExportMetrics | null;
+  labelResults: ContactExportLabelResult[];
   diagnostic: ContactExportDiagnostic;
   updatedAt: string;
 }
