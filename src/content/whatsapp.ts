@@ -20,7 +20,7 @@ import {
   collectContactsForLabels,
   detectWhatsAppLabels
 } from "../contact-export/whatsapp-contact-adapter";
-import { CONTACT_EXPORT_ERROR_CODES } from "../contact-export/types";
+import { CONTACT_EXPORT_ERROR_CODES, type ContactExportProgress } from "../contact-export/types";
 
 const proofControllers = new Map<string, AbortController>();
 const contactExportControllers = new Map<string, AbortController>();
@@ -39,15 +39,7 @@ function abortActiveContactExports(reason: string): void {
 
 async function publishContactExportProgress(
   operationId: string,
-  progress: {
-    processed: number;
-    totalHint: number | null;
-    percent: number | null;
-    currentLabel: string | null;
-    labelIndex: number;
-    totalLabels: number;
-    currentContact: number;
-  }
+  progress: Omit<ContactExportProgress, "operationId" | "updatedAt">
 ): Promise<void> {
   try {
     await chrome.runtime.sendMessage({
@@ -146,13 +138,24 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         const controller = new AbortController();
         contactExportControllers.set(payload.operationId, controller);
         try {
-          const candidates = await collectContactsForLabels(payload.labels, {
+          const collection = await collectContactsForLabels(payload.labels, {
             signal: controller.signal,
             progress: (progress) => publishContactExportProgress(payload.operationId, progress)
           });
+          await publishContactExportProgress(payload.operationId, {
+            processed: collection.candidates.length,
+            totalHint: collection.candidates.length,
+            percent: 100,
+            currentLabel: payload.labels.at(-1)?.name ?? null,
+            labelIndex: payload.labels.length,
+            totalLabels: payload.labels.length,
+            currentContact: collection.candidates.length,
+            metrics: collection.metrics,
+            labelResults: collection.labelResults
+          });
           sendResponse(success<InternalResponseMap["WA_CONTACT_EXPORT_ANALYZE"]>(message.requestId, {
-            candidates,
-            strategy: "semantic-label-iteration"
+            candidates: collection.candidates,
+            strategy: collection.strategy
           }));
         } catch (error) {
           if (error instanceof DOMException && error.name === "AbortError") {
@@ -161,7 +164,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
               details: {
                 contactExportCode: CONTACT_EXPORT_ERROR_CODES.cancelled,
                 stage: "cancelled",
-                strategy: "semantic-label-iteration"
+                strategy: "label-scoped-phone-first-no-chat-opening"
               }
             });
           }
