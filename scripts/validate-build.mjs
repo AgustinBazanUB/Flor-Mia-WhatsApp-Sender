@@ -49,7 +49,7 @@ const popupPosition = popupHtml.indexOf(popupModule);
 if (optimisticPosition < 0 || popupPosition <= optimisticPosition) {
   throw new Error("El popup debe cargar optimistic-controls.js antes de popup.js.");
 }
-if (!popupHtml.includes("../contacts/index.html") || !contactHtml.includes("Exportar Excel")) {
+if (!optimisticControls.includes("../contacts/index.html") || !contactHtml.includes("Exportar Excel")) {
   throw new Error("El build no contiene el acceso o la página de exportación de contactos.");
 }
 if (!contactHtml.includes("PHONE_UNRESOLVED") || !contactHtml.includes("Chats abiertos") || !contactHtml.includes("codex-json")) {
