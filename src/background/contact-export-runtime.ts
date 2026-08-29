@@ -2,13 +2,13 @@ import { createId } from "../shared/ids";
 import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
 import { INTERNAL_MESSAGE_TYPES, type InternalRequestMap } from "../shared/protocol";
 import { deduplicateContactCandidates } from "../contact-export/contact-deduplicator";
-import { ContactExportStore } from "../contact-export/contact-export-store";
+import type { ContactExportStore } from "../contact-export/contact-export-store";
 import {
   CONTACT_EXPORT_ERROR_CODES,
   type ContactExportProgress,
   type ContactExportState
 } from "../contact-export/types";
-import { WhatsAppTransport } from "./whatsapp-transport";
+import type { WhatsAppTransport } from "./whatsapp-transport";
 
 export class ContactExportRuntime {
   constructor(
