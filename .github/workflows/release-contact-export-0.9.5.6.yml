@@ -1,0 +1,36 @@
+name: release contact export 0.9.5.6
+
+on:
+  push:
+    branches:
+      - feat/contact-export
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/contact-export
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply 0.9.5.6 patch
+        run: python scripts/release-0.9.5.6.py
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify before commit
+        run: npm run verify
+      - name: Commit release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests manifest.json package.json package-lock.json scripts/validate-build.mjs docs/whatsapp-contact-export.md docs/contact-export-release-notes-0.9.5.6.md
+          git commit -m "fix: resolve LID phones from historical metadata in 0.9.5.6"
+          git push origin HEAD:feat/contact-export
