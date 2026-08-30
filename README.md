@@ -2,6 +2,14 @@
 
 Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario.
 
+## Contactos de WhatsApp — 0.9.6
+
+La release 0.9.6 agrega **Paso 1.5 · Agregar contactos por frase** entre la selección de etiquetas y el extractor existente. Usa la búsqueda global estructurada de WhatsApp Web, valida de forma literal `contains` / `exact`, excluye mensajes enviados por el usuario cuando `Solo mensajes recibidos` está activo, deduplica contactos y muestra una vista previa antes de modificar WhatsApp.
+
+Al confirmar, agrega únicamente los contactos `NEW`, verifica la membresía de cada chat, permite pausa/reanudación/cancelación con checkpoint y actualiza el contador de la etiqueta antes de continuar al Paso 2. No elimina otras etiquetas y no abre chat por chat para descubrir la frase.
+
+Documentación: `docs/add-contacts-by-message.md` y `docs/contact-export-release-notes-0.9.6.md`.
+
 ## Contactos de WhatsApp — 0.9.5.4
 
 La rama de Contact Export incorpora una página interna **Contactos de WhatsApp → Exportar contactos de WhatsApp**. La versión 0.9.5.4 usa como fuente primaria el **estado local estructurado de etiquetas/chats de WhatsApp** y deja el crawler DOM como fallback. Mantiene el enfoque **label-scoped + phone-first + no-chat-opening**:
