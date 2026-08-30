@@ -12,7 +12,7 @@
         <div>
           <span class="eyebrow">Flor Mía WhatsApp Sender · versión <strong id="module-version">—</strong></span>
           <h1>Contactos de WhatsApp</h1>
-          <p>Exportá contactos de tus etiquetas o listas de WhatsApp Business a un Excel local, sin abrir chats uno por uno, leer conversaciones ni enviar datos a terceros.</p>
+          <p>Administrá y exportá contactos de tus etiquetas o listas de WhatsApp Business desde el navegador, con validación local y sin recorrer los chats uno por uno.</p>
         </div>
         <a class="button button--secondary" href="../popup/index.html">Volver al sender</a>
       </header>
@@ -33,11 +33,11 @@
         <div class="section-heading">
           <div>
             <span class="eyebrow">Paso 1</span>
-            <h2>Etiquetas detectadas</h2>
+            <h2>Seleccionar lista</h2>
           </div>
           <strong id="label-count">0</strong>
         </div>
-        <p>La detección usa la interfaz local de WhatsApp Web. No consulta endpoints privados.</p>
+        <p>Detectá las etiquetas de WhatsApp. Para agregar contactos por frase elegí <strong>una sola lista</strong>; para el exportador podés seguir seleccionando una o varias.</p>
         <div class="actions">
           <button id="detect-labels" class="button button--primary" type="button">Detectar etiquetas</button>
           <button id="select-all" class="button button--secondary" type="button" disabled>Seleccionar todas</button>
@@ -48,15 +48,100 @@
         </div>
       </section>
 
+      <section id="message-contact-card" class="card message-contact-card">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Paso 1.5</span>
+            <h2>Agregar contactos por frase</h2>
+          </div>
+          <strong id="message-status">Esperando una lista</strong>
+        </div>
+
+        <div class="selected-list-summary">
+          <div><span>Lista seleccionada</span><strong id="message-target-name">—</strong></div>
+          <div><span>Contactos actuales</span><strong id="message-target-count">—</strong></div>
+        </div>
+
+        <p>Buscá personas que alguna vez te hayan enviado una frase. La búsqueda usa el índice global estructurado de WhatsApp y después vuelve a validar cada coincidencia localmente.</p>
+        <div class="message-search-form">
+          <label class="field field--wide">
+            <span>Frase</span>
+            <input id="message-search-text" type="text" maxlength="500" placeholder="Hola, quiero más información" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Tipo de coincidencia</span>
+            <select id="message-match-mode">
+              <option value="contains">Contiene esta frase</option>
+              <option value="exact">Mensaje exacto</option>
+            </select>
+          </label>
+        </div>
+        <div class="check-grid">
+          <label><input id="message-inbound-only" type="checkbox" checked /> Solo mensajes recibidos por mí</label>
+          <label><input id="message-exclude-groups" type="checkbox" checked /> Excluir grupos</label>
+          <label><input id="message-exclude-communities" type="checkbox" checked /> Excluir comunidades</label>
+          <label><input id="message-exclude-channels" type="checkbox" checked /> Excluir canales</label>
+        </div>
+        <div class="actions">
+          <button id="message-search" class="button button--primary" type="button" disabled>Buscar contactos</button>
+          <button id="message-reset" class="button button--secondary" type="button">Limpiar búsqueda</button>
+        </div>
+        <p class="hint"><strong>Importante:</strong> no se abre cada chat para descubrir la frase. Los mensajes enviados por vos no cuentan cuando “Solo mensajes recibidos” está activo; una dirección dudosa tampoco se acepta silenciosamente.</p>
+
+        <div id="message-preview" class="message-preview" hidden>
+          <div class="stats stats--message">
+            <div><strong id="message-stat-messages">0</strong><span>Mensajes encontrados</span></div>
+            <div><strong id="message-stat-unique">0</strong><span>Conversaciones únicas</span></div>
+            <div><strong id="message-stat-existing">0</strong><span>Ya pertenecen</span></div>
+            <div><strong id="message-stat-new">0</strong><span>Nuevos contactos</span></div>
+            <div><strong id="message-stat-unresolved">0</strong><span>No resolvibles</span></div>
+            <div><strong id="message-stat-added">0</strong><span>Agregados</span></div>
+          </div>
+          <div class="table-wrap">
+            <table class="message-table">
+              <thead><tr><th>Nombre</th><th>Teléfono</th><th>Coincidencia</th><th>Estado</th></tr></thead>
+              <tbody id="message-preview-body"><tr><td colspan="4" class="empty">Todavía no hay resultados.</td></tr></tbody>
+            </table>
+          </div>
+          <p id="message-preview-note" class="hint">La vista previa muestra únicamente el mensaje coincidente o un fragmento acotado.</p>
+          <div class="actions">
+            <button id="message-assign" class="button button--primary" type="button" disabled>Agregar contactos</button>
+            <button id="message-pause" class="button button--secondary" type="button" hidden>Pausar</button>
+            <button id="message-resume" class="button button--primary" type="button" hidden>Reanudar</button>
+            <button id="message-cancel" class="button button--danger" type="button" hidden>Cancelar</button>
+            <button id="message-refresh-list" class="button button--secondary" type="button" disabled>Actualizar lista</button>
+          </div>
+          <div id="message-progress-wrap" class="progress-card" hidden>
+            <div class="progress-copy">
+              <strong>Agregando contactos…</strong>
+              <span id="message-progress-count">0 / 0</span>
+            </div>
+            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="message-progress-track">
+              <span id="message-progress-bar"></span>
+            </div>
+            <div class="progress-meta">
+              <span id="message-progress-percent">0 %</span>
+              <span id="message-progress-contact">Contacto actual: —</span>
+              <span id="message-progress-state">Estado: —</span>
+            </div>
+          </div>
+          <div id="message-failures" class="message-failures" hidden>
+            <h3>Contactos que necesitan revisión</h3>
+            <ul id="message-failure-list"></ul>
+          </div>
+        </div>
+        <p id="message-error" class="error" role="alert" hidden></p>
+      </section>
+
       <section class="card">
         <div class="section-heading">
           <div>
             <span class="eyebrow">Paso 2</span>
-            <h2>Analizar contactos</h2>
+            <h2>Analizar / exportar contactos</h2>
           </div>
           <strong id="selected-count">0 seleccionadas</strong>
         </div>
-        <p>El análisis es <strong>phone-first</strong> y queda limitado a la etiqueta seleccionada. Si no puede demostrar el teléfono, lo informa como <strong>PHONE_UNRESOLVED</strong> y no inventa datos.</p>
+        <p>El análisis existente continúa siendo <strong>phone-first</strong> y limitado a la etiqueta seleccionada. Si acabás de agregar contactos, usá <strong>Actualizar lista</strong> en el Paso 1.5 antes de continuar.</p>
         <div class="actions">
           <button id="analyze" class="button button--primary" type="button" disabled>Analizar contactos</button>
           <button id="cancel" class="button button--danger" type="button" hidden>Cancelar análisis</button>
@@ -147,11 +232,12 @@
           <div><dt>Únicos recolectados</dt><dd id="diagnostic-collected">—</dd></div>
           <div><dt>Candidatos encontrados</dt><dd id="diagnostic-candidates">0</dd></div>
         </dl>
+        <p class="hint">El reporte 0.9.6 agrega métricas de “Add Contacts By Message” sin incluir nombres, teléfonos ni mensajes coincidentes completos.</p>
         <p id="ui-error" class="error" role="alert" hidden></p>
       </section>
 
       <footer>
-        <strong>Privacidad:</strong> teléfono, nombre y etiquetas permanecen dentro de tu navegador. Los resultados temporales se guardan sólo en la sesión de la extensión.
+        <strong>Privacidad:</strong> teléfono, nombre, etiquetas y resultados temporales permanecen dentro de tu navegador. La búsqueda no envía datos a servicios externos ni recopila conversaciones completas.
       </footer>
     </main>
     <script type="module" src="./page.js"></script>
