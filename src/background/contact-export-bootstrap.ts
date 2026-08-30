@@ -1,5 +1,6 @@
 import { ContactExportRuntime } from "./contact-export-runtime";
 import { ContactExportStore } from "../contact-export/contact-export-store";
+import { MessageContactStore } from "../contact-export/message-contact-store";
 import { createContactExportDiagnosticBundle } from "../contact-export/contact-export-diagnostics";
 import { ERROR_CODES, ExtensionError, serializeError } from "../shared/errors";
 import {
@@ -17,6 +18,7 @@ const progressChannel = "flormia_contact_export_progress_v1";
 const lidResolveChannel = "flormia_contact_export_lid_resolve_v1";
 const stateStore = new StateStore();
 const runtime = new ContactExportRuntime(new ContactExportStore(), new WhatsAppTransport());
+const messageContactStore = new MessageContactStore();
 
 function contactPageSender(sender: chrome.runtime.MessageSender): boolean {
   return sender.id === chrome.runtime.id
@@ -58,7 +60,8 @@ async function dispatchContactPage(request: InternalEnvelope): Promise<unknown> 
       return runtime.reset();
     case INTERNAL_MESSAGE_TYPES.generateDiagnosticReport: {
       const state = await runtime.getState();
-      return createContactExportDiagnosticBundle(state, chrome.runtime.getManifest().version);
+      const messageState = await messageContactStore.load();
+      return createContactExportDiagnosticBundle(state, chrome.runtime.getManifest().version, new Date().toISOString(), messageState);
     }
     default:
       throw new ExtensionError(ERROR_CODES.protocolError, "Acción del módulo Contactos no admitida.", { recoverable: false });
