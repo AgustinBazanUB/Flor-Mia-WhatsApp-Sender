@@ -16,8 +16,9 @@ function isAllowedNetlifyPreview(origin: string): boolean {
   }
   if (url.protocol !== "https:" || url.port) return false;
   const match = /^deploy-preview-(\d+)--([a-z0-9-]+)\.netlify\.app$/i.exec(url.hostname);
-  if (!match) return false;
-  return previewSiteNames.has(match[2].toLowerCase());
+  const siteName = match?.[2];
+  if (!siteName) return false;
+  return previewSiteNames.has(siteName.toLowerCase());
 }
 
 export const WEB_APP_MATCH_PATTERNS = Object.freeze(exactPatterns);
