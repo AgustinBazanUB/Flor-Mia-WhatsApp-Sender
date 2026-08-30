@@ -95,13 +95,21 @@ if (!manifest.host_permissions.includes("https://web.whatsapp.com/*")) throw new
 if (!manifest.host_permissions.includes("https://appintegralflormia.netlify.app/*")) {
   throw new Error("Falta el permiso acotado para la Web App Integral Flor Mía de producción.");
 }
-if (!manifest.host_permissions.includes("https://deploy-preview-7--appintegralflormia.netlify.app/*")) {
-  throw new Error("Falta el permiso acotado para recuperar el bridge de Deploy Preview 7.");
+if (manifest.host_permissions.includes("https://*.netlify.app/*")) {
+  throw new Error("El permiso host no debe ampliarse a todos los sitios Netlify.");
 }
 const webAppScript = manifest.content_scripts.find((item) => item.js.includes("content/web-app-bridge.js"));
 if (!webAppScript) throw new Error("Falta el puente de la Web-App.");
 if (!webAppScript.matches?.includes("https://appintegralflormia.netlify.app/*")) {
   throw new Error("El bridge no se inyecta en la Web App Integral Flor Mía de producción.");
+}
+if (!webAppScript.matches?.includes("https://*.netlify.app/*")) {
+  throw new Error("El bridge no declara el match de Netlify requerido para Deploy Previews.");
+}
+const previewGlobs = new Set(webAppScript.include_globs || []);
+if (!previewGlobs.has("https://deploy-preview-*--appintegralflormia.netlify.app/*")
+  || !previewGlobs.has("https://deploy-preview-*--app-integral-fm.netlify.app/*")) {
+  throw new Error("El bridge no restringe las Deploy Previews a los sitios de Flor Mía.");
 }
 if (!manifest.permissions.includes("storage")) throw new Error("Falta el permiso de persistencia local.");
 if (!manifest.permissions.includes("alarms")) throw new Error("Falta el permiso alarms requerido por el scheduler MV3.");
@@ -110,4 +118,4 @@ const allowedExtensionPermissions = new Set(["storage", "alarms", "scripting"]);
 if (manifest.permissions.some((permission) => !allowedExtensionPermissions.has(permission))) {
   throw new Error("El manifest contiene permisos de extensión no previstos.");
 }
-console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3, sender, Contact Export y Add Contacts By Message presentes.`);
+console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3, sender, Contact Export, Add Contacts By Message y bridge dinámico de Deploy Preview presentes.`);
