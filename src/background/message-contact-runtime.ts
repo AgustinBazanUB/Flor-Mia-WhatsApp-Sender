@@ -9,8 +9,8 @@ import {
   type MessageContactWorkflowState,
   type MessageSearchOptions
 } from "../contact-export/add-contacts-by-message";
-import { ContactExportStore } from "../contact-export/contact-export-store";
-import { MessageContactStore } from "../contact-export/message-contact-store";
+import type { ContactExportStore } from "../contact-export/contact-export-store";
+import type { MessageContactStore } from "../contact-export/message-contact-store";
 import type { MessageContactRequestMap } from "../contact-export/message-contact-protocol";
 import {
   assignWhatsAppChatToLabel,
