@@ -1,5 +1,6 @@
 import "./service-worker";
 import "./contact-export-bootstrap";
+import "./message-contact-bootstrap";
 import { WEB_APP_MATCH_PATTERNS } from "../config/origins";
 import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
 import type { WhatsAppPreflightResult } from "../shared/state";

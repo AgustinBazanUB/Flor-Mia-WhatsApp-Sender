@@ -1,4 +1,5 @@
 import { sanitizeDiagnosticText, sanitizeStackTrace } from "../diagnostics/sanitizer";
+import type { MessageContactWorkflowState } from "./add-contacts-by-message";
 import type { ContactExportState } from "./types";
 
 export interface ContactExportDiagnosticBundle {
@@ -15,14 +16,54 @@ function valueOrDash(value: unknown): string {
 export function createContactExportDiagnosticBundle(
   state: ContactExportState,
   extensionVersion: string,
-  generatedAt = new Date().toISOString()
+  generatedAt = new Date().toISOString(),
+  messageContactState?: MessageContactWorkflowState | null
 ): ContactExportDiagnosticBundle {
   const diagnostic = state.diagnostic;
   const selectedLabels = state.labels
     .filter((label) => state.selectedLabelIds.includes(label.id))
     .map((label) => sanitizeDiagnosticText(label.name, { maxStringLength: 100 }));
+  const messageDiagnostic = messageContactState ? {
+    feature: "Add Contacts By Message",
+    status: messageContactState.status,
+    targetList: messageContactState.targetLabel?.name
+      ? sanitizeDiagnosticText(messageContactState.targetLabel.name, { maxStringLength: 100 })
+      : null,
+    searchPhrase: messageContactState.search.searchText
+      ? sanitizeDiagnosticText(messageContactState.search.searchText, { maxStringLength: 200 })
+      : null,
+    matchMode: messageContactState.search.mode,
+    incomingOnly: messageContactState.search.inboundOnly,
+    messagesFound: messageContactState.summary.messagesFound,
+    uniqueContacts: messageContactState.summary.uniqueContacts,
+    alreadyInList: messageContactState.summary.alreadyInList,
+    newContacts: messageContactState.summary.newContacts,
+    unresolved: messageContactState.summary.unresolved,
+    successfullyAdded: messageContactState.summary.added,
+    failed: messageContactState.summary.failed,
+    targetCountBefore: messageContactState.targetContactCountBefore,
+    targetCountAfter: messageContactState.targetContactCountAfter,
+    currentStep: messageContactState.diagnostic.currentStep,
+    lastSuccessfulStep: messageContactState.diagnostic.lastSuccessfulStep,
+    lastSuccessfulContact: messageContactState.diagnostic.lastSuccessfulContactId,
+    failure: messageContactState.diagnostic.errorCode,
+    failureMessage: messageContactState.diagnostic.errorMessage
+      ? sanitizeDiagnosticText(messageContactState.diagnostic.errorMessage, { maxStringLength: 500 })
+      : null,
+    strategy: messageContactState.diagnostic.strategy,
+    metrics: messageContactState.metrics ? {
+      durationMs: messageContactState.metrics.durationMs,
+      searchPages: messageContactState.metrics.searchPages,
+      messagesScanned: messageContactState.metrics.messagesScanned,
+      messagesMatched: messageContactState.metrics.messagesMatched,
+      directionUnknown: messageContactState.metrics.directionUnknown,
+      excludedNonContacts: messageContactState.metrics.excludedNonContacts,
+      chatsOpened: messageContactState.metrics.chatsOpened,
+      visualOperations: messageContactState.metrics.visualOperations
+    } : null
+  } : null;
   const report = {
-    reportSchemaVersion: 2,
+    reportSchemaVersion: 3,
     reportType: "CONTACT_EXPORT_DIAGNOSTIC",
     generatedAt,
     extension: {
@@ -63,13 +104,20 @@ export function createContactExportDiagnosticBundle(
         scopeStrategy: result.scopeStrategy
       }))
     },
+    addContactsByMessage: messageDiagnostic,
     privacy: {
       localOnly: true,
-      excluded: ["contact_names", "phone_numbers", "messages", "conversation_content", "cookies", "tokens"],
+      excluded: ["contact_names", "phone_numbers", "matching_message_bodies", "conversation_history", "cookies", "tokens"],
+      searchQueryIncluded: true,
       contactIdentifiers: "anonymous-correlation-only"
     },
     probableFiles: [
       "src/contact-export/whatsapp-contact-adapter.ts",
+      "src/contact-export/whatsapp-main-world-resolver.ts",
+      "src/contact-export/whatsapp-message-search-main-world.ts",
+      "src/contact-export/add-contacts-by-message.ts",
+      "src/contact-export/message-contact-store.ts",
+      "src/background/message-contact-runtime.ts",
       "src/contact-export/contact-deduplicator.ts",
       "src/contact-export/contact-export-store.ts",
       "src/background/contact-export-runtime.ts",
@@ -116,7 +164,25 @@ export function createContactExportDiagnosticBundle(
     `Operaciones visuales: ${valueOrDash(state.metrics?.visualOperations)}`,
     `Chats abiertos durante extracción normal: ${valueOrDash(state.metrics?.chatsOpened)}`,
     "",
-    "Privacidad: este reporte no incluye nombres de contactos, teléfonos completos ni contenido de conversaciones."
+    "ADD CONTACTS BY MESSAGE",
+    `Feature: ${messageDiagnostic ? "Add Contacts By Message" : "—"}`,
+    `Target List: ${valueOrDash(messageDiagnostic?.targetList)}`,
+    `Search phrase: ${valueOrDash(messageDiagnostic?.searchPhrase)}`,
+    `Match mode: ${valueOrDash(messageDiagnostic?.matchMode)}`,
+    `Incoming only: ${valueOrDash(messageDiagnostic?.incomingOnly)}`,
+    `Messages found: ${valueOrDash(messageDiagnostic?.messagesFound)}`,
+    `Unique contacts: ${valueOrDash(messageDiagnostic?.uniqueContacts)}`,
+    `Already in list: ${valueOrDash(messageDiagnostic?.alreadyInList)}`,
+    `New: ${valueOrDash(messageDiagnostic?.newContacts)}`,
+    `Successfully added: ${valueOrDash(messageDiagnostic?.successfullyAdded)}`,
+    `Failed: ${valueOrDash(messageDiagnostic?.failed)}`,
+    `Current step: ${valueOrDash(messageDiagnostic?.currentStep)}`,
+    `Last successful contact: ${valueOrDash(messageDiagnostic?.lastSuccessfulContact)}`,
+    `Failure: ${valueOrDash(messageDiagnostic?.failure)}`,
+    `Strategy: ${valueOrDash(messageDiagnostic?.strategy)}`,
+    `Search chats opened: ${valueOrDash(messageDiagnostic?.metrics?.chatsOpened)}`,
+    "",
+    "Privacidad: el reporte no incluye nombres de contactos, teléfonos completos, mensajes coincidentes completos ni historial de conversaciones. La frase de búsqueda sí se incluye para poder reproducir el diagnóstico."
   ];
 
   return {

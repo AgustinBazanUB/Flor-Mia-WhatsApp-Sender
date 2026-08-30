@@ -11,15 +11,16 @@ import {
 import { isAllowedWebAppOrigin } from "../src/config/origins";
 
 describe("typed protocol", () => {
-  it("accepts only the explicit Flor Mía and local development origins", () => {
+  it("accepts Flor Mía production, local development and numeric Flor Mía Deploy Previews only", () => {
     expect(isAllowedWebAppOrigin("https://app-integral-fm.netlify.app")).toBe(true);
+    expect(isAllowedWebAppOrigin("https://appintegralflormia.netlify.app")).toBe(true);
     expect(isAllowedWebAppOrigin("https://deploy-preview-7--app-integral-fm.netlify.app")).toBe(true);
-    expect(isAllowedWebAppOrigin("https://deploy-preview-7--appintegralflormia.netlify.app")).toBe(true);
-    expect(isAllowedWebAppOrigin("https://deploy-preview-8--app-integral-fm.netlify.app")).toBe(true);
-    expect(isAllowedWebAppOrigin("https://deploy-preview-8--appintegralflormia.netlify.app")).toBe(true);
+    expect(isAllowedWebAppOrigin("https://deploy-preview-15--appintegralflormia.netlify.app")).toBe(true);
+    expect(isAllowedWebAppOrigin("https://deploy-preview-99--app-integral-fm.netlify.app")).toBe(true);
     expect(isAllowedWebAppOrigin("http://localhost:5173")).toBe(true);
     expect(isAllowedWebAppOrigin("https://app-integral-fm.netlify.app.evil.example")).toBe(false);
-    expect(isAllowedWebAppOrigin("https://deploy-preview-9--appintegralflormia.netlify.app")).toBe(false);
+    expect(isAllowedWebAppOrigin("https://deploy-preview-15--otro-sitio.netlify.app")).toBe(false);
+    expect(isAllowedWebAppOrigin("https://deploy-preview-latest--appintegralflormia.netlify.app")).toBe(false);
     expect(isAllowedWebAppOrigin("https://example.com")).toBe(false);
   });
   it("creates and validates internal envelopes", () => {

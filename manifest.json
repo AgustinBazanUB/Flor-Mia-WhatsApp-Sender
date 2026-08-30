@@ -3,8 +3,8 @@
   "name": "Flor Mía WhatsApp Sender",
   "short_name": "Flor Mía WA",
   "description": "Extensión privada para ejecutar y verificar envíos preparados por Flor Mía.",
-  "version": "0.9.5.6",
-  "version_name": "0.9.5.6",
+  "version": "0.9.6",
+  "version_name": "0.9.6",
   "minimum_chrome_version": "120",
   "action": {
     "default_title": "Flor Mía WhatsApp Sender",
@@ -23,10 +23,6 @@
     "https://web.whatsapp.com/*",
     "https://appintegralflormia.netlify.app/*",
     "https://app-integral-fm.netlify.app/*",
-    "https://deploy-preview-7--app-integral-fm.netlify.app/*",
-    "https://deploy-preview-7--appintegralflormia.netlify.app/*",
-    "https://deploy-preview-8--app-integral-fm.netlify.app/*",
-    "https://deploy-preview-8--appintegralflormia.netlify.app/*",
     "http://localhost:5173/*"
   ],
   "content_scripts": [
@@ -43,10 +39,14 @@
       "matches": [
         "https://appintegralflormia.netlify.app/*",
         "https://app-integral-fm.netlify.app/*",
-        "https://deploy-preview-7--app-integral-fm.netlify.app/*",
-        "https://deploy-preview-7--appintegralflormia.netlify.app/*",
-        "https://deploy-preview-8--app-integral-fm.netlify.app/*",
-        "https://deploy-preview-8--appintegralflormia.netlify.app/*",
+        "https://*.netlify.app/*",
+        "http://localhost:5173/*"
+      ],
+      "include_globs": [
+        "https://appintegralflormia.netlify.app/*",
+        "https://app-integral-fm.netlify.app/*",
+        "https://deploy-preview-*--appintegralflormia.netlify.app/*",
+        "https://deploy-preview-*--app-integral-fm.netlify.app/*",
         "http://localhost:5173/*"
       ],
       "js": [

@@ -42,7 +42,7 @@ if (sourceManifest.version !== packageMetadata.version) {
 if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) {
   throw new Error("package-lock.json y package.json deben mantener coherente la versión del workspace npm.");
 }
-if (sourceManifest.version !== "0.9.5.6") throw new Error("La release esperada para el extractor estructurado es 0.9.5.6.");
+if (sourceManifest.version !== "0.9.6") throw new Error("La release esperada es 0.9.6.");
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
 const optimisticPosition = popupHtml.indexOf(optimisticScript);
@@ -54,7 +54,13 @@ if (!optimisticControls.includes("../contacts/index.html") || !contactHtml.inclu
   throw new Error("El build no contiene el acceso o la página de exportación de contactos.");
 }
 if (!contactHtml.includes("PHONE_UNRESOLVED") || !contactHtml.includes("Chats abiertos") || !contactHtml.includes("codex-json")) {
-  throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 0.9.5.6.");
+  throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 0.9.6.");
+}
+if (!contactHtml.includes("Paso 1.5") || !contactHtml.includes("Agregar contactos por frase") || !contactHtml.includes("Solo mensajes recibidos por mí") || !contactHtml.includes("Actualizar lista")) {
+  throw new Error("El build no contiene el Paso 1.5 Add Contacts By Message de 0.9.6.");
+}
+if (!contactPage.includes("MESSAGE_CONTACT_SEARCH") || !contactPage.includes("MESSAGE_CONTACT_ASSIGN") || !contactPage.includes("message-refresh-list")) {
+  throw new Error("La página de Contactos no contiene el protocolo del Paso 1.5 de 0.9.6.");
 }
 if (!contactPage.includes("flormia_contact_export_diagnostic_") || !contactPage.includes("application/json")) {
   throw new Error("El build no contiene descarga de diagnóstico JSON para Contact Export.");
@@ -69,7 +75,10 @@ if (!backgroundWorker.includes("message-user-receipt") || !backgroundWorker.incl
   throw new Error("El build no contiene la correlación histórica LID→PN no visual de 0.9.5.6.");
 }
 if (!backgroundWorker.includes("virtualized-lid-hydration") || !whatsappContent.includes("flormia_contact_export_lid_resolve_v1")) {
-  throw new Error("El build no contiene la hidratación virtualizada LID→teléfono de 0.9.5.6.");
+  throw new Error("El build no contiene la hidratación virtualizada LID→teléfono heredada por 0.9.6.");
+}
+if (!backgroundWorker.includes("main-world-global-msg-search") || !backgroundWorker.includes("WAWebCollections") || !backgroundWorker.includes("LIST_ASSIGNMENT_NOT_CONFIRMED") || !backgroundWorker.includes("main-world-refresh-after-message-assignment")) {
+  throw new Error("El Service Worker no contiene búsqueda global, asignación verificada y refresh del Paso 1.5.");
 }
 if (!optimisticControls.includes("Pausando…") || !optimisticControls.includes("Deteniendo…")) {
   throw new Error("El build no contiene la capa de confirmación inmediata para Pausa/Detener.");
@@ -86,13 +95,21 @@ if (!manifest.host_permissions.includes("https://web.whatsapp.com/*")) throw new
 if (!manifest.host_permissions.includes("https://appintegralflormia.netlify.app/*")) {
   throw new Error("Falta el permiso acotado para la Web App Integral Flor Mía de producción.");
 }
-if (!manifest.host_permissions.includes("https://deploy-preview-7--appintegralflormia.netlify.app/*")) {
-  throw new Error("Falta el permiso acotado para recuperar el bridge de Deploy Preview 7.");
+if (manifest.host_permissions.includes("https://*.netlify.app/*")) {
+  throw new Error("El permiso host no debe ampliarse a todos los sitios Netlify.");
 }
 const webAppScript = manifest.content_scripts.find((item) => item.js.includes("content/web-app-bridge.js"));
 if (!webAppScript) throw new Error("Falta el puente de la Web-App.");
 if (!webAppScript.matches?.includes("https://appintegralflormia.netlify.app/*")) {
   throw new Error("El bridge no se inyecta en la Web App Integral Flor Mía de producción.");
+}
+if (!webAppScript.matches?.includes("https://*.netlify.app/*")) {
+  throw new Error("El bridge no declara el match de Netlify requerido para Deploy Previews.");
+}
+const previewGlobs = new Set(webAppScript.include_globs || []);
+if (!previewGlobs.has("https://deploy-preview-*--appintegralflormia.netlify.app/*")
+  || !previewGlobs.has("https://deploy-preview-*--app-integral-fm.netlify.app/*")) {
+  throw new Error("El bridge no restringe las Deploy Previews a los sitios de Flor Mía.");
 }
 if (!manifest.permissions.includes("storage")) throw new Error("Falta el permiso de persistencia local.");
 if (!manifest.permissions.includes("alarms")) throw new Error("Falta el permiso alarms requerido por el scheduler MV3.");
@@ -101,4 +118,4 @@ const allowedExtensionPermissions = new Set(["storage", "alarms", "scripting"]);
 if (manifest.permissions.some((permission) => !allowedExtensionPermissions.has(permission))) {
   throw new Error("El manifest contiene permisos de extensión no previstos.");
 }
-console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3, sender y Contact Export phone-first presentes.`);
+console.log(`Build validado: Flor Mía WhatsApp Sender ${manifest.version}, Manifest V3, sender, Contact Export, Add Contacts By Message y bridge dinámico de Deploy Preview presentes.`);

@@ -12,13 +12,18 @@ const extraOrigins = (process.env.FLORMIA_EXTRA_WEB_APP_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
-const webAppMatches = [...new Set([...originConfig.production, ...originConfig.development, ...extraOrigins])];
+const exactWebAppMatches = [...new Set([...originConfig.production, ...originConfig.development, ...extraOrigins])];
+const previewMatchPattern = originConfig.preview?.matchPattern;
+const previewIncludeGlobs = originConfig.preview?.includeGlobs || [];
+const webAppMatches = [...new Set([...exactWebAppMatches, ...(previewMatchPattern ? [previewMatchPattern] : [])])];
+const webAppIncludeGlobs = [...new Set([...exactWebAppMatches, ...previewIncludeGlobs])];
 
 const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
 const webAppScript = manifest.content_scripts.find((item) => item.js.includes("content/web-app-bridge.js"));
 if (!webAppScript) throw new Error("manifest.json no declara el puente de la Web-App.");
 webAppScript.matches = webAppMatches;
-manifest.host_permissions = [...new Set(["https://web.whatsapp.com/*", ...webAppMatches])];
+webAppScript.include_globs = webAppIncludeGlobs;
+manifest.host_permissions = [...new Set(["https://web.whatsapp.com/*", ...exactWebAppMatches])];
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(resolve(dist, "popup"), { recursive: true });
