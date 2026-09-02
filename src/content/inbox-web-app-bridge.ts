@@ -17,6 +17,16 @@ const INBOX_REQUEST_TYPES = new Set([
   WEB_APP_MESSAGE_TYPES.inboxSendTextRequest
 ]);
 
+interface InboxBridgeGuard {
+  dispose: () => void;
+}
+
+type InboxBridgeGlobal = typeof globalThis & {
+  __florMiaWhatsAppInboxBridgeV1?: InboxBridgeGuard;
+};
+
+const bridgeGlobal = globalThis as InboxBridgeGlobal;
+
 function post(request: WebAppEnvelope, type: WebAppEnvelope["type"], payload: Record<string, unknown>): void {
   window.postMessage({
     channel: WEB_APP_CHANNEL,
@@ -73,6 +83,19 @@ function onWindowMessage(event: MessageEvent<unknown>): void {
   });
 }
 
-if (isAllowedWebAppOrigin(window.location.origin)) {
+function installBridge(): void {
+  bridgeGlobal.__florMiaWhatsAppInboxBridgeV1?.dispose();
+  let active = true;
+  const dispose = (): void => {
+    if (!active) return;
+    active = false;
+    window.removeEventListener("message", onWindowMessage);
+    if (bridgeGlobal.__florMiaWhatsAppInboxBridgeV1?.dispose === dispose) {
+      delete bridgeGlobal.__florMiaWhatsAppInboxBridgeV1;
+    }
+  };
+  bridgeGlobal.__florMiaWhatsAppInboxBridgeV1 = { dispose };
   window.addEventListener("message", onWindowMessage);
 }
+
+if (isAllowedWebAppOrigin(window.location.origin)) installBridge();
