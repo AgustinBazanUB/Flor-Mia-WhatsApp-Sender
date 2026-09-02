@@ -7,7 +7,17 @@ import {
 } from "../shared/inbox-protocol";
 import { getInboxChats, getInboxMessages, sendInboxText } from "../whatsapp/inbox-adapter";
 
-chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+interface InboxRuntimeGuard {
+  dispose: () => void;
+}
+
+type InboxRuntimeGlobal = typeof globalThis & {
+  __florMiaWhatsAppInboxRuntimeV1?: InboxRuntimeGuard;
+};
+
+const runtimeGlobal = globalThis as InboxRuntimeGlobal;
+
+function onInboxMessage(message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void): boolean {
   if (sender.id !== chrome.runtime.id || !isInboxInternalEnvelope(message) || message.source !== "inbox-service-worker") return false;
 
   void (async () => {
@@ -37,4 +47,26 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   })();
 
   return true;
-});
+}
+
+function installRuntime(): void {
+  runtimeGlobal.__florMiaWhatsAppInboxRuntimeV1?.dispose();
+  let active = true;
+  const listener = onInboxMessage;
+  const dispose = (): void => {
+    if (!active) return;
+    active = false;
+    try {
+      chrome.runtime.onMessage.removeListener(listener);
+    } catch {
+      // Un runtime invalidado no debe ejecutar nuevas acciones sobre WhatsApp.
+    }
+    if (runtimeGlobal.__florMiaWhatsAppInboxRuntimeV1?.dispose === dispose) {
+      delete runtimeGlobal.__florMiaWhatsAppInboxRuntimeV1;
+    }
+  };
+  runtimeGlobal.__florMiaWhatsAppInboxRuntimeV1 = { dispose };
+  chrome.runtime.onMessage.addListener(listener);
+}
+
+installRuntime();
