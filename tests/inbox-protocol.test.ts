@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createInboxInternalEnvelope,
@@ -10,10 +11,8 @@ import {
 } from "../src/shared/inbox-protocol";
 import { getInboxChats } from "../src/whatsapp/inbox-adapter";
 
-const root = new URL("../", import.meta.url);
-
 async function source(path: string): Promise<string> {
-  return readFile(new URL(path, root), "utf8");
+  return readFile(resolve(process.cwd(), path), "utf8");
 }
 
 beforeEach(() => {
