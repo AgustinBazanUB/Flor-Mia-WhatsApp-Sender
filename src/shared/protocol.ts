@@ -14,6 +14,11 @@ import type {
 import type { DiagnosticReportBundle } from "../diagnostics/types";
 import type { CompatibilityOverallStatus } from "../compatibility/types";
 import type { ConversationContextProof } from "../whatsapp/conversation-context";
+import type {
+  WhatsAppInboxChat,
+  WhatsAppInboxConversation,
+  WhatsAppInboxSendResult
+} from "../whatsapp/inbox-adapter";
 
 export const INTERNAL_CHANNEL = "flor_mia_whatsapp_sender_internal";
 export const WEB_APP_CHANNEL = "flor_mia_whatsapp_extension";
@@ -47,9 +52,15 @@ export const INTERNAL_MESSAGE_TYPES = {
   whatsappReconcileStep: "WA_RECONCILE_STEP",
   whatsappOperationStage: "WA_OPERATION_STAGE",
   whatsappDiagnosticSnapshot: "WA_DIAGNOSTIC_SNAPSHOT",
+  whatsappInboxGetChats: "WA_INBOX_GET_CHATS",
+  whatsappInboxGetMessages: "WA_INBOX_GET_MESSAGES",
+  whatsappInboxSendText: "WA_INBOX_SEND_TEXT",
   webAppPing: "WEB_APP_PING",
   webAppPrepareCampaign: "WEB_APP_PREPARE_CAMPAIGN",
-  webAppCancelCampaign: "WEB_APP_CANCEL_CAMPAIGN"
+  webAppCancelCampaign: "WEB_APP_CANCEL_CAMPAIGN",
+  webAppInboxGetChats: "WEB_APP_INBOX_GET_CHATS",
+  webAppInboxGetMessages: "WEB_APP_INBOX_GET_MESSAGES",
+  webAppInboxSendText: "WEB_APP_INBOX_SEND_TEXT"
 } as const;
 
 export type InternalMessageType = (typeof INTERNAL_MESSAGE_TYPES)[keyof typeof INTERNAL_MESSAGE_TYPES];
@@ -91,9 +102,15 @@ export interface InternalRequestMap {
   WA_RECONCILE_STEP: ReconcileStepInput;
   WA_OPERATION_STAGE: { operationId: string; stage: "send_attempted"; baselineOutgoingIds: string[] };
   WA_DIAGNOSTIC_SNAPSHOT: Record<string, never>;
+  WA_INBOX_GET_CHATS: { limit?: number };
+  WA_INBOX_GET_MESSAGES: { chatId: string; limit?: number };
+  WA_INBOX_SEND_TEXT: { chatId: string; message: string };
   WEB_APP_PING: Record<string, never>;
   WEB_APP_PREPARE_CAMPAIGN: SerializedCampaignPayload;
   WEB_APP_CANCEL_CAMPAIGN: { campaignId: string };
+  WEB_APP_INBOX_GET_CHATS: { limit?: number };
+  WEB_APP_INBOX_GET_MESSAGES: { chatId: string; limit?: number };
+  WEB_APP_INBOX_SEND_TEXT: { chatId: string; message: string };
 }
 
 export interface InternalResponseMap {
@@ -130,9 +147,15 @@ export interface InternalResponseMap {
     activeProofControllers: number;
     runtimeMetrics: Record<string, unknown>;
   };
+  WA_INBOX_GET_CHATS: WhatsAppInboxChat[];
+  WA_INBOX_GET_MESSAGES: WhatsAppInboxConversation;
+  WA_INBOX_SEND_TEXT: WhatsAppInboxSendResult;
   WEB_APP_PING: FlorMiaExtensionStatus;
   WEB_APP_PREPARE_CAMPAIGN: CampaignPublicStatus;
   WEB_APP_CANCEL_CAMPAIGN: CampaignPublicStatus & { emitterReleased: true };
+  WEB_APP_INBOX_GET_CHATS: WhatsAppInboxChat[];
+  WEB_APP_INBOX_GET_MESSAGES: WhatsAppInboxConversation;
+  WEB_APP_INBOX_SEND_TEXT: WhatsAppInboxSendResult;
 }
 
 export interface InternalEnvelope<T extends InternalMessageType = InternalMessageType> {
@@ -218,7 +241,14 @@ export const WEB_APP_MESSAGE_TYPES = {
   deleteRequest: "FLORMIA_CAMPAIGN_DELETE",
   statusRequest: "FLORMIA_CAMPAIGN_STATUS_REQUEST",
   diagnosticReportRequest: "FLORMIA_DIAGNOSTIC_REPORT_REQUEST",
-  diagnosticReport: "FLORMIA_DIAGNOSTIC_REPORT"
+  diagnosticReport: "FLORMIA_DIAGNOSTIC_REPORT",
+  inboxGetChatsRequest: "FLORMIA_INBOX_GET_CHATS_REQUEST",
+  inboxChats: "FLORMIA_INBOX_CHATS",
+  inboxGetMessagesRequest: "FLORMIA_INBOX_GET_MESSAGES_REQUEST",
+  inboxMessages: "FLORMIA_INBOX_MESSAGES",
+  inboxSendTextRequest: "FLORMIA_INBOX_SEND_TEXT_REQUEST",
+  inboxTextSent: "FLORMIA_INBOX_TEXT_SENT",
+  inboxError: "FLORMIA_INBOX_ERROR"
 } as const;
 
 export type WebAppMessageType = (typeof WEB_APP_MESSAGE_TYPES)[keyof typeof WEB_APP_MESSAGE_TYPES];
@@ -266,7 +296,10 @@ const webAppInboundTypes = new Set<string>([
   WEB_APP_MESSAGE_TYPES.stopRequest,
   WEB_APP_MESSAGE_TYPES.deleteRequest,
   WEB_APP_MESSAGE_TYPES.statusRequest,
-  WEB_APP_MESSAGE_TYPES.diagnosticReportRequest
+  WEB_APP_MESSAGE_TYPES.diagnosticReportRequest,
+  WEB_APP_MESSAGE_TYPES.inboxGetChatsRequest,
+  WEB_APP_MESSAGE_TYPES.inboxGetMessagesRequest,
+  WEB_APP_MESSAGE_TYPES.inboxSendTextRequest
 ]);
 
 const webAppControlTypes = new Set<string>([
@@ -323,8 +356,30 @@ function isSerializedCampaignShape(payload: Record<string, unknown>): boolean {
     && typeof payload.totalRecipients === "number";
 }
 
+function validInboxPayload(type: unknown, payload: Record<string, unknown>): boolean {
+  if (type === WEB_APP_MESSAGE_TYPES.inboxGetChatsRequest) {
+    return payload.limit === undefined || (Number.isInteger(payload.limit) && Number(payload.limit) >= 1 && Number(payload.limit) <= 100);
+  }
+  if (type === WEB_APP_MESSAGE_TYPES.inboxGetMessagesRequest) {
+    return typeof payload.chatId === "string"
+      && payload.chatId.length > 0
+      && payload.chatId.length <= 200
+      && (payload.limit === undefined || (Number.isInteger(payload.limit) && Number(payload.limit) >= 1 && Number(payload.limit) <= 100));
+  }
+  if (type === WEB_APP_MESSAGE_TYPES.inboxSendTextRequest) {
+    return typeof payload.chatId === "string"
+      && payload.chatId.length > 0
+      && payload.chatId.length <= 200
+      && typeof payload.message === "string"
+      && payload.message.trim().length > 0
+      && payload.message.length <= 4_096;
+  }
+  return true;
+}
+
 export function isWebAppInboundEnvelope(value: unknown): value is WebAppEnvelope {
   if (!isRecord(value)) return false;
+  const payload = value.payload;
   return value.channel === WEB_APP_CHANNEL
     && value.protocolVersion === PROTOCOL_VERSION
     && typeof value.type === "string"
@@ -332,11 +387,12 @@ export function isWebAppInboundEnvelope(value: unknown): value is WebAppEnvelope
     && typeof value.requestId === "string"
     && value.requestId.length > 0
     && value.requestId.length <= 200
-    && isRecord(value.payload)
+    && isRecord(payload)
     && (value.campaignId === undefined || (typeof value.campaignId === "string" && value.campaignId.trim().length > 0 && value.campaignId.length <= 200))
     && (value.sequence === undefined || (Number.isInteger(value.sequence) && Number(value.sequence) >= 0))
-    && !containsForbiddenProductionControl(value.payload)
-    && !(value.campaignId !== undefined && typeof value.payload.campaignId === "string" && value.campaignId !== value.payload.campaignId)
-    && !(value.type === WEB_APP_MESSAGE_TYPES.prepare && !isSerializedCampaignShape(value.payload))
-    && !(webAppControlTypes.has(value.type) && !campaignIdFromEnvelope(value));
+    && !containsForbiddenProductionControl(payload)
+    && !(value.campaignId !== undefined && typeof payload.campaignId === "string" && value.campaignId !== payload.campaignId)
+    && !(value.type === WEB_APP_MESSAGE_TYPES.prepare && !isSerializedCampaignShape(payload))
+    && !(webAppControlTypes.has(value.type) && !campaignIdFromEnvelope(value))
+    && validInboxPayload(value.type, payload);
 }
