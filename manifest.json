@@ -40,14 +40,6 @@
       "matches": [
         "https://appintegralflormia.netlify.app/*",
         "https://app-integral-fm.netlify.app/*",
-        "https://*.netlify.app/*",
-        "http://localhost:5173/*"
-      ],
-      "include_globs": [
-        "https://appintegralflormia.netlify.app/*",
-        "https://app-integral-fm.netlify.app/*",
-        "https://deploy-preview-*--appintegralflormia.netlify.app/*",
-        "https://deploy-preview-*--app-integral-fm.netlify.app/*",
         "http://localhost:5173/*"
       ],
       "js": [
