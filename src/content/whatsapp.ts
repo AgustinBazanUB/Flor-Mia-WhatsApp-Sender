@@ -15,6 +15,7 @@ import { scheduleConversationNavigation, sendAndVerifyText } from "../whatsapp/s
 import { sendAndVerifyImage } from "../whatsapp/send-image";
 import { reconcileWhatsAppStep } from "../whatsapp/reconcile";
 import { waitForConversationContext } from "../whatsapp/conversation-context";
+import { getInboxChats, getInboxMessages, sendInboxText } from "../whatsapp/inbox-adapter";
 import { snapshotRuntimeMetrics } from "../performance/runtime-metrics";
 
 const proofControllers = new Map<string, AbortController>();
@@ -86,6 +87,23 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       }
       if (message.type === INTERNAL_MESSAGE_TYPES.whatsappPreflight) {
         const data = await runWhatsAppPreflight(message.payload as InternalRequestMap["WA_PREFLIGHT"]);
+        sendResponse(success(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappInboxGetChats) {
+        const payload = message.payload as InternalRequestMap["WA_INBOX_GET_CHATS"];
+        sendResponse(success(message.requestId, getInboxChats(payload.limit)));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappInboxGetMessages) {
+        const payload = message.payload as InternalRequestMap["WA_INBOX_GET_MESSAGES"];
+        const data = await getInboxMessages(payload.chatId, payload.limit);
+        sendResponse(success(message.requestId, data));
+        return;
+      }
+      if (message.type === INTERNAL_MESSAGE_TYPES.whatsappInboxSendText) {
+        const payload = message.payload as InternalRequestMap["WA_INBOX_SEND_TEXT"];
+        const data = await sendInboxText(payload.chatId, payload.message);
         sendResponse(success(message.requestId, data));
         return;
       }
