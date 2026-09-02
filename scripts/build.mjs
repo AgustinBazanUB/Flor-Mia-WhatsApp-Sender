@@ -8,21 +8,37 @@ const dist = resolve(root, "dist");
 const watching = process.argv.includes("--watch");
 
 const originConfig = JSON.parse(await readFile(resolve(root, "config/allowed-origins.json"), "utf8"));
+const previewSiteNames = new Set((originConfig.preview?.siteNames || []).map((item) => String(item).toLowerCase()));
+
+function allowedExtraPreviewPattern(pattern) {
+  if (!pattern.endsWith("/*")) return false;
+  let url;
+  try {
+    url = new URL(pattern.slice(0, -2));
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.port || url.pathname !== "/") return false;
+  const match = /^deploy-preview-(\d+)--([a-z0-9-]+)\.netlify\.app$/i.exec(url.hostname);
+  return Boolean(match?.[2] && previewSiteNames.has(match[2].toLowerCase()));
+}
+
 const extraOrigins = (process.env.FLORMIA_EXTRA_WEB_APP_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+for (const origin of extraOrigins) {
+  if (!allowedExtraPreviewPattern(origin)) {
+    throw new Error(`FLORMIA_EXTRA_WEB_APP_ORIGINS contiene un origen no autorizado: ${origin}`);
+  }
+}
 const exactWebAppMatches = [...new Set([...originConfig.production, ...originConfig.development, ...extraOrigins])];
-const previewMatchPattern = originConfig.preview?.matchPattern;
-const previewIncludeGlobs = originConfig.preview?.includeGlobs || [];
-const webAppMatches = [...new Set([...exactWebAppMatches, ...(previewMatchPattern ? [previewMatchPattern] : [])])];
-const webAppIncludeGlobs = [...new Set([...exactWebAppMatches, ...previewIncludeGlobs])];
 
 const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
 const webAppScript = manifest.content_scripts.find((item) => item.js.includes("content/web-app-bridge.js"));
 if (!webAppScript) throw new Error("manifest.json no declara el puente de la Web-App.");
-webAppScript.matches = webAppMatches;
-webAppScript.include_globs = webAppIncludeGlobs;
+webAppScript.matches = exactWebAppMatches;
+delete webAppScript.include_globs;
 manifest.host_permissions = [...new Set(["https://web.whatsapp.com/*", ...exactWebAppMatches])];
 
 await rm(dist, { recursive: true, force: true });
