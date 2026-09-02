@@ -1,5 +1,6 @@
 import { isAllowedWebAppOrigin } from "../config/origins";
 import { ContactExportStore } from "../contact-export/contact-export-store";
+import { MessageContactStore } from "../contact-export/message-contact-store";
 import { ERROR_CODES, ExtensionError, isExtensionErrorCode, serializeError } from "../shared/errors";
 import {
   createInboxInternalEnvelope,
@@ -16,6 +17,7 @@ const SEND_CACHE_KEY = "whatsappInboxSendCacheV1";
 const MAX_SEND_CACHE = 50;
 const stateStore = new StateStore();
 const contactExportStore = new ContactExportStore();
+const messageContactStore = new MessageContactStore();
 const inFlightSends = new Map<string, Promise<InboxResponseMap["INBOX_SEND_TEXT"]>>();
 
 type CachedSend = {
@@ -50,10 +52,17 @@ function campaignBlocksInbox(status: string | null): boolean {
 
 async function assertOperationCompatible(type: InboxInternalType): Promise<void> {
   const exportState = await contactExportStore.load();
-  if (["detecting_labels", "analyzing", "cancelling"].includes(exportState.status)) {
-    throw new ExtensionError(ERROR_CODES.campaignConflict, "Contact Export está usando WhatsApp Web. Esperá a que termine o cancelalo antes de usar el Inbox.", {
+  if (["detecting_labels", "ready", "analyzing", "cancelling"].includes(exportState.status)) {
+    throw new ExtensionError(ERROR_CODES.campaignConflict, "Contact Export está usando o tiene reservada la interfaz de WhatsApp. Terminá, cancelá o reiniciá esa operación antes de usar el Inbox.", {
       recoverable: true,
       details: { inboxReason: "OPERATION_CONFLICT", activeOperation: "contact_export", status: exportState.status }
+    });
+  }
+  const messageContactState = await messageContactStore.load();
+  if (!["idle", "completed", "cancelled", "error"].includes(messageContactState.status)) {
+    throw new ExtensionError(ERROR_CODES.campaignConflict, "Agregar contactos por frase tiene reservada la interfaz de WhatsApp. Terminá o cancelá esa operación antes de usar el Inbox.", {
+      recoverable: true,
+      details: { inboxReason: "OPERATION_CONFLICT", activeOperation: "message_contact", status: messageContactState.status }
     });
   }
   if (type === INBOX_INTERNAL_TYPES.getChats) return;
