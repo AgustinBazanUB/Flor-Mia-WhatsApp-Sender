@@ -1,6 +1,7 @@
 import "./service-worker";
 import "./contact-export-bootstrap";
 import "./message-contact-bootstrap";
+import "./inbox-service-worker";
 import { WEB_APP_MATCH_PATTERNS } from "../config/origins";
 import { INTERNAL_MESSAGE_TYPES } from "../shared/protocol";
 import type { WhatsAppPreflightResult } from "../shared/state";
@@ -25,8 +26,8 @@ async function injectIntoTabs(patterns: string[], file: string): Promise<number>
       });
       injected += 1;
     } catch {
-      // La pestaña puede haberse cerrado o estar navegando. El content script
-      // declarativo se inyectará normalmente en la siguiente carga.
+      // La pestaña puede haberse cerrado o estar navegando. Los content scripts
+      // declarativos se inyectarán normalmente en la siguiente carga.
     }
   }
   return injected;
@@ -90,9 +91,12 @@ export async function recoverContentScriptsOnce(): Promise<void> {
   if (stored[RECOVERY_SESSION_KEY] === true) return;
 
   await ensureWhatsAppContentScript();
-  // El bridge tiene un guard de generación: una inyección nueva retira de forma
-  // determinista cualquier bridge viejo y evita listeners duplicados en la Web App.
+  // El Inbox posee guards propios, por lo que puede reinjectarse sin duplicar
+  // listeners ni, especialmente, comandos SEND_TEXT.
+  await injectIntoTabs([WHATSAPP_PATTERN], "content/inbox-runtime.js");
+  // El bridge de campañas/contactos conserva exactamente su flujo existente.
   await injectIntoTabs([...WEB_APP_MATCH_PATTERNS], "content/web-app-bridge.js");
+  await injectIntoTabs([...WEB_APP_MATCH_PATTERNS], "content/inbox-web-app-bridge.js");
   await chrome.storage.session.set({ [RECOVERY_SESSION_KEY]: true });
 }
 
