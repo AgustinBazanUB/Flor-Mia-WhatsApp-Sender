@@ -42,7 +42,10 @@ function senderAllowed(sender: chrome.runtime.MessageSender): boolean {
 }
 
 function campaignBlocksInbox(status: string | null): boolean {
-  return Boolean(status && ["running", "pause_requested", "waiting_contact", "waiting_batch"].includes(status));
+  // `received` y `ready` también bloquean operaciones que cambian de chat: así se
+  // cierra la ventana entre "campaña preparada" y "campaign_start". GET_CHATS
+  // sigue siendo permitido porque sólo observa el DOM y no selecciona conversación.
+  return Boolean(status && ["received", "ready", "running", "pause_requested", "waiting_contact", "waiting_batch"].includes(status));
 }
 
 async function assertOperationCompatible(type: InboxInternalType): Promise<void> {
@@ -57,7 +60,7 @@ async function assertOperationCompatible(type: InboxInternalType): Promise<void>
   const state = await stateStore.load();
   const campaignStatus = state.activeCampaign?.status ?? state.currentCampaign?.status ?? null;
   if (campaignBlocksInbox(campaignStatus)) {
-    throw new ExtensionError(ERROR_CODES.campaignConflict, "La campaña está manipulando WhatsApp Web. Pausala antes de abrir o responder una conversación desde el Inbox.", {
+    throw new ExtensionError(ERROR_CODES.campaignConflict, "Hay una campaña preparada o activa usando WhatsApp Web. Pausala o finalizala antes de abrir o responder una conversación desde el Inbox.", {
       recoverable: true,
       details: { inboxReason: "OPERATION_CONFLICT", activeOperation: "campaign", status: campaignStatus }
     });
