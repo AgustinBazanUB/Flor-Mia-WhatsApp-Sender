@@ -51,8 +51,18 @@ const builds = [
     format: "iife"
   },
   {
+    entryPoints: [resolve(root, "src/content/inbox-runtime.ts")],
+    outfile: resolve(dist, "content/inbox-runtime.js"),
+    format: "iife"
+  },
+  {
     entryPoints: [resolve(root, "src/content/web-app-bridge.ts")],
     outfile: resolve(dist, "content/web-app-bridge.js"),
+    format: "iife"
+  },
+  {
+    entryPoints: [resolve(root, "src/content/inbox-web-app-bridge.ts")],
+    outfile: resolve(dist, "content/inbox-web-app-bridge.js"),
     format: "iife"
   },
   {
