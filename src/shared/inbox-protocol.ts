@@ -85,7 +85,7 @@ export function createInboxInternalEnvelope<T extends InboxInternalType>(
   source: InboxInternalSource,
   type: T,
   payload: InboxRequestMap[T],
-  requestId = globalThis.crypto?.randomUUID?.() || `inbox-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  requestId: string = globalThis.crypto?.randomUUID?.() || `inbox-${Date.now()}-${Math.random().toString(36).slice(2)}`
 ): InboxInternalEnvelope<T> {
   return {
     channel: INBOX_INTERNAL_CHANNEL,
