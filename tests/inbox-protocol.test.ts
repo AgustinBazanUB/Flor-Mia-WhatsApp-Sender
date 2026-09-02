@@ -55,13 +55,13 @@ describe("WhatsApp Inbox packaging contract", () => {
     expect(runtime).toContain("removeListener");
   });
 
-  it("keeps contact-export and campaign scripts while adding Inbox scripts", async () => {
+  it("keeps 0.9.6 contact-export and campaign scripts while adding Inbox scripts", async () => {
     const manifest = JSON.parse(await source("manifest.json")) as {
       version: string;
       content_scripts: Array<{ js: string[] }>;
     };
     const scripts = manifest.content_scripts.flatMap((entry) => entry.js);
-    expect(manifest.version).toBe("0.9.6.1");
+    expect(manifest.version).toBe("0.9.6");
     expect(scripts).toContain("content/whatsapp.js");
     expect(scripts).toContain("content/inbox-runtime.js");
     expect(scripts).toContain("content/web-app-bridge.js");
