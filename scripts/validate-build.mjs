@@ -40,7 +40,7 @@ if (manifest.version_name !== sourceManifest.version_name) throw new Error("El n
 if (sourceManifest.version_name !== sourceManifest.version) throw new Error("manifest.json debe mantener version y version_name coherentes para la versión visible en Chrome.");
 if (sourceManifest.version !== packageMetadata.version) throw new Error("La release de Contactos debe mantener manifest.json y package.json en la misma versión.");
 if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) throw new Error("package-lock.json y package.json deben mantener coherente la versión del workspace npm.");
-if (sourceManifest.version !== "0.9.6") throw new Error("La release esperada es 0.9.6.");
+if (sourceManifest.version !== "0.9.7") throw new Error("La release esperada es 0.9.7.");
 
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
@@ -48,14 +48,14 @@ const optimisticPosition = popupHtml.indexOf(optimisticScript);
 const popupPosition = popupHtml.indexOf(popupModule);
 if (optimisticPosition < 0 || popupPosition <= optimisticPosition) throw new Error("El popup debe cargar optimistic-controls.js antes de popup.js.");
 if (!optimisticControls.includes("../contacts/index.html") || !contactHtml.includes("Exportar Excel")) throw new Error("El build no contiene el acceso o la página de exportación de contactos.");
-if (!contactHtml.includes("PHONE_UNRESOLVED") || !contactHtml.includes("Chats abiertos") || !contactHtml.includes("codex-json")) throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 0.9.6.");
-if (!contactHtml.includes("Paso 1.5") || !contactHtml.includes("Agregar contactos por frase") || !contactHtml.includes("Solo mensajes recibidos por mí") || !contactHtml.includes("Actualizar lista")) throw new Error("El build no contiene el Paso 1.5 Add Contacts By Message de 0.9.6.");
-if (!contactPage.includes("MESSAGE_CONTACT_SEARCH") || !contactPage.includes("MESSAGE_CONTACT_ASSIGN") || !contactPage.includes("message-refresh-list")) throw new Error("La página de Contactos no contiene el protocolo del Paso 1.5 de 0.9.6.");
+if (!contactHtml.includes("PHONE_UNRESOLVED") || !contactHtml.includes("Chats abiertos") || !contactHtml.includes("codex-json")) throw new Error("El build no contiene la UX de extracción phone-first y diagnóstico 0.9.7.");
+if (!contactHtml.includes("Paso 1.5") || !contactHtml.includes("Agregar contactos por frase") || !contactHtml.includes("Solo mensajes recibidos por mí") || !contactHtml.includes("Actualizar lista")) throw new Error("El build no contiene el Paso 1.5 Add Contacts By Message de 0.9.7.");
+if (!contactPage.includes("MESSAGE_CONTACT_SEARCH") || !contactPage.includes("MESSAGE_CONTACT_ASSIGN") || !contactPage.includes("message-refresh-list")) throw new Error("La página de Contactos no contiene el protocolo del Paso 1.5 de 0.9.7.");
 if (!contactPage.includes("flormia_contact_export_diagnostic_") || !contactPage.includes("application/json")) throw new Error("El build no contiene descarga de diagnóstico JSON para Contact Export.");
 if (!whatsappContent.includes("label-scoped-phone-first-no-chat-opening")) throw new Error("El Content Script no contiene la estrategia 0.9.5.6 label-scoped/phone-first.");
 if (!backgroundWorker.includes("WAWebCollections") || !backgroundWorker.includes("WAWebApiContact") || !backgroundWorker.includes("main-world-label-store+local-lid-map")) throw new Error("El build no contiene el resolver estructurado local de etiquetas/LID de 0.9.5.6.");
 if (!backgroundWorker.includes("message-user-receipt") || !backgroundWorker.includes("history-metadata-lid-map") || !backgroundWorker.includes("phoneLookupServerSkipped") || !backgroundWorker.includes("model-storage") || !backgroundWorker.includes("phoneHistoryIndexedDbMessagesScanned")) throw new Error("El build no contiene la correlación histórica LID→PN no visual de 0.9.5.6.");
-if (!backgroundWorker.includes("virtualized-lid-hydration") || !whatsappContent.includes("flormia_contact_export_lid_resolve_v1")) throw new Error("El build no contiene la hidratación virtualizada LID→teléfono heredada por 0.9.6.");
+if (!backgroundWorker.includes("virtualized-lid-hydration") || !whatsappContent.includes("flormia_contact_export_lid_resolve_v1")) throw new Error("El build no contiene la hidratación virtualizada LID→teléfono heredada por 0.9.7.");
 if (!backgroundWorker.includes("main-world-global-msg-search") || !backgroundWorker.includes("WAWebCollections") || !backgroundWorker.includes("LIST_ASSIGNMENT_NOT_CONFIRMED") || !backgroundWorker.includes("main-world-refresh-after-message-assignment")) throw new Error("El Service Worker no contiene búsqueda global, asignación verificada y refresh del Paso 1.5.");
 if (!optimisticControls.includes("Pausando…") || !optimisticControls.includes("Deteniendo…")) throw new Error("El build no contiene la capa de confirmación inmediata para Pausa/Detener.");
 if (!inboxContent.includes("flor_mia_whatsapp_inbox_internal") || !inboxBridge.includes("flor_mia_whatsapp_inbox_extension")) throw new Error("El build no contiene el protocolo aislado del WhatsApp Inbox.");
