@@ -70,6 +70,19 @@ export interface CampaignRecipientState {
   deliveryConfidence?: "confirmed" | "unverified";
 }
 
+export type CampaignRecipientOutcome = "confirmed" | "unverified" | "failed";
+
+/**
+ * Resultado mínimo que puede volver a la Web App.
+ * No expone nombre ni teléfono: recipientId identifica el snapshot persistido
+ * por la campaña y la Web App resuelve allí el clientId confiable.
+ */
+export interface CampaignRecipientResult {
+  recipientId: string;
+  outcome: CampaignRecipientOutcome;
+  completedAt: string;
+}
+
 export interface CampaignImageAsset {
   imageId: string;
   order: number;
@@ -220,6 +233,8 @@ export interface CampaignPublicStatus {
   sequence: number;
   retryCycle: number;
   retryableFailed: number;
+  /** Último resultado terminal individual, acotado e idempotente para sincronizar con la Web App. */
+  lastRecipientResult: CampaignRecipientResult | null;
   finalSummary: FinalCampaignSummary | null;
 }
 
