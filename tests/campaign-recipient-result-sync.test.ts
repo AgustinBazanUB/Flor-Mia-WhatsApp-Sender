@@ -21,6 +21,7 @@ function recipient(overrides: Partial<CampaignRecipientState> = {}): CampaignRec
 }
 
 function campaign(recipients: CampaignRecipientState[]): CampaignState {
+  const lastCompletedContactId = [...recipients].reverse().find((item) => item.status === "completed")?.recipientId ?? null;
   return {
     schemaVersion: 1,
     runToken: "run-recipient-result",
@@ -33,7 +34,7 @@ function campaign(recipients: CampaignRecipientState[]): CampaignState {
     images: [],
     currentRecipientIndex: null,
     activeContactId: null,
-    lastCompletedContactId: recipients.findLast((item) => item.status === "completed")?.recipientId ?? null,
+    lastCompletedContactId,
     completedRecipients: recipients.filter((item) => item.status === "completed").length,
     batchNumber: 1,
     contactsCompletedInBatch: recipients.filter((item) => ["completed", "error"].includes(item.status)).length,
