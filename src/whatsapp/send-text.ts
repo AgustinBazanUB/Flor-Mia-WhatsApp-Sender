@@ -17,6 +17,7 @@ import { recordObserverCreated, recordObserverDisconnected, recordTimerCleared, 
 
 const POST_CLICK_VERIFICATION_BUDGET_MS = 6_000;
 const STRONG_ID_GRACE_MS = 100;
+const TRANSIENT_COMPOSER_CONFLICT_GRACE_MS = 1_200;
 
 async function contactIdForPhone(phoneDigits: string): Promise<string> {
   const data = new TextEncoder().encode(`flor-mia-test-contact:${phoneDigits}`);
@@ -53,6 +54,19 @@ function classifyComposerElementContent(composer: HTMLElement, expectedText: str
   return "conflict";
 }
 
+async function waitForComposerConflictToSettle(
+  expectedText: string,
+  fallbackComposer: HTMLElement,
+  timeoutMs = TRANSIENT_COMPOSER_CONFLICT_GRACE_MS
+): Promise<{ element: HTMLElement; state: Exclude<ComposerPreparationState, "conflict"> } | null> {
+  return waitForCondition(() => {
+    const live = findComposer()?.element ?? (fallbackComposer.isConnected ? fallbackComposer : null);
+    if (!live) return null;
+    const state = classifyComposerElementContent(live, expectedText);
+    return state === "conflict" ? null : { element: live, state };
+  }, { timeoutMs, description: "que WhatsApp termine de estabilizar el composer después del contenido multimedia" }).catch(() => null);
+}
+
 async function waitForPreparedComposer(expected: string, fallbackComposer: HTMLElement, timeoutMs = 1_000): Promise<HTMLElement | null> {
   return waitForCondition(() => {
     const live = findComposer()?.element ?? (fallbackComposer.isConnected ? fallbackComposer : null);
@@ -63,21 +77,30 @@ async function waitForPreparedComposer(expected: string, fallbackComposer: HTMLE
 
 export async function prepareComposerTextForSend(composer: HTMLElement, message: string): Promise<"inserted" | "reused"> {
   const expected = normalizeComposerLineEndings(message);
-  const state = classifyComposerElementContent(composer, expected);
+  let activeComposer = composer;
+  let state = classifyComposerElementContent(activeComposer, expected);
+  if (state === "conflict") {
+    const settled = await waitForComposerConflictToSettle(expected, activeComposer);
+    if (settled) {
+      activeComposer = settled.element;
+      state = settled.state;
+    }
+  }
   if (state === "prepared") return "reused";
   if (state === "conflict") {
     throw new ExtensionError(ERROR_CODES.invalidInput, "La conversación tiene un borrador diferente. Vacialo manualmente antes de continuar para no sobrescribirlo.", {
-      recoverable: true, details: { sendAttempted: false, draftConflict: true }
+      recoverable: true,
+      details: { sendAttempted: false, draftConflict: true, conflictGraceMs: TRANSIENT_COMPOSER_CONFLICT_GRACE_MS }
     });
   }
-  composer.focus();
+  activeComposer.focus();
   const selection = window.getSelection();
   const range = document.createRange();
-  range.selectNodeContents(composer);
+  range.selectNodeContents(activeComposer);
   selection?.removeAllRanges();
   selection?.addRange(range);
   const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, expected);
-  let prepared = await waitForPreparedComposer(expected, composer, inserted ? 800 : 50);
+  let prepared = await waitForPreparedComposer(expected, activeComposer, inserted ? 800 : 50);
   if (!prepared) {
     const liveComposer = findComposer()?.element ?? composer;
     liveComposer.focus();

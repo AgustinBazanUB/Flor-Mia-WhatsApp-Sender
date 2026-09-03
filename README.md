@@ -2,6 +2,10 @@
 
 Extensión privada de Google Chrome, Manifest V3, que ejecuta campañas preparadas explícitamente por Flor Mía sobre una sesión de WhatsApp Web iniciada por el usuario.
 
+## Sender de campañas — 0.9.7
+
+La 0.9.7 endurece la transición **última imagen → texto** observada en WhatsApp Web: después de una imagen confirmada espera 1,5 s antes de despachar el texto y, si el composer muestra contenido transitorio de la UI, espera hasta 1,2 s a que se estabilice. Un borrador de usuario que persiste se sigue preservando y bloquea el envío; no se borra ni se sobrescribe.
+
 ## Contactos de WhatsApp — 0.9.6
 
 La release 0.9.6 agrega **Paso 1.5 · Agregar contactos por frase** entre la selección de etiquetas y el extractor existente. Usa la búsqueda global estructurada de WhatsApp Web, valida de forma literal `contains` / `exact`, excluye mensajes enviados por el usuario cuando `Solo mensajes recibidos` está activo, deduplica contactos y muestra una vista previa antes de modificar WhatsApp.
