@@ -87,6 +87,24 @@ describe("post-click text verification 0.9.4.3", () => {
       .rejects.toMatchObject({ code: "CONTACT_CONTEXT_UNVERIFIED", details: { sendAttempted: true } });
   });
 
+  it("waits for transient post-media composer residue before preparing campaign text", async () => {
+    const composer = document.querySelector<HTMLElement>("[contenteditable='true']")!;
+    composer.textContent = "residuo transitorio de la UI";
+    window.setTimeout(() => { composer.textContent = ""; }, 25);
+    document.querySelector("button")!.addEventListener("click", () => appendOutgoing(composerText(), "true_after_media"));
+    const result = await sendAndVerifyText({
+      operationId: "after-media-residue",
+      phoneDigits: "5491112345678",
+      message: "Mensaje campaña",
+      timeoutMs: 250
+    });
+    expect(result.verification).toMatchObject({
+      confirmed: true,
+      outcome: "confirmed_strong",
+      messageElementId: "true_after_media"
+    });
+  });
+
   it("preserves a different user draft and never clicks", async () => {
     document.querySelector<HTMLElement>("[contenteditable='true']")!.textContent = "Borrador del usuario";
     let clicks = 0; document.querySelector("button")!.addEventListener("click", () => { clicks += 1; });

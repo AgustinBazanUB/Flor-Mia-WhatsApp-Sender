@@ -1,5 +1,5 @@
 import type { ContactProcessCheckpoint } from "../engine/types";
-import type { CampaignPublicStatus, CampaignState } from "./campaign-types";
+import type { CampaignPublicStatus, CampaignRecipientResult, CampaignState } from "./campaign-types";
 import { campaignRecipientCounters, progressForCampaign } from "./progress";
 import type { CompatibilityOverallStatus } from "../compatibility/types";
 import { classifyDiagnosticError } from "../diagnostics/taxonomy";
@@ -14,6 +14,28 @@ function durationBetween(startedAt: string, completedAt: string): number {
   const start = Date.parse(startedAt);
   const end = Date.parse(completedAt);
   return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0;
+}
+
+function latestRecipientResult(campaign: CampaignState): CampaignRecipientResult | null {
+  let latest: CampaignState["recipients"][number] | null = null;
+  let latestAt = Number.NEGATIVE_INFINITY;
+  for (const recipient of campaign.recipients) {
+    if (!recipient.completedAt || !["completed", "error"].includes(recipient.status)) continue;
+    const completedAt = Date.parse(recipient.completedAt);
+    if (!Number.isFinite(completedAt) || completedAt < latestAt) continue;
+    latest = recipient;
+    latestAt = completedAt;
+  }
+  if (!latest?.completedAt) return null;
+  return {
+    recipientId: latest.recipientId,
+    outcome: latest.status === "error"
+      ? "failed"
+      : latest.deliveryConfidence === "unverified"
+        ? "unverified"
+        : "confirmed",
+    completedAt: latest.completedAt,
+  };
 }
 
 export function toCampaignPublicStatus(
@@ -129,6 +151,7 @@ export function toCampaignPublicStatus(
     sequence: campaign.sequence,
     retryCycle: campaign.retryCycle ?? 0,
     retryableFailed: campaign.recipients.filter((item) => item.status === "error" && item.failure?.retryEligible === true && item.failure.ambiguous !== true).length,
+    lastRecipientResult: latestRecipientResult(campaign),
     finalSummary
   };
 }

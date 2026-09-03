@@ -21,12 +21,13 @@ const CONVERSATION_PROOF_BUDGET_MS = 4_000;
 const FIRST_IMAGE_SETTLE_MS = 1_000;
 const FOLLOWUP_IMAGE_SETTLE_MS = 500;
 const IMAGE_CONFIRMATION_BUDGET_MS = 8_000;
+const POST_MEDIA_TEXT_SETTLE_MS = 1_500;
 
 function imageSettleDelayMs(step: ImageContactStep): number {
   return step.image.order <= 1 ? FIRST_IMAGE_SETTLE_MS : FOLLOWUP_IMAGE_SETTLE_MS;
 }
 
-async function waitForImageSettle(delayMs: number, signal?: AbortSignal): Promise<void> {
+async function waitForUiSettle(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) throw new DOMException("Operación cancelada", "AbortError");
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -436,7 +437,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
     const confirmationTimeoutMs = Math.min(context.timeoutMs, IMAGE_CONFIRMATION_BUDGET_MS);
     try {
       const data = await stored.blob.arrayBuffer();
-      await waitForImageSettle(settleDelayMs, context.signal);
+      await waitForUiSettle(settleDelayMs, context.signal);
       const result = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappSendImage, {
         operationId: step.operationId,
         expectedPhoneDigits: context.checkpoint.contact.phoneDigits,
@@ -468,7 +469,11 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
   }
 
   async sendText(step: TextContactStep, context: StepExecutionContext): Promise<StepExecutionResult> {
+    const settleDelayMs = context.checkpoint.lastConfirmedStepId?.startsWith("image-")
+      ? POST_MEDIA_TEXT_SETTLE_MS
+      : 0;
     try {
+      if (settleDelayMs > 0) await waitForUiSettle(settleDelayMs, context.signal);
       const result = await this.transport.send(INTERNAL_MESSAGE_TYPES.whatsappSendText, {
         operationId: step.operationId,
         phoneDigits: context.checkpoint.contact.phoneDigits,
@@ -481,6 +486,7 @@ export class ChromeWhatsAppContactAdapter implements ContactAdapter {
         throw new ExtensionError(ERROR_CODES.verificationFailed, "WhatsApp no confirmó la ejecución del envío de texto.");
       }
       const details = {
+        postMediaTextSettleMs: settleDelayMs,
         verificationOutcome: result.verification.outcome,
         verificationConfidence: result.verification.confidence,
         verificationElapsedMs: result.verification.verificationElapsedMs ?? null,
@@ -529,7 +535,12 @@ details
         }
       };
     } catch (error) {
-      return executionError(error);
+      const normalized = toExtensionError(error);
+      return executionError(new ExtensionError(normalized.code, normalized.message, {
+        recoverable: normalized.recoverable,
+        cause: error,
+        details: { ...(normalized.details ?? {}), postMediaTextSettleMs: settleDelayMs }
+      }));
     }
   }
 
