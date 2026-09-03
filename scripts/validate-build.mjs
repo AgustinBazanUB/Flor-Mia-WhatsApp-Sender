@@ -42,7 +42,7 @@ if (sourceManifest.version !== packageMetadata.version) {
 if (packageLock.version !== packageMetadata.version || packageLock.packages?.[""]?.version !== packageMetadata.version) {
   throw new Error("package-lock.json y package.json deben mantener coherente la versión del workspace npm.");
 }
-if (sourceManifest.version !== "0.9.6") throw new Error("La release esperada es 0.9.6.");
+if (sourceManifest.version !== "0.9.7") throw new Error("La release esperada es 0.9.7.");
 const optimisticScript = '<script src="./optimistic-controls.js"></script>';
 const popupModule = '<script type="module" src="./popup.js"></script>';
 const optimisticPosition = popupHtml.indexOf(optimisticScript);
