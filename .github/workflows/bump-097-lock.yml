@@ -1,0 +1,39 @@
+name: Regenerate 0.9.7 lock metadata
+
+on:
+  push:
+    branches:
+      - fix/whatsapp-inbox-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  bump-lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: fix/whatsapp-inbox-hardening
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Regenerate package-lock metadata
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Commit package-lock
+        run: |
+          test "$(node -p "require('./package-lock.json').version")" = "0.9.7"
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = "0.9.7"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: sync package-lock for 0.9.7"
+          git push origin HEAD:fix/whatsapp-inbox-hardening
