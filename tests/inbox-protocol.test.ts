@@ -110,10 +110,10 @@ describe("WhatsApp Inbox packaging and hardening contract", () => {
     expect(adapter).toContain("ambiguousResult");
   });
 
-  it("keeps 0.9.6 Contact Export and campaign scripts while adding Inbox scripts", async () => {
+  it("keeps Contact Export and campaign scripts while releasing Inbox hardening as 0.9.7", async () => {
     const manifest = JSON.parse(await source("manifest.json")) as { version: string; content_scripts: Array<{ js: string[] }> };
     const scripts = manifest.content_scripts.flatMap((entry) => entry.js);
-    expect(manifest.version).toBe("0.9.6");
+    expect(manifest.version).toBe("0.9.7");
     expect(scripts).toContain("content/whatsapp.js");
     expect(scripts).toContain("content/inbox-runtime.js");
     expect(scripts).toContain("content/web-app-bridge.js");
